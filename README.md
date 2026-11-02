@@ -17,6 +17,9 @@ bin/test        # Run offline tests
 npm run check   # Run all checks and build the package
 ```
 
+<details>
+<summary>More development commands</summary>
+
 The bin scripts work from any directory. They call `npm ci --ignore-scripts`
 and `npm test`; CI uses those same npm commands on Node 22.
 
@@ -28,6 +31,8 @@ and `npm run test:package` (after building). To run a focused test:
 ```sh
 bin/test -t "reuses cookies"
 ```
+
+</details>
 
 ### Use a saved session
 
@@ -78,6 +83,9 @@ endpoints don't infer expiry. Call `connect()` before adapter work when verifica
 is needed. All requests can bootstrap a missing session. Submitted writes are
 never renewed or replayed.
 
+<details>
+<summary>Authentication, recovery, and error details</summary>
+
 Setup and saved-session checks keep cookie changes private until verification
 succeeds. `connect()` returns no token or user details. A failed save retains
 verified state in the same client for a later retry, provided the durable revision
@@ -113,6 +121,8 @@ from other endpoints never trigger renewal. HTTP 403 reports permission denial;
 other unknown authentication shapes fail clearly. Other invalid-session and
 permission signals still need controlled verification.
 
+</details>
+
 Flocknote may still send a login email during password setup. The client doesn't
 request, fetch, or enter codes. Password-disabled handling uses simulated test
 responses; real code challenges haven't been verified. Unknown responses fail
@@ -125,6 +135,9 @@ fields. Use paths like `user/userData`, not full URLs or query strings. Requests
 stay on the configured parish's HTTPS origin, and redirects are rejected.
 Failures throw `FlockbotError` with a safe `code`, without copying sensitive
 upstream bodies or exception details.
+
+<details>
+<summary>Adapter storage and coordination</summary>
 
 `SessionStore` provides `revision`, `load`, `save(state, expectedRevision)`, and
 `clear(expectedRevision)`. Under identity coordination, `revision` and `load`
@@ -153,6 +166,11 @@ cannot publish replacement cookies. A failed operation is never replayed merely
 to retry a save. `clearSession()` advances durable state under the same lock, so
 other clients reload the reset and discard older pending rotations.
 
+</details>
+
+<details>
+<summary>Deadlines, retries, and cancellation</summary>
+
 Each operation has one deadline covering lock wait, storage, login, transport and
 backoff. Defaults are 20 seconds, one transient GET retry across the entire
 operation, and 200 ms initial exponential backoff. Configure `policy` with
@@ -172,8 +190,13 @@ until that dependency settles; subsequent signal checks prevent new requests or
 cookie saves. Storage calls already in progress may finish before a queued reset.
 Adapters must bound their own storage and lock lifetimes and fence late holders.
 
+</details>
+
 Submitted writes aren't replayed automatically. A timeout can leave completion
 unknown; preserve that outcome when mapping host retries.
+
+<details>
+<summary>Write outcomes and retry safety</summary>
 
 `operation_timeout`, `operation_cancelled`, and `coordination_failed` are sanitized
 failures. Unclassified callback failures on reads use `operation_failed`.
@@ -189,11 +212,16 @@ requires separate evidence of safety; generic POST provides no replay opt-in. Ad
 this outcome when mapping host retries. A successful POST response is returned
 only after its required cookie persistence succeeds.
 
+</details>
+
 Tests use fictional data and block unexpected network access. They don't need
 credentials, environment files, or live Flocknote access, and never record missing
 fixtures. CI runs checks without live credentials, deployment, or publishing.
 
 ## Ruby gem
+
+<details>
+<summary>Legacy Ruby installation, usage, and development</summary>
 
 Requires Ruby 3.3. Add this to your `Gemfile`:
 
@@ -245,6 +273,8 @@ group.add_user(first_name: "Sam", last_name: "Lee", mobile_phone: "555-555-5555"
 
 Use `bundle install` and `bundle exec rspec`. `bin/console` still opens a Ruby/Pry
 prompt; `bin/setup` and `bin/test` now serve TypeScript.
+
+</details>
 
 ## Contributing
 
