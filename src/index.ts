@@ -18,7 +18,7 @@ export interface Credentials {
   readonly password: string;
 }
 
-/** Reserved for the shared password-login implementation; not read by this slice. */
+/** Adapters obtain these values outside ordinary request and model interfaces. */
 export interface CredentialProvider {
   load(): Promise<Credentials>;
 }
@@ -52,15 +52,23 @@ export type ErrorCode =
   | "transport_failed"
   | "redirect_rejected"
   | "invalid_response"
-  | "upstream_rejected";
+  | "upstream_rejected"
+  | "credentials_unavailable"
+  | "credentials_rejected"
+  | "authentication_required"
+  | "action_required"
+  | "authentication_unavailable"
+  | "authentication_protocol_error";
 
 export class FlockbotError extends Error {
   readonly code: ErrorCode;
+  readonly status?: number;
 
-  constructor(code: ErrorCode) {
+  constructor(code: ErrorCode, status?: number) {
     super(`Flockbot request failed (${code}).`);
     this.name = "FlockbotError";
     this.code = code;
+    if (status !== undefined) this.status = status;
   }
 }
 
@@ -69,6 +77,11 @@ export interface ClientOptions {
   readonly sessionStore: SessionStore;
   readonly transport?: Transport;
   readonly credentialProvider?: CredentialProvider;
+}
+
+export interface ConnectOptions {
+  /** Explicitly start password setup even when a saved session exists. */
+  readonly forcePasswordLogin?: boolean;
 }
 
 export const fetchTransport: Transport = async (request) => {
@@ -150,6 +163,39 @@ function serializedCookies(jar: CookieJar): string[] {
   });
 }
 
+function authenticationRecord(value: unknown): Record<string, unknown> {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    !("success" in value) ||
+    value.success !== true
+  ) {
+    throw new FlockbotError("authentication_protocol_error");
+  }
+  return value as Record<string, unknown>;
+}
+
+function authenticationError(error: unknown): FlockbotError {
+  if (error instanceof FlockbotError) {
+    if (
+      error.code === "transport_failed" ||
+      (error.code === "upstream_rejected" &&
+        (error.status === 429 || (error.status ?? 0) >= 500))
+    ) {
+      return new FlockbotError("authentication_unavailable");
+    }
+    if (
+      error.code !== "invalid_response" &&
+      error.code !== "redirect_rejected" &&
+      error.code !== "upstream_rejected"
+    ) {
+      return error;
+    }
+  }
+  return new FlockbotError("authentication_protocol_error");
+}
+
 /** Capture an already-authenticated token without opening a browser or logging in. */
 export function sessionFromToken(
   subdomain: string,
@@ -171,6 +217,7 @@ export class FlockbotClient {
   readonly #origin: string;
   readonly #store: SessionStore;
   readonly #transport: Transport;
+  readonly #credentials: CredentialProvider | undefined;
   #jar: CookieJar | undefined;
   #pendingState: SessionState | undefined;
 
@@ -178,6 +225,7 @@ export class FlockbotClient {
     this.#origin = parishOrigin(options.subdomain);
     this.#store = options.sessionStore;
     this.#transport = options.transport ?? fetchTransport;
+    this.#credentials = options.credentialProvider;
   }
 
   toJSON(): { type: string } {
@@ -186,6 +234,145 @@ export class FlockbotClient {
 
   [Symbol.for("nodejs.util.inspect.custom")](): string {
     return "FlockbotClient {}";
+  }
+
+  /** Verify saved authentication, or bootstrap a missing session with a password. */
+  async connect(options: ConnectOptions = {}): Promise<void> {
+    if (!options.forcePasswordLogin) {
+      const jar = await this.#loadJar();
+      await this.#flushPendingState();
+      if (
+        jar
+          .getCookiesSync(endpoint(this.#origin, "user/userData"))
+          .some((cookie) => cookie.key === "Flocknote")
+      ) {
+        const before = serializedCookies(jar);
+        const candidate = this.#authenticationCandidate(
+          sessionState(this.#origin, before),
+        );
+        const verifiedJar = await candidate.#verifyAuthentication();
+        const after = serializedCookies(verifiedJar);
+        this.#jar = verifiedJar;
+        if (JSON.stringify(before) !== JSON.stringify(after)) {
+          this.#pendingState = sessionState(this.#origin, after);
+          await this.#flushPendingState();
+        }
+        return;
+      }
+    }
+    await this.#loginWithPassword();
+  }
+
+  // Verification and password setup both isolate cookies until authentication
+  // succeeds. Rejection responses can issue unauthenticated replacement cookies.
+  #authenticationCandidate(state: SessionState | null = null): FlockbotClient {
+    return new FlockbotClient({
+      subdomain: new URL(this.#origin).hostname.split(".")[0] ?? "",
+      transport: this.#transport,
+      sessionStore: {
+        load: async () => state,
+        save: async () => undefined,
+        clear: async () => undefined,
+      },
+    });
+  }
+
+  async #verifyAuthentication(): Promise<CookieJar> {
+    try {
+      const data = authenticationRecord(await this.get("user/userData"));
+      if (data.authorized === false) {
+        throw new FlockbotError("authentication_required");
+      }
+      if (
+        !Number.isSafeInteger(data.userID) ||
+        typeof data.userID !== "number" ||
+        data.userID <= 0
+      ) {
+        throw new FlockbotError("authentication_protocol_error");
+      }
+      const jar = await this.#loadJar();
+      if (
+        !jar
+          .getCookiesSync(endpoint(this.#origin, "user/userData"))
+          .some((cookie) => cookie.key === "Flocknote")
+      ) {
+        throw new FlockbotError("authentication_protocol_error");
+      }
+      return jar;
+    } catch (error) {
+      throw authenticationError(error);
+    }
+  }
+
+  async #loginWithPassword(): Promise<void> {
+    let credentials: Credentials;
+    try {
+      if (!this.#credentials) throw new Error();
+      credentials = await this.#credentials.load();
+      if (
+        typeof credentials?.email !== "string" ||
+        credentials.email.trim().length === 0 ||
+        typeof credentials.password !== "string" ||
+        credentials.password.length === 0
+      ) {
+        throw new Error();
+      }
+    } catch {
+      throw new FlockbotError("credentials_unavailable");
+    }
+
+    const candidate = this.#authenticationCandidate();
+    let verifiedJar: CookieJar;
+    try {
+      const first = authenticationRecord(
+        await candidate.post("login/twoFactorAuth", {
+          firstFactor: credentials.email.trim(),
+          initialLoad: "false",
+          requestAuthCode: "false",
+        }),
+      );
+      if (first.allowPasswordForFirstFactor === false) {
+        throw new FlockbotError("action_required");
+      }
+      if (
+        first.allowPasswordForFirstFactor !== true ||
+        first.firstFactorSuccess !== false
+      ) {
+        throw new FlockbotError("authentication_protocol_error");
+      }
+      const password = authenticationRecord(
+        await candidate.post("login/twoFactorAuth", {
+          firstFactor: credentials.email.trim(),
+          initialLoad: "false",
+          password: credentials.password,
+        }),
+      );
+      if (password.allowPasswordForFirstFactor === false) {
+        throw new FlockbotError("action_required");
+      }
+      if (password.loginSuccess !== true) {
+        if (
+          password.allowPasswordForFirstFactor === true &&
+          password.firstFactorSuccess === false &&
+          typeof password.message === "string" &&
+          password.message.startsWith(
+            "Sorry, that password doesn't match our records.",
+          )
+        ) {
+          throw new FlockbotError("credentials_rejected");
+        }
+        throw new FlockbotError("authentication_protocol_error");
+      }
+      verifiedJar = await candidate.#verifyAuthentication();
+    } catch (error) {
+      throw authenticationError(error);
+    }
+    this.#jar = verifiedJar;
+    this.#pendingState = sessionState(
+      this.#origin,
+      serializedCookies(verifiedJar),
+    );
+    await this.#flushPendingState();
   }
 
   async clearSession(): Promise<void> {
@@ -311,7 +498,7 @@ export class FlockbotClient {
       throw new FlockbotError("redirect_rejected");
     }
     if (response.status >= 400) {
-      throw new FlockbotError("upstream_rejected");
+      throw new FlockbotError("upstream_rejected", response.status);
     }
     try {
       return /(?:^|\/)json(?:;|$)|\+json(?:;|$)/i.test(

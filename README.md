@@ -5,11 +5,9 @@ of the [Flocknote](https://www.flocknote.com/) application. Flocknote does
 not currently expose a public API, so this gem leverages parts of the
 internal API in order to better integrate with external applications.
 
-This repository is being ported to TypeScript. The TypeScript client currently
-provides HTTP requests using an already-authenticated session, cookie reuse and
-storage boundaries. Password login, automatic recovery, group operations, hosted
-adapters, and MCP packaging are not implemented in the TypeScript client yet.
-The existing Ruby library remains available below during the migration.
+The TypeScript port supports password login, saved sessions, and HTTP requests.
+Automatic recovery, group operations, hosted adapters, and MCP support are still
+coming. The Ruby gem remains available during the move.
 
 ## TypeScript development
 
@@ -57,6 +55,50 @@ const client = new FlockbotClient({
 const result = await client.get("user/userData");
 ```
 
+### Log in with a password
+
+Your adapter supplies a protected `SessionStore` and a `CredentialProvider`
+that returns `{ email, password }`. Keep those credentials out of chats and logs.
+The client doesn't pick a credential store or load environment files.
+
+```typescript
+const client = new FlockbotClient({
+  subdomain: "example-parish",
+  sessionStore,
+  credentialProvider: {
+    load: async () => secureCredentials.load(),
+  },
+});
+await client.connect();
+```
+
+Here, `sessionStore` and `secureCredentials` come from your adapter.
+`connect()` checks a saved session without reading credentials, or logs in when
+no usable cookie is available. Use `connect({ forcePasswordLogin: true })` to
+start a fresh password login deliberately. A rejected saved session isn't
+renewed automatically yet, and `get`/`post` don't log in or retry authentication.
+
+Setup and saved-session checks keep cookie changes private until verification
+succeeds. `connect()` returns no token or user details. Failed checks leave the
+previous session alone. If saving fails, plain `connect()` retries the save;
+forcing password login starts the exchange again.
+
+Authentication errors use fixed codes:
+
+| Code | Meaning |
+| --- | --- |
+| `credentials_unavailable` | Credentials are missing or couldn't be loaded |
+| `credentials_rejected` | A known password-mismatch response |
+| `authentication_required` | The session wasn't authorized |
+| `action_required` | Password login is unavailable |
+| `authentication_unavailable` | A network failure, rate limit, or server error |
+| `authentication_protocol_error` | An unexpected authentication response |
+
+Flocknote may still send a login email during password setup. The client doesn't
+request, fetch, or enter codes. Password-disabled handling uses simulated test
+responses; real code challenges haven't been verified. Unknown responses fail
+clearly rather than being guessed to mean a bad password.
+
 `get(path)` returns parsed JSON for JSON content types, or text for successful
 non-JSON responses. `post(path, fields)` sends URL-encoded string fields. Paths
 are endpoint paths such as `user/userData`, not arbitrary URLs or query strings.
@@ -85,9 +127,7 @@ cloning retain the credential for storage; never log serialized state.
 The default transport uses standard `fetch`, `Headers`, and `URL` APIs. An adapter
 may inject a `transport` implementing the exported request/response types; that
 trusted transport must honor manual redirects and must not forward requests or
-authentication to other origins. `SessionStore` and `CredentialProvider` define
-the storage/credential boundary; the supplied-session client does not read the
-credential provider or perform a password login.
+authentication to other origins.
 
 Routine TypeScript tests use fictional values and block unexpected fetch, HTTP,
 HTTP/2, TCP, and TLS connection entry points, including named builtin exports.
