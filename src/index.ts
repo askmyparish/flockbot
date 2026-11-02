@@ -486,21 +486,33 @@ export class FlockbotClient {
     return this.#exclusive(options, async (op) => {
       const connection = await this.#load(op);
       this.#checkIntervention(connection);
-      if (!options.forcePasswordLogin && this.#hasSession(connection)) {
-        try {
-          await this.#verify(connection, op);
-          await this.#persist(connection, op);
-          return;
-        } catch (error) {
-          if (
-            !(error instanceof FlockbotError) ||
-            error.code !== "authentication_required"
-          )
-            throw error;
-        }
-      }
-      await this.#login(connection, op);
+      await this.#ensureAuthentication(
+        connection,
+        op,
+        options.forcePasswordLogin,
+      );
     });
+  }
+
+  async #ensureAuthentication(
+    connection: Connection,
+    op: Operation,
+    forcePasswordLogin = false,
+  ): Promise<void> {
+    if (!forcePasswordLogin && this.#hasSession(connection)) {
+      try {
+        await this.#verify(connection, op);
+        await this.#persist(connection, op);
+        return;
+      } catch (error) {
+        if (
+          !(error instanceof FlockbotError) ||
+          error.code !== "authentication_required"
+        )
+          throw error;
+      }
+    }
+    await this.#login(connection, op);
   }
 
   #hasSession(connection: Connection): boolean {
