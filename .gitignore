@@ -10,3 +10,7 @@
 ## Environment normalization:
 /.bundle/
 Gemfile.lock
+
+# TypeScript build and installed dependencies
+/node_modules/
+/dist/
