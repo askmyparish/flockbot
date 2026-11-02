@@ -3,7 +3,8 @@
   "compilerOptions": {
     "rootDir": ".",
     "types": ["node"],
-    "declaration": false
+    "declaration": false,
+    "skipLibCheck": true
   },
   "include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
 }

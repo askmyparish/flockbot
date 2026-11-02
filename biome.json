@@ -3,6 +3,8 @@
   "files": {
     "includes": [
       "src/**",
+      "adapters/zapier/src/**",
+      "adapters/zapier/*.json",
       "test/**",
       "scripts/**",
       "*.json",
