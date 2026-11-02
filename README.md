@@ -14,7 +14,7 @@ internal API in order to better integrate with external applications.
 Add the following to your `Gemfile`:
 
 ``` ruby
-gem "flockbot", git: "git://github.com/setonparish/flockbot"
+gem "flockbot", git: "https://github.com/askmyparish/flockbot"
 ```
 
 ## Usage
@@ -104,7 +104,7 @@ After checking out the repo, run `bin/setup` to install dependencies. You can al
 
 ## Contributing
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/setonparish/flockbot.
+Bug reports and pull requests are welcome on GitHub at https://github.com/askmyparish/flockbot.
 
 Tests can be run by running `bundle exec rspec`
 
