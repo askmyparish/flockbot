@@ -6,10 +6,13 @@ import {
   type SessionState,
   type SessionStore,
   type Transport,
+  type OperationOptions,
+  type GroupAttributes,
 } from "../../../src/index.js";
+import { CLIENT_POLICY, CONFIGURATION_VERSION } from "./policy.js";
 
-type HostBundle = Pick<Bundle, "authData" | "inputData">;
-type HostErrors = Pick<ZObject, "errors">;
+export type HostBundle = Pick<Bundle, "authData" | "inputData">;
+export type HostErrors = Pick<ZObject, "errors">;
 
 /** Injection seams for offline host models, not Zapier persistence APIs. */
 export interface AdapterTestDependencies {
@@ -35,8 +38,7 @@ function configuration(bundle: HostBundle, setup: boolean) {
   const subdomain = values.subdomain;
   const email = values.email;
   const password = values.password;
-  // A real host configuration/reset generation is still a feasibility gate.
-  const configurationVersion = "credentials-v1";
+  const configurationVersion = CONFIGURATION_VERSION;
   if (typeof subdomain !== "string") invalid();
   if (
     setup &&
@@ -118,7 +120,7 @@ class InvocationCoordinator implements SessionCoordinator {
   }
 }
 
-function mappedError(
+export function mappedError(
   z: HostErrors,
   error: unknown,
   refreshRequested = false,
@@ -189,7 +191,7 @@ class ReadExecution {
         new InvocationStore(decode(bundle.authData.sessionData)),
       coordinator: dependencies.coordinator ?? new InvocationCoordinator(),
       ...(dependencies.transport ? { transport: dependencies.transport } : {}),
-      policy: { timeoutMs: 20_000, maxReadRetries: 0 },
+      policy: CLIENT_POLICY,
       credentialProvider: {
         load: async () => {
           // Only the shared lifecycle requests credentials after an absent or
@@ -201,18 +203,33 @@ class ReadExecution {
     });
   }
 
-  async verify(): Promise<{ connected: true }> {
+  async verify(options: OperationOptions = {}): Promise<{ connected: true }> {
     try {
-      await this.#client.connect();
+      await this.#client.connect(options);
       return { connected: true };
     } catch (error) {
       throw mappedError(this.#z, error, this.#refreshRequested);
     }
   }
 
-  async read(path: string): Promise<unknown> {
+  async read(path: string, options: OperationOptions = {}): Promise<unknown> {
     try {
-      return await this.#client.get(path);
+      return await this.#client.get(path, options);
+    } catch (error) {
+      throw mappedError(this.#z, error, this.#refreshRequested);
+    }
+  }
+
+  async groups(options: OperationOptions = {}): Promise<GroupAttributes[]> {
+    try {
+      return (await this.#client.groups(options)).map(
+        ({ id, name, shortName, isEveryone }) => ({
+          id,
+          name,
+          shortName,
+          isEveryone,
+        }),
+      );
     } catch (error) {
       throw mappedError(this.#z, error, this.#refreshRequested);
     }
@@ -300,7 +317,7 @@ export function createAuthentication(
             ...(dependencies.transport
               ? { transport: dependencies.transport }
               : {}),
-            policy: { timeoutMs: 20_000, maxReadRetries: 0 },
+            policy: CLIENT_POLICY,
             credentialProvider: {
               load: async () => ({
                 email: config.email as string,
