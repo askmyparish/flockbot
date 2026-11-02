@@ -1,9 +1,9 @@
-# Private Zapier authentication candidate
+# Private Zapier candidate
 
-This package reuses the shared TypeScript client for Session Auth. It is an
-offline development candidate, with no registered triggers, searches, or actions.
-Operational writes stay disabled. Nothing here deploys or replaces an existing
-private integration.
+This private development candidate uses the shared client for Session Auth, a
+group dropdown, and an Add Member to Group action. **Packaged membership writes
+remain blocked** pending the host guarantees below. Nothing here deploys or
+replaces an existing private integration.
 
 From the repository root, use Node.js 22.12+ and npm:
 
@@ -18,6 +18,58 @@ The npm tarball is a local development artifact. It is **not** a Zapier deployme
 ZIP. Uploading, registering, or deploying an integration is a separate step. The
 pinned SDK is `zapier-platform-core` 19.3.0; the bundle targets Zapier's documented
 Node.js 22 runtime. Installation requires registry access; routine tests do not.
+
+## Groups and membership
+
+The hidden `group_choices` trigger fills the action's group dropdown. It returns
+name-sorted `{ id, name, short_name, is_everyone }` objects, including Everyone.
+IDs are stable strings. Unfetched subscriber counts are omitted; `is_everyone`
+replaces the Rails serializer's `everyone?` key. These are candidate integration
+keys, not a claim about any existing Zap's field mappings.
+
+| Action input | Required |
+| --- | --- |
+| `group_id` | Yes, selected group ID |
+| `user_first_name` | Yes |
+| `user_last_name` | Yes |
+| `user_email` | Email or mobile required |
+| `user_mobile_phone` | Email or mobile required |
+
+Names and contact fields use the core validation and trimming rules. The modeled
+action verifies the selected group still exists, then calls shared `addMember`
+with the same client and jar. Only a confirmed response returns `{ success: true }`.
+A missing selection fails before member submission. A group deleted after lookup
+can still fail upstream. Legacy opaque IDs are retained for Ruby compatibility;
+their membership endpoints need controlled verification.
+
+The npm entry always rejects membership with `feasibility_blocked` before making
+a request. Source tests and a disposable bundle exercise that same action factory
+with an explicit modeled transport, store, and coordinator. That model isn't part
+of the shipped entry and doesn't establish real Zapier persistence.
+
+<details>
+<summary>Action errors and time limits</summary>
+
+Invalid inputs, lookup failures, denied permissions, protocol errors and temporary
+failures retain fixed error codes in `AppError`. Rejected credentials or a known
+challenge require manual reconnect. Safe group reads can request host refresh on
+missing or confirmed-invalid sessions; submitted membership writes never do.
+
+Every modeled submitted-write failure, including an explicit upstream rejection,
+keeps the core's conservative unknown outcome. It becomes `HaltedError` with a
+sanitized code and an instruction to check Flocknote before any manual repeat.
+Zapier documents this as a soft stop whose task cannot replay, not a normal
+failure. Its actual operator visibility, notifications and replay behavior remain
+part of controlled host verification. No queue, retry-on-unknown, or early success
+is provided.
+
+One 20-second action budget covers group lookup, authentication and membership,
+including the shared calls' lock waits and persistence. Late dependencies cannot
+submit or publish after expiration. Offline deadlines aren't measured host runtime
+proof. Repeated-add matching, duplicates and notification effects still need the
+separate live verification gate.
+
+</details>
 
 ## Connection flow
 
@@ -76,11 +128,11 @@ guarantees. Failed auth hooks also cannot commit an intervention record through
 the successful-return hook; the actual manual-reconnect/disconnection behavior
 must be verified.
 
-The exported source-level `runOperationalWrite` refuses before invoking its
-callback, and the packaged app registers no write action. The read execution
-exposes no `post`, `addMember`, or unrestricted core client. No write readiness
-switch is provided. Establish supported host capabilities and run controlled
-platform tests before adding operational writes or selecting a hosting fallback.
+The source-level `runOperationalWrite` and packaged membership action refuse
+before upstream work. The read execution exposes no `post`, `addMember`, or
+unrestricted core client. No environment variable, input or readiness switch
+enables writes. Establish supported host capabilities and run controlled platform
+tests before enabling operational writes or selecting a hosting fallback.
 
 | Contract | Offline evidence | Real-host status |
 | --- | --- | --- |
@@ -90,7 +142,7 @@ platform tests before adding operational writes or selecting a hosting fallback.
 | Rejection/challenge | Fixed manual-reconnect error; modeled durable intervention stays blocked | Verify host disconnect and later-run suppression |
 | Store failures | Injected core-store errors fail closed | Host persistence acknowledgment/failure remains unverified; no invented save API |
 | Coordination | Local queue only; write callback blocked | Cross-run lock/CAS/fencing unestablished |
-| Packaging | SDK schema, actual tarball import, mocked default transport | No upload/deployment/runtime-budget proof |
+| Packaging | SDK schema, actual tarball auth/groups and write blockade; disposable bundled modeled membership | No upload/deployment/runtime-budget proof |
 
 The injected store/coordinator/transport parameters are test seams, not Zapier
 APIs. Tests deliberately separate their simulated persistence from host facts.
@@ -104,7 +156,8 @@ Adapter and test type checks keep strict checking of repository code. They use
 
 ## Primary references
 
-- [CLI Session Auth and stale credentials](https://docs.zapier.com/integrations/build-cli/overview)
+- [Dynamic dropdowns](https://docs.zapier.com/integrations/build-cli/dynamic-dropdowns)
+- [CLI Session Auth, return types and halting execution](https://docs.zapier.com/integrations/build-cli/overview)
 - [Request middleware order and logging](https://docs.zapier.com/integrations/build-cli/making-http-requests)
 - [Runtime operating constraints](https://docs.zapier.com/integrations/build/operating-constraints)
 - [SDK schemas and implementation](https://github.com/zapier/zapier-platform)
