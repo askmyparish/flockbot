@@ -4,9 +4,9 @@ Flockbot connects parish workflows to [Flocknote](https://www.flocknote.com/)
 through its internal API.
 
 The TypeScript port supports password login, saved sessions, coordinated recovery,
-group discovery, subscriber counts, member additions, and HTTP requests. Hosted
-adapters and MCP support are still coming. The Ruby gem remains available during
-the move.
+group discovery, subscriber counts, member additions, and HTTP requests. A private
+Zapier authentication candidate is available for offline development; MCP support
+is still coming. The Ruby gem remains available during the move.
 
 ## TypeScript development
 
@@ -330,6 +330,12 @@ this outcome when mapping host retries. A successful POST response is returned
 only after its required cookie persistence succeeds.
 
 </details>
+
+### Private Zapier authentication candidate
+
+`npm run check` also builds, packages, and tests the private [Zapier adapter](adapters/zapier/README.md).
+It reuses this client and protected connection fields. It has no actions and keeps
+operational writes disabled while durable persistence and coordination are unverified.
 
 Tests use fictional data and block unexpected network access. They don't need
 credentials, environment files, or live Flocknote access, and never record missing
