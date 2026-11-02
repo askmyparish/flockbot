@@ -4,8 +4,9 @@ Flockbot connects parish workflows to [Flocknote](https://www.flocknote.com/)
 through its internal API.
 
 The TypeScript port supports password login, saved sessions, coordinated recovery,
-group discovery, subscriber counts, and HTTP requests. Hosted adapters and MCP
-support are still coming. The Ruby gem remains available during the move.
+group discovery, subscriber counts, member additions, and HTTP requests. Hosted
+adapters and MCP support are still coming. The Ruby gem remains available during
+the move.
 
 ## TypeScript development
 
@@ -192,6 +193,55 @@ Verified session rotations are saved before later discovery/count reads, even if
 those reads fail. Cookies from those later responses are saved only after their
 group/count validation succeeds. No adapter,
 AI client, browser runtime, or live credentials are required by these APIs.
+
+</details>
+
+### Add a member
+
+```typescript
+await client.addMember("101", {
+  firstName: "Alex",
+  lastName: "Rivera",
+  email: "alex@example.test",
+  // Or mobilePhone: "+1 (202) 555-0123", or both.
+}); // { success: true }
+```
+
+Provide first and last names and at least one contact method. The client checks
+the session before submitting and returns only confirmed success. A submitted
+write is never automatically repeated; preserve an error's `outcome` in adapters.
+
+<details>
+<summary>Member inputs, failures, and retry limits</summary>
+
+`addMember(groupId, member, { signal })` uses the same group-ID normalization as
+discovery. Names and contact fields are trimmed; optional `null`, `undefined`,
+and blank contact fields become empty form values. Email needs a nonblank address
+with one `@` and a dotted domain. Mobile numbers accept digits, spaces, `+` at the
+start, parentheses, hyphens, and periods, with 7–15 digits. Invalid inputs use
+`invalid_input` / `not_submitted` before storage or network access. Keep member
+inputs and transport request bodies out of logs.
+
+One coordinated deadline covers verification, any bounded password recovery, and
+the membership POST. Verified cookie rotations are saved before submission.
+The request sends `fname`, `lname`, `email`, and `mobile_phone`; there is no
+separate create/update branch or automatic identity editing. Only an object with
+`success: true` yields `{ success: true }`; upstream person/contact details are
+discarded. A false result uses `upstream_rejected`, unavailable groups retain
+their HTTP error status (for example 404), permission denial uses
+`permission_denied`, and malformed success responses use `invalid_response`.
+
+Before membership submission, errors have `outcome: "not_submitted"`. After
+possible submission, rejection, timeout, connection loss, cancellation, or failed
+cookie persistence keeps `outcome: "unknown"`. Even an auth-like POST response
+doesn't prove the write was unexecuted, so it never triggers replay. The shared
+write-outcome rules below also apply. Existing Group count caches aren't changed;
+force refresh or rediscover groups when current counts matter.
+
+Repeated-add, existing-member matching, duplicate, and notification effects still
+need controlled test-parish verification before any operation-specific replay is
+enabled. There is no idempotency guarantee, deduplication store, or background
+queue, and routine tests never make live membership writes.
 
 </details>
 
