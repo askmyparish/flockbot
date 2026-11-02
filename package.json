@@ -21,11 +21,12 @@
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "biome lint .",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p adapters/zapier/tsconfig.json",
     "test": "vitest run",
-    "build": "tsc",
+    "build": "tsc && npm run build:zapier",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build && npm run test:package",
-    "test:package": "node scripts/check-package.mjs"
+    "test:package": "node scripts/check-package.mjs && node scripts/check-zapier-package.mjs",
+    "build:zapier": "node scripts/build-zapier.mjs"
   },
   "dependencies": {
     "parse5": "7.3.0",
