@@ -4,8 +4,8 @@ Flockbot connects parish workflows to [Flocknote](https://www.flocknote.com/)
 through its internal API.
 
 The TypeScript port supports password login, saved sessions, coordinated recovery,
-and HTTP requests. Group operations, hosted adapters, and MCP support are still
-coming. The Ruby gem remains available during the move.
+group discovery, subscriber counts, and HTTP requests. Hosted adapters and MCP
+support are still coming. The Ruby gem remains available during the move.
 
 ## TypeScript development
 
@@ -127,6 +127,73 @@ Flocknote may still send a login email during password setup. The client doesn't
 request, fetch, or enter codes. Password-disabled handling uses simulated test
 responses; real code challenges haven't been verified. Unknown responses fail
 clearly rather than being guessed to mean a bad password.
+
+### Read groups and subscriber counts
+
+```typescript
+const groups = await client.groups();
+const choices = groups.map(({ id, name, shortName }) => ({ id, name, shortName }));
+const everyone = groups.find((group) => group.isEveryone);
+const count = await everyone?.subscriberCount();
+const refreshed = await everyone?.subscriberCount({ force: true });
+```
+
+`groups()` discovers groups afresh; `everyoneGroup()` discovers and selects Everyone,
+or returns `undefined` after a successful response without it. Discovery and uncached
+counts verify the session and can recover once through the shared login lifecycle.
+They read no member contact records. Failures throw `FlockbotError`.
+
+<details>
+<summary>Group identifiers, discovery, and count caching</summary>
+
+Groups expose `id`, `name`, `shortName`, and `isEveryone`. IDs are strings for stable
+choice values. Positive safe integer IDs become decimal strings; decimal string
+IDs lose leading zeros without numeric conversion. Larger decimal strings retain
+all digits. Other nonempty IDs containing only letters, digits, `_`, or `-` are
+preserved. Unsafe numeric IDs and malformed required fields fail as
+`invalid_response`; optional upstream fields are ignored. Names and short names
+are trimmed, and HTML text entities are decoded without evaluating scripts.
+
+Legacy dashboard `.group_item` markup supplies groups directly. Repeated IDs and
+case-insensitive `everyone` short names keep the first legacy entry. The observed
+structural rows with neither `data-shortname` nor `.group_name` are ignored;
+partial group rows still fail. An all-structural page isn't an empty result. The
+`fnReactHolder` dashboard shell triggers `navigation/groups` plus
+`network/getMetadata`. Metadata supplies Everyone's ID and canonical `Everyone` /
+`everyone` names, taking precedence over entries with that ID or an `everyone`
+short name. Other duplicate IDs keep their first entry; other distinct IDs are
+retained even when their short names match. No parish-specific ID is built in.
+
+The supported explicit empty fallback is `{"groups": []}` together with
+`{"everyoneGroupID": null}`. This no-Everyone shape is simulated in tests and
+has not been verified live. A non-null metadata ID still yields Everyone when
+navigation groups are empty. Missing metadata, unknown dashboard/login pages,
+malformed JSON and malformed required fields fail rather than becoming empty
+collections. HTTP 403 stays `permission_denied`; other HTTP errors and explicit
+upstream rejection use `upstream_rejected`, and network failures use
+`transport_failed`. Verification retains the common authentication error codes.
+
+`subscriberCount()` accepts nonnegative safe integers or trimmed decimal digit
+strings, including zero. Missing, negative, fractional, unsafe, or other count
+values fail as `invalid_response`. A successful count is cached for that Group
+object's lifetime with no expiry; zero is cacheable. A cache hit makes no network
+or storage call and does not reverify authentication. `{ force: true }` verifies
+and fetches again. A failed refresh throws and retains the last successful cached
+value for later ordinary reads; failed initial reads are never cached. A fresh
+`groups()` result has fresh count caches. Obtain fresh groups or force refresh
+when current authorization/counts matter, including after a session reset.
+
+`groups`, `everyoneGroup`, and `subscriberCount` accept `{ signal }`. Each network
+operation shares one coordination lock, deadline and transient GET retry budget
+across verification, recovery and all its endpoint reads. Cancellation also rejects
+an already-aborted cache read. These methods reuse `user/userData` verification;
+other endpoint bodies never introduce additional session-expiry heuristics.
+Verified session rotations are saved before later discovery/count reads, even if
+those reads fail. Cookies from those later responses are saved only after their
+group/count validation succeeds. No adapter,
+AI client, browser runtime, or live credentials are required by these APIs.
+
+</details>
 
 ### Requests and storage
 
