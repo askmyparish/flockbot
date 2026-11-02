@@ -4,6 +4,13 @@ import {
   navigationGroups,
   subscriberCount,
 } from "./groups.js";
+import {
+  membershipRequest,
+  confirmedMembership,
+  type MemberInput,
+  type AddMemberResult,
+} from "./members.js";
+export type { MemberInput, AddMemberResult } from "./members.js";
 export type {
   Group,
   GroupAttributes,
@@ -102,6 +109,7 @@ export type ErrorCode =
   | "permission_denied"
   | "invalid_configuration"
   | "invalid_path"
+  | "invalid_input"
   | "session_load_failed"
   | "invalid_session_state"
   | "session_save_failed"
@@ -692,6 +700,27 @@ export class FlockbotClient {
     return (await this.groups(options)).find((group) => group.isEveryone);
   }
 
+  /** Verify/recover before submission; never replay a submitted membership write. */
+  async addMember(
+    groupId: string | number,
+    member: MemberInput,
+    options: OperationOptions = {},
+  ): Promise<AddMemberResult> {
+    let request: { path: string; body: string };
+    try {
+      request = membershipRequest(groupId, member);
+    } catch {
+      throw new FlockbotError("invalid_input", undefined, "not_submitted");
+    }
+    return this.#postOperation(
+      request.path,
+      request.body,
+      options,
+      confirmedMembership,
+      true,
+    );
+  }
+
   async #readOperation<T>(
     options: OperationOptions,
     work: (
@@ -759,21 +788,26 @@ export class FlockbotClient {
       path,
       new URLSearchParams(fields).toString(),
       options,
+      (data) => data,
     );
   }
 
-  async #postOperation(
+  async #postOperation<T>(
     path: string,
     body: string,
     options: OperationOptions,
-  ): Promise<unknown> {
+    parse: (data: unknown) => T,
+    verifySession = false,
+  ): Promise<T> {
     let submittedWrite = false;
     try {
       endpoint(this.#origin, path);
       return await this.#exclusive(options, async (op) => {
         const connection = await this.#load(op);
         this.#checkIntervention(connection);
-        if (!this.#hasSession(connection)) await this.#login(connection, op);
+        if (verifySession) await this.#ensureAuthentication(connection, op);
+        else if (!this.#hasSession(connection))
+          await this.#login(connection, op);
         try {
           const data = await this.#request(
             connection,
@@ -785,8 +819,9 @@ export class FlockbotClient {
               submittedWrite = true;
             },
           );
+          const result = parse(data);
           await this.#persist(connection, op);
-          return data;
+          return result;
         } catch (error) {
           if (
             error instanceof FlockbotError &&

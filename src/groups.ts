@@ -56,7 +56,7 @@ function text(value: unknown): string {
   return value.trim();
 }
 /** Decimal strings stay strings; never round an upstream identifier via Number. */
-function identifier(value: unknown): string {
+export function identifier(value: unknown): string {
   if (typeof value === "number") {
     if (!Number.isSafeInteger(value) || value <= 0) return invalid();
     return String(value);
