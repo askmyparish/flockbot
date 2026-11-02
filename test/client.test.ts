@@ -1,3 +1,4 @@
+import { coordinator } from "./support.js";
 import http from "node:http";
 import { get as namedHttpGet } from "node:http";
 import http2 from "node:http2";
@@ -26,14 +27,22 @@ const rotated = "fictional-replacement-session";
 function store(
   state: SessionState | null = sessionFromToken("example-parish", initial),
 ) {
+  let revision = 0;
   let saved = structuredClone(state);
   return {
+    revision: vi.fn(async () => String(revision)),
     load: vi.fn(async () => structuredClone(saved)),
-    save: vi.fn(async (next: SessionState) => {
+    save: vi.fn(async (next: SessionState, expected?: string) => {
+      if (expected !== undefined && expected !== String(revision))
+        throw new FlockbotError("stale_session_state");
       saved = structuredClone(next);
+      revision++;
     }),
-    clear: vi.fn(async () => {
+    clear: vi.fn(async (expected?: string) => {
+      if (expected !== undefined && expected !== String(revision))
+        throw new FlockbotError("stale_session_state");
       saved = null;
+      revision++;
     }),
   } satisfies SessionStore;
 }
@@ -51,6 +60,8 @@ function client(
   transport: Transport = async () => reply(),
 ) {
   return new FlockbotClient({
+    coordinator,
+    policy: { maxReadRetries: 0 },
     subdomain: "example-parish",
     sessionStore,
     transport,
@@ -73,7 +84,7 @@ describe("supplied sessions", () => {
       );
     };
     const first = client(sessionStore, transport);
-    expect(await first.get("user/userData")).toEqual({ ok: true });
+    expect(await first.get("dashboard")).toEqual({ ok: true });
     await first.get("navigation/groups");
     await client(sessionStore, transport).get("network/getMetadata");
     expect(requests.map((r) => r.headers.Cookie)).toEqual([
@@ -81,7 +92,7 @@ describe("supplied sessions", () => {
       `Flocknote=${rotated}`,
       `Flocknote=${rotated}`,
     ]);
-    expect(sessionStore.load).toHaveBeenCalledTimes(2);
+    expect(sessionStore.load).toHaveBeenCalledTimes(3);
     expect(sessionStore.save).toHaveBeenCalledTimes(1);
   });
 
@@ -97,8 +108,10 @@ describe("supplied sessions", () => {
     ).get("first");
     vi.setSystemTime(new Date("2026-01-01T00:00:03Z"));
     const transport = vi.fn<Transport>(async () => reply());
-    await client(sessionStore, transport).get("next");
-    expect(transport.mock.calls[0]?.[0].headers.Cookie).toBeUndefined();
+    await expect(
+      client(sessionStore, transport).get("next"),
+    ).rejects.toMatchObject({ code: "credentials_unavailable" });
+    expect(transport).not.toHaveBeenCalled();
   });
 
   it("keeps Max-Age fixed across repeated calls on the same client", async () => {
@@ -118,16 +131,15 @@ describe("supplied sessions", () => {
     await connection.get("second");
     // Past the granted expiry (t=2), before a slid expiry (t=3).
     vi.setSystemTime(new Date("2026-01-01T00:00:02.500Z"));
-    await connection.get("third");
-    await client(sessionStore, transport).get("fourth");
+    await expect(connection.get("third")).rejects.toMatchObject({
+      code: "credentials_unavailable",
+    });
+    await expect(
+      client(sessionStore, transport).get("fourth"),
+    ).rejects.toMatchObject({ code: "credentials_unavailable" });
     expect(
       transport.mock.calls.map(([request]) => request.headers.Cookie),
-    ).toEqual([
-      `Flocknote=${initial}`,
-      `Flocknote=${rotated}`,
-      undefined,
-      undefined,
-    ]);
+    ).toEqual([`Flocknote=${initial}`, `Flocknote=${rotated}`]);
     expect(sessionStore.save).toHaveBeenCalledTimes(1);
     expect((await sessionStore.load())?.cookies[0]).toContain(
       "Expires=Thu, 01 Jan 2026 00:00:02 GMT",
@@ -139,7 +151,9 @@ describe("supplied sessions", () => {
     const stale = client(sessionStore);
     await stale.get("first");
     await client(sessionStore).clearSession();
-    await stale.get("after-clear");
+    await expect(stale.get("after-clear")).rejects.toMatchObject({
+      code: "credentials_unavailable",
+    });
     expect(await sessionStore.load()).toBeNull();
     const newer = sessionFromToken("example-parish", rotated);
     await sessionStore.save(newer);
@@ -170,7 +184,10 @@ describe("supplied sessions", () => {
     const connection = client(sessionStore, transport);
     await expect(
       connection.post("example/write", { value: "fictional" }),
-    ).rejects.toMatchObject({ code: "session_save_failed" });
+    ).rejects.toMatchObject({
+      code: "session_save_failed",
+      outcome: "unknown",
+    });
     await expect(connection.get("after-failure")).rejects.toMatchObject({
       code: "session_save_failed",
     });
@@ -200,8 +217,10 @@ describe("supplied sessions", () => {
       code: "session_save_failed",
     });
     await connection.clearSession();
-    await connection.get("after-clear");
-    expect(transport.mock.calls[1]?.[0].headers.Cookie).toBeUndefined();
+    await expect(connection.get("after-clear")).rejects.toMatchObject({
+      code: "credentials_unavailable",
+    });
+    expect(transport).toHaveBeenCalledOnce();
     expect(sessionStore.save).toHaveBeenCalledTimes(1);
     expect(await sessionStore.load()).toBeNull();
   });
@@ -264,7 +283,11 @@ describe("supplied sessions", () => {
   });
 
   it("applies path restrictions and does not persist unrelated cookies", async () => {
-    const sessionStore = store(null);
+    const sessionStore = store({
+      version: 1,
+      origin,
+      cookies: [`Flocknote=${initial}; Path=/user; Secure`],
+    });
     const transport = vi.fn<Transport>(async () => {
       const response = reply("{}");
       response.headers.append(
@@ -296,9 +319,11 @@ describe("supplied sessions", () => {
     const connection = client(sessionStore, transport);
     await connection.get("first");
     await connection.clearSession();
-    await connection.get("second");
+    await expect(connection.get("second")).rejects.toMatchObject({
+      code: "credentials_unavailable",
+    });
     expect(sessionStore.clear).toHaveBeenCalledOnce();
-    expect(transport.mock.calls[1]?.[0].headers.Cookie).toBeUndefined();
+    expect(transport).toHaveBeenCalledOnce();
   });
 
   it("encodes form fields and supports successful HTML responses", async () => {
@@ -336,7 +361,13 @@ describe("request and cookie boundaries", () => {
     "x".repeat(64),
   ])("rejects invalid subdomain %s", (subdomain) => {
     expect(
-      () => new FlockbotClient({ subdomain, sessionStore: store() }),
+      () =>
+        new FlockbotClient({
+          coordinator,
+          policy: { maxReadRetries: 0 },
+          subdomain,
+          sessionStore: store(),
+        }),
     ).toThrow(expect.objectContaining({ code: "invalid_configuration" }));
   });
 
@@ -358,6 +389,12 @@ describe("request and cookie boundaries", () => {
       await expect(
         client(sessionStore, transport).get(path),
       ).rejects.toMatchObject({ code: "invalid_path" });
+      await expect(
+        client(sessionStore, transport).post(path, {}),
+      ).rejects.toMatchObject({
+        code: "invalid_path",
+        outcome: "not_submitted",
+      });
       expect(transport).not.toHaveBeenCalled();
       expect(sessionStore.load).not.toHaveBeenCalled();
     },
@@ -514,6 +551,8 @@ describe("offline default transport", () => {
       );
     const sessionStore = store();
     const connection = new FlockbotClient({
+      coordinator,
+      policy: { maxReadRetries: 0 },
       subdomain: "example-parish",
       sessionStore,
     });
@@ -552,6 +591,8 @@ describe("offline default transport", () => {
       );
     const sessionStore = store();
     const connection = new FlockbotClient({
+      coordinator,
+      policy: { maxReadRetries: 0 },
       subdomain: "example-parish",
       sessionStore,
     });
@@ -568,6 +609,8 @@ describe("offline default transport", () => {
     );
     await expect(
       new FlockbotClient({
+        coordinator,
+        policy: { maxReadRetries: 0 },
         subdomain: "example-parish",
         sessionStore: store(),
       }).get("unrecorded"),

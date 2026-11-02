@@ -1,9 +1,11 @@
+import { coordinator } from "./support.js";
 import { inspect } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import {
   type CredentialProvider,
   type Credentials,
   FlockbotClient,
+  FlockbotError,
   sessionFromToken,
   type SessionState,
   type SessionStore,
@@ -33,14 +35,22 @@ function response(data: unknown, cookie?: string): TransportResponse {
 }
 
 function store(initial: SessionState | null = null) {
+  let revision = 0;
   let state = structuredClone(initial);
   return {
+    revision: vi.fn(async () => String(revision)),
     load: vi.fn(async () => structuredClone(state)),
-    save: vi.fn(async (next: SessionState) => {
+    save: vi.fn(async (next: SessionState, expected?: string) => {
+      if (expected !== undefined && expected !== String(revision))
+        throw new FlockbotError("stale_session_state");
       state = structuredClone(next);
+      revision++;
     }),
-    clear: vi.fn(async () => {
+    clear: vi.fn(async (expected?: string) => {
+      if (expected !== undefined && expected !== String(revision))
+        throw new FlockbotError("stale_session_state");
       state = null;
+      revision++;
     }),
   } satisfies SessionStore;
 }
@@ -73,6 +83,8 @@ function setup(
     return next;
   });
   const client = new FlockbotClient({
+    coordinator,
+    policy: { maxReadRetries: 0 },
     subdomain,
     sessionStore,
     transport,
@@ -134,6 +146,8 @@ describe("password authentication", () => {
       response(authenticated),
     );
     await new FlockbotClient({
+      coordinator,
+      policy: { maxReadRetries: 0 },
       subdomain,
       sessionStore,
       transport: reloadedTransport,
@@ -194,7 +208,7 @@ describe("password authentication", () => {
     expect(requests[0]?.headers.Cookie).toBeUndefined();
   });
 
-  it("does not automatically replace a rejected saved session", async () => {
+  it("discards a rejected saved cookie when recovery cannot complete", async () => {
     const previous = sessionFromToken(subdomain, "fictional-expired");
     const responses = [
       response(
@@ -207,15 +221,15 @@ describe("password authentication", () => {
       previous,
     );
     await expect(client.connect()).rejects.toMatchObject({
-      code: "authentication_required",
+      code: "authentication_unavailable",
     });
-    expect(provider.load).not.toHaveBeenCalled();
-    expect(requests).toHaveLength(1);
+    expect(provider.load).toHaveBeenCalledOnce();
+    expect(requests).toHaveLength(2);
     expect(sessionStore.save).not.toHaveBeenCalled();
     expect(await sessionStore.load()).toEqual(previous);
     responses.push(response({ ok: true }));
     await client.get("dashboard");
-    expect(requests[1]?.headers.Cookie).toBe("Flocknote=fictional-expired");
+    expect(requests[2]?.headers.Cookie).toBe("Flocknote=fictional-expired");
   });
 
   it("persists successful saved-session rotation after verification", async () => {
@@ -237,6 +251,8 @@ describe("password authentication", () => {
       response(authenticated),
     );
     await new FlockbotClient({
+      coordinator,
+      policy: { maxReadRetries: 0 },
       subdomain,
       sessionStore,
       transport: reloadedTransport,
@@ -325,15 +341,8 @@ describe("password authentication", () => {
     await client.get("dashboard");
     const newer = sessionFromToken(subdomain, "fictional-newer");
     await sessionStore.save(newer);
-    responses.push(
-      response(
-        { success: true, userID: null, authorized: false },
-        "Flocknote=fictional-rejected; Domain=flocknote.com; Path=/; Secure",
-      ),
-    );
-    await expect(client.connect()).rejects.toMatchObject({
-      code: "authentication_required",
-    });
+    responses.push(response(authenticated));
+    await client.connect();
     expect(await sessionStore.load()).toEqual(newer);
     expect(sessionStore.save).toHaveBeenCalledOnce();
     expect(provider.load).not.toHaveBeenCalled();
@@ -342,6 +351,8 @@ describe("password authentication", () => {
   it("requires credentials before making any authentication request", async () => {
     const transport = vi.fn<Transport>();
     const client = new FlockbotClient({
+      coordinator,
+      policy: { maxReadRetries: 0 },
       subdomain,
       sessionStore: store(),
       transport,
@@ -382,8 +393,11 @@ describe("password authentication", () => {
     expect(inspect(error)).not.toContain(credentials.email);
     expect(requests).toHaveLength(2);
     expect(requests[1]?.headers.Cookie).toBe("Flocknote=fictional-session");
-    expect(await sessionStore.load()).toBeNull();
-    expect(sessionStore.save).not.toHaveBeenCalled();
+    expect((await sessionStore.load())?.intervention).toEqual({
+      configurationVersion: "initial",
+      reason: "credentials_rejected",
+    });
+    expect(sessionStore.save).toHaveBeenCalledOnce();
   });
 
   it.each([0, 1])(
@@ -399,7 +413,9 @@ describe("password authentication", () => {
         code: "action_required",
       });
       expect(requests).toHaveLength(stage + 1);
-      expect(sessionStore.save).not.toHaveBeenCalled();
+      expect((await sessionStore.load())?.intervention?.reason).toBe(
+        "action_required",
+      );
       for (const request of requests) {
         const fields = new URLSearchParams(request.body);
         expect(fields.has("firstCode")).toBe(false);
@@ -462,7 +478,7 @@ describe("password authentication", () => {
     const responses = exchange();
     responses[2] = response({
       success: true,
-      userID: false,
+      userID: null,
       authorized: false,
     });
     const { client, sessionStore, requests } = setup(responses, previous);
@@ -511,7 +527,10 @@ describe("password authentication", () => {
       responses[1] = { ...response({}), status };
       const { client } = setup(responses);
       await expect(client.connect()).rejects.toMatchObject({
-        code: "authentication_protocol_error",
+        code:
+          status === 403
+            ? "permission_denied"
+            : "authentication_protocol_error",
       });
     },
   );

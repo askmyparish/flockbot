@@ -1,16 +1,53 @@
 import { Cookie, CookieJar } from "tough-cookie";
+import {
+  Operation,
+  type OperationClock,
+  type OperationPolicy,
+  type OperationOptions,
+} from "./operation.js";
+export type {
+  OperationClock,
+  OperationPolicy,
+  OperationOptions,
+} from "./operation.js";
 
 /** Secret-bearing state. Only adapters' protected session stores should persist it. */
 export interface SessionState {
   readonly version: 1;
   readonly origin: string;
   readonly cookies: readonly string[];
+  readonly intervention?: {
+    readonly configurationVersion: string;
+    readonly reason: "credentials_rejected" | "action_required";
+  };
 }
 
 export interface SessionStore {
   load(): Promise<SessionState | null>;
-  save(state: SessionState): Promise<void>;
-  clear(): Promise<void>;
+  /** Monotonic opaque revision, never reused, even after clear. Read under coordination. */
+  revision(): Promise<string>;
+  /** Atomically compare revision, write, and advance revision. Reject stale writes. */
+  save(state: SessionState, expectedRevision: string): Promise<void>;
+  clear(expectedRevision: string): Promise<void>;
+}
+
+/** Adapters must serialize the identity across all invocations, including reset.
+ * Do not release a running callback on cancellation; fence expired lease holders.
+ */
+export interface SessionCoordinator {
+  runExclusive<T>(
+    identity: string,
+    signal: AbortSignal,
+    work: () => Promise<T>,
+  ): Promise<T>;
+}
+
+/** A transport may assert this only when no upstream request was submitted. */
+export class RequestNotSentError extends Error {
+  constructor() {
+    super("Request was not submitted.");
+    this.name = "RequestNotSentError";
+  }
 }
 
 export interface Credentials {
@@ -29,6 +66,7 @@ export interface TransportRequest {
   readonly headers: Readonly<Record<string, string>>;
   readonly body?: string;
   readonly redirect: "manual";
+  readonly signal: AbortSignal;
 }
 
 export interface TransportResponse {
@@ -43,6 +81,14 @@ export type Transport = (
 ) => Promise<TransportResponse>;
 
 export type ErrorCode =
+  | "coordination_failed"
+  | "operation_failed"
+  | "stale_session_state"
+  | "operation_timeout"
+  | "operation_cancelled"
+  | "request_not_sent"
+  | "write_outcome_unknown"
+  | "permission_denied"
   | "invalid_configuration"
   | "invalid_path"
   | "session_load_failed"
@@ -63,11 +109,23 @@ export type ErrorCode =
 export class FlockbotError extends Error {
   readonly code: ErrorCode;
   readonly status?: number;
+  readonly outcome: "not_submitted" | "unknown" | undefined;
 
-  constructor(code: ErrorCode, status?: number) {
+  constructor(
+    code: ErrorCode,
+    status?: number,
+    outcome?: "not_submitted" | "unknown",
+  ) {
     super(`Flockbot request failed (${code}).`);
     this.name = "FlockbotError";
     this.code = code;
+    this.outcome =
+      outcome ??
+      (code === "write_outcome_unknown"
+        ? "unknown"
+        : code === "request_not_sent"
+          ? "not_submitted"
+          : undefined);
     if (status !== undefined) this.status = status;
   }
 }
@@ -75,11 +133,16 @@ export class FlockbotError extends Error {
 export interface ClientOptions {
   readonly subdomain: string;
   readonly sessionStore: SessionStore;
+  readonly coordinator: SessionCoordinator;
+  /** Nonsecret opaque generation; change when credential/configuration changes. */
+  readonly configurationVersion?: string;
+  readonly policy?: Partial<OperationPolicy>;
+  readonly clock?: OperationClock;
   readonly transport?: Transport;
   readonly credentialProvider?: CredentialProvider;
 }
 
-export interface ConnectOptions {
+export interface ConnectOptions extends OperationOptions {
   /** Explicitly start password setup even when a saved session exists. */
   readonly forcePasswordLogin?: boolean;
 }
@@ -91,6 +154,7 @@ export const fetchTransport: Transport = async (request) => {
     ...(request.body === undefined ? {} : { body: request.body }),
     redirect: "manual",
     credentials: "omit",
+    signal: request.signal,
   });
   return {
     status: response.status,
@@ -153,6 +217,12 @@ function sessionState(
   return state;
 }
 
+function cloneJar(jar: CookieJar): CookieJar {
+  const copy = jar.cloneSync();
+  if (!copy) throw new FlockbotError("invalid_session_state");
+  return copy;
+}
+
 function serializedCookies(jar: CookieJar): string[] {
   const serialized = jar.serializeSync();
   if (!serialized) throw new Error();
@@ -180,6 +250,7 @@ function authenticationError(error: unknown): FlockbotError {
   if (error instanceof FlockbotError) {
     if (
       error.code === "transport_failed" ||
+      error.code === "request_not_sent" ||
       (error.code === "upstream_rejected" &&
         (error.status === 429 || (error.status ?? 0) >= 500))
     ) {
@@ -213,196 +284,102 @@ export function sessionFromToken(
   ]);
 }
 
+interface Connection {
+  jar: CookieJar;
+  state: SessionState | null;
+  revision: string;
+}
+
 export class FlockbotClient {
   readonly #origin: string;
   readonly #store: SessionStore;
   readonly #transport: Transport;
   readonly #credentials: CredentialProvider | undefined;
-  #jar: CookieJar | undefined;
-  #pendingState: SessionState | undefined;
+  readonly #coordinator: SessionCoordinator;
+  readonly #configurationVersion: string;
+  readonly #policy: Partial<OperationPolicy> | undefined;
+  readonly #clock: OperationClock | undefined;
+  #pending: { state: SessionState; baseRevision: string } | undefined;
 
   constructor(options: ClientOptions) {
     this.#origin = parishOrigin(options.subdomain);
     this.#store = options.sessionStore;
     this.#transport = options.transport ?? fetchTransport;
     this.#credentials = options.credentialProvider;
+    this.#coordinator = options.coordinator;
+    this.#configurationVersion = options.configurationVersion ?? "initial";
+    if (
+      typeof this.#configurationVersion !== "string" ||
+      !/^[a-zA-Z0-9_-]{1,64}$/.test(this.#configurationVersion)
+    ) {
+      throw new FlockbotError("invalid_configuration");
+    }
+    this.#policy = options.policy;
+    this.#clock = options.clock;
   }
 
   toJSON(): { type: string } {
     return { type: "FlockbotClient" };
   }
-
   [Symbol.for("nodejs.util.inspect.custom")](): string {
     return "FlockbotClient {}";
   }
 
-  /** Verify saved authentication, or bootstrap a missing session with a password. */
-  async connect(options: ConnectOptions = {}): Promise<void> {
-    if (!options.forcePasswordLogin) {
-      const jar = await this.#loadJar();
-      await this.#flushPendingState();
-      if (
-        jar
-          .getCookiesSync(endpoint(this.#origin, "user/userData"))
-          .some((cookie) => cookie.key === "Flocknote")
-      ) {
-        const before = serializedCookies(jar);
-        const candidate = this.#authenticationCandidate(
-          sessionState(this.#origin, before),
+  async #exclusive<T>(
+    options: OperationOptions,
+    work: (op: Operation) => Promise<T>,
+  ): Promise<T> {
+    const op = new Operation(this.#policy, this.#clock, options);
+    return op.run(async () => {
+      let callbackError: unknown;
+      let callbackFailed = false;
+      try {
+        if (!this.#coordinator) throw new FlockbotError("coordination_failed");
+        return await this.#coordinator.runExclusive(
+          this.#origin,
+          op.signal,
+          async () => {
+            try {
+              op.check();
+              return await work(op);
+            } catch (error) {
+              callbackFailed = true;
+              callbackError = error;
+              throw error;
+            }
+          },
         );
-        const verifiedJar = await candidate.#verifyAuthentication();
-        const after = serializedCookies(verifiedJar);
-        this.#jar = verifiedJar;
-        if (JSON.stringify(before) !== JSON.stringify(after)) {
-          this.#pendingState = sessionState(this.#origin, after);
-          await this.#flushPendingState();
+      } catch (error) {
+        if (callbackFailed && error === callbackError) {
+          if (error instanceof FlockbotError)
+            throw new FlockbotError(error.code, error.status, error.outcome);
+          throw new FlockbotError("operation_failed");
         }
-        return;
+        throw new FlockbotError("coordination_failed");
       }
-    }
-    await this.#loginWithPassword();
-  }
-
-  // Verification and password setup both isolate cookies until authentication
-  // succeeds. Rejection responses can issue unauthenticated replacement cookies.
-  #authenticationCandidate(state: SessionState | null = null): FlockbotClient {
-    return new FlockbotClient({
-      subdomain: new URL(this.#origin).hostname.split(".")[0] ?? "",
-      transport: this.#transport,
-      sessionStore: {
-        load: async () => state,
-        save: async () => undefined,
-        clear: async () => undefined,
-      },
     });
   }
 
-  async #verifyAuthentication(): Promise<CookieJar> {
-    try {
-      const data = authenticationRecord(await this.get("user/userData"));
-      if (data.authorized === false) {
-        throw new FlockbotError("authentication_required");
-      }
-      if (
-        !Number.isSafeInteger(data.userID) ||
-        typeof data.userID !== "number" ||
-        data.userID <= 0
-      ) {
-        throw new FlockbotError("authentication_protocol_error");
-      }
-      const jar = await this.#loadJar();
-      if (
-        !jar
-          .getCookiesSync(endpoint(this.#origin, "user/userData"))
-          .some((cookie) => cookie.key === "Flocknote")
-      ) {
-        throw new FlockbotError("authentication_protocol_error");
-      }
-      return jar;
-    } catch (error) {
-      throw authenticationError(error);
-    }
-  }
-
-  async #loginWithPassword(): Promise<void> {
-    let credentials: Credentials;
-    try {
-      if (!this.#credentials) throw new Error();
-      credentials = await this.#credentials.load();
-      if (
-        typeof credentials?.email !== "string" ||
-        credentials.email.trim().length === 0 ||
-        typeof credentials.password !== "string" ||
-        credentials.password.length === 0
-      ) {
-        throw new Error();
-      }
-    } catch {
-      throw new FlockbotError("credentials_unavailable");
-    }
-
-    const candidate = this.#authenticationCandidate();
-    let verifiedJar: CookieJar;
-    try {
-      const first = authenticationRecord(
-        await candidate.post("login/twoFactorAuth", {
-          firstFactor: credentials.email.trim(),
-          initialLoad: "false",
-          requestAuthCode: "false",
-        }),
-      );
-      if (first.allowPasswordForFirstFactor === false) {
-        throw new FlockbotError("action_required");
-      }
-      if (
-        first.allowPasswordForFirstFactor !== true ||
-        first.firstFactorSuccess !== false
-      ) {
-        throw new FlockbotError("authentication_protocol_error");
-      }
-      const password = authenticationRecord(
-        await candidate.post("login/twoFactorAuth", {
-          firstFactor: credentials.email.trim(),
-          initialLoad: "false",
-          password: credentials.password,
-        }),
-      );
-      if (password.allowPasswordForFirstFactor === false) {
-        throw new FlockbotError("action_required");
-      }
-      if (password.loginSuccess !== true) {
-        if (
-          password.allowPasswordForFirstFactor === true &&
-          password.firstFactorSuccess === false &&
-          typeof password.message === "string" &&
-          password.message.startsWith(
-            "Sorry, that password doesn't match our records.",
-          )
-        ) {
-          throw new FlockbotError("credentials_rejected");
-        }
-        throw new FlockbotError("authentication_protocol_error");
-      }
-      verifiedJar = await candidate.#verifyAuthentication();
-    } catch (error) {
-      throw authenticationError(error);
-    }
-    this.#jar = verifiedJar;
-    this.#pendingState = sessionState(
-      this.#origin,
-      serializedCookies(verifiedJar),
-    );
-    await this.#flushPendingState();
-  }
-
-  async clearSession(): Promise<void> {
-    this.#jar = undefined;
-    this.#pendingState = undefined;
-    try {
-      await this.#store.clear();
-    } catch {
-      throw new FlockbotError("session_clear_failed");
-    }
-  }
-
-  get(path: string): Promise<unknown> {
-    return this.#request("GET", path);
-  }
-
-  post(
-    path: string,
-    fields: Readonly<Record<string, string>>,
-  ): Promise<unknown> {
-    return this.#request("POST", path, new URLSearchParams(fields).toString());
-  }
-
-  async #loadJar(): Promise<CookieJar> {
-    if (this.#jar) return this.#jar;
+  async #load(op: Operation): Promise<Connection> {
+    let revision: string;
     let state: SessionState | null;
     try {
+      revision = await this.#store.revision();
+      op.check();
       state = await this.#store.load();
     } catch {
+      op.check();
       throw new FlockbotError("session_load_failed");
+    }
+    op.check();
+    if (typeof revision !== "string" || revision.length === 0)
+      throw new FlockbotError("invalid_session_state");
+    // Never retry an old rotation after a peer or reset advanced durable state.
+    if (this.#pending && this.#pending.baseRevision !== revision)
+      this.#pending = undefined;
+    if (this.#pending) {
+      await this.#save(this.#pending.state, revision, op);
+      return this.#load(op);
     }
     const jar = new CookieJar();
     try {
@@ -411,9 +388,16 @@ export class FlockbotClient {
           state.version !== 1 ||
           state.origin !== this.#origin ||
           !Array.isArray(state.cookies)
-        ) {
+        )
           throw new Error();
-        }
+        if (
+          state.intervention &&
+          (typeof state.intervention.configurationVersion !== "string" ||
+            !["credentials_rejected", "action_required"].includes(
+              state.intervention.reason,
+            ))
+        )
+          throw new Error();
         for (const value of state.cookies) {
           if (typeof value !== "string") throw new Error();
           jar.setCookieSync(allowedCookie(value, this.#origin), this.#origin);
@@ -422,90 +406,426 @@ export class FlockbotClient {
     } catch {
       throw new FlockbotError("invalid_session_state");
     }
-    this.#jar = jar;
-    return jar;
+    return { jar, state, revision };
   }
 
-  async #flushPendingState(): Promise<void> {
-    if (!this.#pendingState) return;
+  async #save(
+    state: SessionState,
+    revision: string,
+    op: Operation,
+  ): Promise<void> {
+    op.check();
+    this.#pending = { state, baseRevision: revision };
     try {
-      await this.#store.save(this.#pendingState);
-      this.#pendingState = undefined;
-    } catch {
-      // Retain the replacement token. A later call retries this save before
-      // sending another upstream request, without replaying the original call.
+      await this.#store.save(state, revision);
+    } catch (error) {
+      if (
+        error instanceof FlockbotError &&
+        error.code === "stale_session_state"
+      ) {
+        this.#pending = undefined;
+        throw new FlockbotError("stale_session_state");
+      }
       throw new FlockbotError("session_save_failed");
+    }
+    this.#pending = undefined;
+    op.check();
+  }
+
+  #checkIntervention(connection: Connection): void {
+    if (
+      connection.state?.intervention?.configurationVersion ===
+      this.#configurationVersion
+    ) {
+      throw new FlockbotError("action_required");
+    }
+  }
+
+  async #persist(
+    connection: Connection,
+    op: Operation,
+    force = false,
+  ): Promise<void> {
+    const state = sessionState(this.#origin, serializedCookies(connection.jar));
+    if (
+      force ||
+      JSON.stringify(state.cookies) !==
+        JSON.stringify(connection.state?.cookies ?? [])
+    ) {
+      await this.#save(state, connection.revision, op);
+      connection.revision = await this.#revision(op);
+      connection.state = state;
+    }
+  }
+
+  async #revision(op: Operation): Promise<string> {
+    try {
+      const revision = await this.#store.revision();
+      op.check();
+      if (typeof revision !== "string" || !revision) throw new Error();
+      return revision;
+    } catch {
+      op.check();
+      throw new FlockbotError("session_load_failed");
+    }
+  }
+
+  /** Verify saved authentication and recover once, under identity coordination. */
+  connect(options: ConnectOptions = {}): Promise<void> {
+    return this.#exclusive(options, async (op) => {
+      const connection = await this.#load(op);
+      this.#checkIntervention(connection);
+      if (!options.forcePasswordLogin && this.#hasSession(connection)) {
+        try {
+          await this.#verify(connection, op);
+          await this.#persist(connection, op);
+          return;
+        } catch (error) {
+          if (
+            !(error instanceof FlockbotError) ||
+            error.code !== "authentication_required"
+          )
+            throw error;
+        }
+      }
+      await this.#login(connection, op);
+    });
+  }
+
+  #hasSession(connection: Connection): boolean {
+    return connection.jar
+      .getCookiesSync(endpoint(this.#origin, "user/userData"))
+      .some((cookie) => cookie.key === "Flocknote");
+  }
+
+  async #verify(connection: Connection, op: Operation): Promise<void> {
+    try {
+      // Stage cookies: unknown, denied and invalid responses cannot rotate state.
+      const candidate: Connection = {
+        ...connection,
+        jar: cloneJar(connection.jar),
+      };
+      // #request owns userData response classification for every caller.
+      await this.#request(candidate, op, "GET", "user/userData");
+      if (!this.#hasSession(candidate)) {
+        throw new FlockbotError("authentication_protocol_error");
+      }
+      connection.jar = candidate.jar;
+    } catch (error) {
+      throw authenticationError(error);
+    }
+  }
+
+  async #login(connection: Connection, op: Operation): Promise<void> {
+    let credentials: Credentials;
+    try {
+      if (!this.#credentials) throw new Error();
+      credentials = await this.#credentials.load();
+      op.check();
+      if (
+        typeof credentials?.email !== "string" ||
+        credentials.email.trim().length === 0 ||
+        typeof credentials.password !== "string" ||
+        credentials.password.length === 0
+      )
+        throw new Error();
+    } catch {
+      op.check();
+      throw new FlockbotError("credentials_unavailable");
+    }
+    const candidate: Connection = {
+      jar: new CookieJar(),
+      state: null,
+      revision: connection.revision,
+    };
+    try {
+      const first = authenticationRecord(
+        await this.#request(
+          candidate,
+          op,
+          "POST",
+          "login/twoFactorAuth",
+          new URLSearchParams({
+            firstFactor: credentials.email.trim(),
+            initialLoad: "false",
+            requestAuthCode: "false",
+          }).toString(),
+        ),
+      );
+      if (first.allowPasswordForFirstFactor === false)
+        throw new FlockbotError("action_required");
+      if (
+        first.allowPasswordForFirstFactor !== true ||
+        first.firstFactorSuccess !== false
+      )
+        throw new FlockbotError("authentication_protocol_error");
+      const password = authenticationRecord(
+        await this.#request(
+          candidate,
+          op,
+          "POST",
+          "login/twoFactorAuth",
+          new URLSearchParams({
+            firstFactor: credentials.email.trim(),
+            initialLoad: "false",
+            password: credentials.password,
+          }).toString(),
+        ),
+      );
+      if (password.allowPasswordForFirstFactor === false)
+        throw new FlockbotError("action_required");
+      if (password.loginSuccess !== true) {
+        if (
+          password.allowPasswordForFirstFactor === true &&
+          password.firstFactorSuccess === false &&
+          typeof password.message === "string" &&
+          password.message.startsWith(
+            "Sorry, that password doesn't match our records.",
+          )
+        )
+          throw new FlockbotError("credentials_rejected");
+        throw new FlockbotError("authentication_protocol_error");
+      }
+      await this.#verify(candidate, op);
+    } catch (error) {
+      const safe = authenticationError(error);
+      if (
+        safe.code === "credentials_rejected" ||
+        safe.code === "action_required"
+      ) {
+        const blocked = sessionState(
+          this.#origin,
+          connection.state?.cookies ?? [],
+        );
+        Object.assign(blocked, {
+          intervention: {
+            configurationVersion: this.#configurationVersion,
+            reason: safe.code,
+          },
+        });
+        await this.#save(blocked, connection.revision, op);
+      }
+      throw safe;
+    }
+    connection.jar = candidate.jar;
+    await this.#persist(connection, op, true);
+  }
+
+  /** Adapter operator interfaces authorize this reset; ordinary request callers must not expose it. */
+  clearSession(options: OperationOptions = {}): Promise<void> {
+    return this.#exclusive(options, async (op) => {
+      const revision = await this.#revision(op);
+      this.#pending = undefined;
+      op.check();
+      try {
+        await this.#store.clear(revision);
+      } catch (error) {
+        if (
+          error instanceof FlockbotError &&
+          error.code === "stale_session_state"
+        )
+          throw error;
+        throw new FlockbotError("session_clear_failed");
+      }
+      op.check();
+    });
+  }
+
+  get(path: string, options: OperationOptions = {}): Promise<unknown> {
+    return this.#operation("GET", path, undefined, options);
+  }
+
+  post(
+    path: string,
+    fields: Readonly<Record<string, string>>,
+    options: OperationOptions = {},
+  ): Promise<unknown> {
+    return this.#operation(
+      "POST",
+      path,
+      new URLSearchParams(fields).toString(),
+      options,
+    );
+  }
+
+  async #operation(
+    method: "GET" | "POST",
+    path: string,
+    body: string | undefined,
+    options: OperationOptions,
+  ): Promise<unknown> {
+    let submittedWrite = false;
+    try {
+      endpoint(this.#origin, path);
+      return await this.#exclusive(options, async (op) => {
+        const connection = await this.#load(op);
+        this.#checkIntervention(connection);
+        let recovered = false;
+        if (!this.#hasSession(connection)) {
+          await this.#login(connection, op);
+          recovered = true;
+        }
+        for (;;) {
+          try {
+            const data = await this.#request(
+              connection,
+              op,
+              method,
+              path,
+              body,
+              () => {
+                submittedWrite = method === "POST";
+              },
+            );
+            await this.#persist(connection, op);
+            return data;
+          } catch (error) {
+            if (
+              error instanceof FlockbotError &&
+              error.code === "redirect_rejected"
+            )
+              await this.#persist(connection, op);
+            if (
+              method === "GET" &&
+              !recovered &&
+              error instanceof FlockbotError &&
+              error.code === "authentication_required"
+            ) {
+              recovered = true;
+              await this.#login(connection, op);
+              continue;
+            }
+            throw error;
+          }
+        }
+      });
+    } catch (error) {
+      if (
+        submittedWrite &&
+        !(error instanceof FlockbotError && error.code === "request_not_sent")
+      ) {
+        if (error instanceof FlockbotError && error.code !== "operation_failed")
+          throw new FlockbotError(error.code, error.status, "unknown");
+        throw new FlockbotError("write_outcome_unknown");
+      }
+      if (method === "POST" && error instanceof FlockbotError)
+        throw new FlockbotError(error.code, error.status, "not_submitted");
+      throw error;
     }
   }
 
   async #request(
+    connection: Connection,
+    op: Operation,
     method: "GET" | "POST",
     path: string,
     body?: string,
+    onSubmit?: () => void,
   ): Promise<unknown> {
     const url = endpoint(this.#origin, path);
-    const jar = await this.#loadJar();
-    await this.#flushPendingState();
-    const cookie = jar.getCookieStringSync(url);
     let response: TransportResponse;
-    try {
-      response = await this.#transport({
-        url,
-        method,
-        headers: {
-          ...(cookie ? { Cookie: cookie } : {}),
-          ...(body === undefined
-            ? {}
-            : { "Content-Type": "application/x-www-form-urlencoded" }),
-        },
-        ...(body === undefined ? {} : { body }),
-        redirect: "manual",
-      });
-    } catch {
-      throw new FlockbotError("transport_failed");
+    for (;;) {
+      op.check();
+      const cookie = connection.jar.getCookieStringSync(url);
+      try {
+        onSubmit?.();
+        response = await this.#transport({
+          url,
+          method,
+          headers: {
+            ...(cookie ? { Cookie: cookie } : {}),
+            ...(body === undefined
+              ? {}
+              : { "Content-Type": "application/x-www-form-urlencoded" }),
+          },
+          ...(body === undefined ? {} : { body }),
+          redirect: "manual",
+          signal: op.signal,
+        });
+        op.check();
+      } catch (error) {
+        op.check();
+        if (error instanceof RequestNotSentError)
+          throw new FlockbotError("request_not_sent");
+        if (method === "GET" && (await op.retry())) continue;
+        throw new FlockbotError("transport_failed");
+      }
+      if (
+        method === "GET" &&
+        (response.status === 429 || response.status >= 500) &&
+        (await op.retry())
+      )
+        continue;
+      break;
     }
     if (
       !Number.isInteger(response.status) ||
       response.status < 200 ||
       response.status > 599
-    ) {
+    )
+      throw new FlockbotError("invalid_response");
+    if (response.status >= 300 && response.status < 400) {
+      this.#capture(connection, response, url);
+      throw new FlockbotError("redirect_rejected");
+    }
+    if (response.status === 403)
+      throw new FlockbotError("permission_denied", 403);
+    if (response.status >= 400)
+      throw new FlockbotError("upstream_rejected", response.status);
+    let data: unknown;
+    try {
+      data = /(?:^|\/)json(?:;|$)|\+json(?:;|$)/i.test(
+        response.headers.get("Content-Type") ?? "",
+      )
+        ? (JSON.parse(response.body) as unknown)
+        : response.body;
+    } catch {
       throw new FlockbotError("invalid_response");
     }
+    if (path.replace(/^\//, "") === "user/userData") {
+      const record = authenticationRecord(data);
+      if (record.authorized === false && record.userID === null)
+        throw new FlockbotError("authentication_required");
+      if (
+        record.authorized === false &&
+        typeof record.userID === "number" &&
+        record.userID > 0
+      )
+        throw new FlockbotError("permission_denied");
+      if (
+        record.authorized === false ||
+        typeof record.userID !== "number" ||
+        !Number.isSafeInteger(record.userID) ||
+        record.userID <= 0
+      )
+        throw new FlockbotError("authentication_protocol_error");
+    }
+    if (
+      typeof data === "object" &&
+      data !== null &&
+      (("success" in data && data.success === false) ||
+        ("authorized" in data && data.authorized === false))
+    ) {
+      throw new FlockbotError("upstream_rejected", response.status);
+    }
+    this.#capture(connection, response, url);
+    return data;
+  }
+
+  #capture(
+    connection: Connection,
+    response: TransportResponse,
+    url: string,
+  ): void {
     try {
-      // Stage the entire response batch so one invalid auth cookie cannot
-      // leave a partially mutated in-memory jar or partially persisted state.
-      const serialized = jar.serializeSync();
-      if (!serialized) throw new Error();
-      const candidate = CookieJar.deserializeSync(serialized);
+      const candidate = cloneJar(connection.jar);
       for (const value of response.headers.getSetCookie()) {
-        // Non-authentication cookies are unnecessary integration state.
         const parsed = Cookie.parse(value);
         if (!parsed || !/^(?:Flocknote|Flocknote-Login-\d+)$/.test(parsed.key))
           continue;
         candidate.setCookieSync(allowedCookie(value, this.#origin), url);
       }
-      const before = serializedCookies(jar);
-      const after = serializedCookies(candidate);
-      if (JSON.stringify(before) !== JSON.stringify(after)) {
-        this.#jar = candidate;
-        this.#pendingState = sessionState(this.#origin, after);
-      }
-    } catch {
-      throw new FlockbotError("invalid_response");
-    }
-    await this.#flushPendingState();
-    if (response.status >= 300 && response.status < 400) {
-      throw new FlockbotError("redirect_rejected");
-    }
-    if (response.status >= 400) {
-      throw new FlockbotError("upstream_rejected", response.status);
-    }
-    try {
-      return /(?:^|\/)json(?:;|$)|\+json(?:;|$)/i.test(
-        response.headers.get("Content-Type") ?? "",
-      )
-        ? (JSON.parse(response.body) as unknown)
-        : response.body;
+      connection.jar = candidate;
     } catch {
       throw new FlockbotError("invalid_response");
     }

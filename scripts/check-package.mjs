@@ -3,8 +3,10 @@ import { FlockbotClient, sessionFromToken } from "@askmyparish/flockbot";
 
 let state = sessionFromToken("example-parish", "fictional-session");
 const client = new FlockbotClient({
+  coordinator: { runExclusive: async (_identity, _signal, work) => work() },
   subdomain: "example-parish",
   sessionStore: {
+    revision: async () => "fixture-revision",
     load: async () => state,
     save: async (next) => {
       state = next;
@@ -22,5 +24,5 @@ const client = new FlockbotClient({
     };
   },
 });
-assert.deepEqual(await client.get("user/userData"), { ok: true });
+assert.deepEqual(await client.get("dashboard"), { ok: true });
 console.log("Built package imports and reuses a supplied session.");
