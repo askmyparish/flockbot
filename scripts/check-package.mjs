@@ -17,12 +17,35 @@ const client = new FlockbotClient({
   },
   transport: async (request) => {
     assert.equal(request.headers.Cookie, "Flocknote=fictional-session");
+    const path = new URL(request.url).pathname;
+    const data = {
+      "/user/userData": { success: true, userID: 201 },
+      "/dashboard":
+        '<div class="group_item" data-groupid="101" data-shortname="everyone"><span class="group_name">Everyone</span></div>',
+      "/group/101/getSubscriberCount": { subscriberCount: "0" },
+    }[path];
+    assert.notEqual(data, undefined);
     return {
       status: 200,
-      headers: new Headers({ "content-type": "application/json" }),
-      body: '{"ok":true}',
+      headers: new Headers({
+        "content-type":
+          typeof data === "string" ? "text/html" : "application/json",
+      }),
+      body: typeof data === "string" ? data : JSON.stringify(data),
     };
   },
 });
-assert.deepEqual(await client.get("dashboard"), { ok: true });
-console.log("Built package imports and reuses a supplied session.");
+const groups = await client.groups();
+assert.deepEqual(
+  groups.map(({ id, name, shortName, isEveryone }) => ({
+    id,
+    name,
+    shortName,
+    isEveryone,
+  })),
+  [{ id: "101", name: "Everyone", shortName: "everyone", isEveryone: true }],
+);
+assert.equal(await groups[0].subscriberCount(), 0);
+console.log(
+  "Built package imports, reuses a supplied session, and reads groups/counts.",
+);

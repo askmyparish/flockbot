@@ -1,3 +1,14 @@
+import {
+  Group,
+  dashboardGroups,
+  navigationGroups,
+  subscriberCount,
+} from "./groups.js";
+export type {
+  Group,
+  GroupAttributes,
+  SubscriberCountOptions,
+} from "./groups.js";
 import { Cookie, CookieJar } from "tough-cookie";
 import {
   Operation,
@@ -631,62 +642,65 @@ export class FlockbotClient {
     });
   }
 
-  get(path: string, options: OperationOptions = {}): Promise<unknown> {
-    return this.#operation("GET", path, undefined, options);
+  async get(path: string, options: OperationOptions = {}): Promise<unknown> {
+    endpoint(this.#origin, path);
+    return this.#readOperation(options, (read) => read(path));
   }
 
-  post(
-    path: string,
-    fields: Readonly<Record<string, string>>,
+  /** Verify/recover once, then discover groups within one coordinated operation. */
+  groups(options: OperationOptions = {}): Promise<readonly Group[]> {
+    return this.#readOperation(options, async (read, verify) => {
+      await verify();
+      let attributes = dashboardGroups(await read("dashboard"));
+      if (attributes === null) {
+        const navigation = await read("navigation/groups");
+        attributes = navigationGroups(
+          navigation,
+          await read("network/getMetadata"),
+        );
+      }
+      return attributes.map(
+        (attributes) =>
+          new Group(attributes, (options) =>
+            this.#readOperation(options, async (read, verify) => {
+              await verify();
+              return subscriberCount(
+                await read(`group/${attributes.id}/getSubscriberCount`),
+              );
+            }),
+          ),
+      );
+    });
+  }
+
+  /** Undefined only after successful discovery without an Everyone group. */
+  async everyoneGroup(
     options: OperationOptions = {},
-  ): Promise<unknown> {
-    return this.#operation(
-      "POST",
-      path,
-      new URLSearchParams(fields).toString(),
-      options,
-    );
+  ): Promise<Group | undefined> {
+    return (await this.groups(options)).find((group) => group.isEveryone);
   }
 
-  async #operation(
-    method: "GET" | "POST",
-    path: string,
-    body: string | undefined,
+  async #readOperation<T>(
     options: OperationOptions,
-  ): Promise<unknown> {
-    let submittedWrite = false;
-    try {
-      endpoint(this.#origin, path);
-      return await this.#exclusive(options, async (op) => {
-        const connection = await this.#load(op);
-        this.#checkIntervention(connection);
-        let recovered = false;
-        if (!this.#hasSession(connection)) {
-          await this.#login(connection, op);
-          recovered = true;
-        }
+    work: (
+      read: (path: string) => Promise<unknown>,
+      verify: () => Promise<void>,
+    ) => Promise<T>,
+  ): Promise<T> {
+    return this.#exclusive(options, async (op) => {
+      const connection = await this.#load(op);
+      this.#checkIntervention(connection);
+      let recovered = false;
+      if (!this.#hasSession(connection)) {
+        await this.#login(connection, op);
+        recovered = true;
+      }
+      const recover = async <R>(request: () => Promise<R>): Promise<R> => {
         for (;;) {
           try {
-            const data = await this.#request(
-              connection,
-              op,
-              method,
-              path,
-              body,
-              () => {
-                submittedWrite = method === "POST";
-              },
-            );
-            await this.#persist(connection, op);
-            return data;
+            return await request();
           } catch (error) {
             if (
-              error instanceof FlockbotError &&
-              error.code === "redirect_rejected"
-            )
-              await this.#persist(connection, op);
-            if (
-              method === "GET" &&
               !recovered &&
               error instanceof FlockbotError &&
               error.code === "authentication_required"
@@ -698,6 +712,77 @@ export class FlockbotClient {
             throw error;
           }
         }
+      };
+      const read = async (path: string): Promise<unknown> => {
+        try {
+          return await recover(() =>
+            this.#request(connection, op, "GET", path),
+          );
+        } catch (error) {
+          if (
+            error instanceof FlockbotError &&
+            error.code === "redirect_rejected"
+          )
+            await this.#persist(connection, op);
+          throw error;
+        }
+      };
+      const verify = async (): Promise<void> => {
+        await recover(() => this.#verify(connection, op));
+        // A later domain read must not discard an already-verified rotation.
+        await this.#persist(connection, op);
+      };
+      const result = await work(read, verify);
+      await this.#persist(connection, op);
+      return result;
+    });
+  }
+
+  post(
+    path: string,
+    fields: Readonly<Record<string, string>>,
+    options: OperationOptions = {},
+  ): Promise<unknown> {
+    return this.#postOperation(
+      path,
+      new URLSearchParams(fields).toString(),
+      options,
+    );
+  }
+
+  async #postOperation(
+    path: string,
+    body: string,
+    options: OperationOptions,
+  ): Promise<unknown> {
+    let submittedWrite = false;
+    try {
+      endpoint(this.#origin, path);
+      return await this.#exclusive(options, async (op) => {
+        const connection = await this.#load(op);
+        this.#checkIntervention(connection);
+        if (!this.#hasSession(connection)) await this.#login(connection, op);
+        try {
+          const data = await this.#request(
+            connection,
+            op,
+            "POST",
+            path,
+            body,
+            () => {
+              submittedWrite = true;
+            },
+          );
+          await this.#persist(connection, op);
+          return data;
+        } catch (error) {
+          if (
+            error instanceof FlockbotError &&
+            error.code === "redirect_rejected"
+          )
+            await this.#persist(connection, op);
+          throw error;
+        }
       });
     } catch (error) {
       if (
@@ -708,7 +793,7 @@ export class FlockbotClient {
           throw new FlockbotError(error.code, error.status, "unknown");
         throw new FlockbotError("write_outcome_unknown");
       }
-      if (method === "POST" && error instanceof FlockbotError)
+      if (error instanceof FlockbotError)
         throw new FlockbotError(error.code, error.status, "not_submitted");
       throw error;
     }

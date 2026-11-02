@@ -1,0 +1,12 @@
+{
+  "success": true,
+  "groups": [
+    {
+      "ID": 102,
+      "name": "Garden & Grounds",
+      "shortname": "garden",
+      "description": "Fictional optional detail"
+    },
+    { "ID": "103", "name": "Music Ministry", "shortname": "music" }
+  ]
+}
