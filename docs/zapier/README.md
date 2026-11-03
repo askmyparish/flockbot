@@ -115,6 +115,9 @@ protected host storage.
 
 ## Feasibility gate
 
+An experimental [Storage REST probe](./storage-probe.md) checks a
+Zapier-only persistence option with nonsecret markers. It does not enable writes.
+
 The reviewed Session Auth docs establish persistence of a successful auth-hook
 return. They do not establish ordinary-action cookie write-back, an atomic
 per-connection compare-and-swap store, or a cross-invocation renewal lock. This is
