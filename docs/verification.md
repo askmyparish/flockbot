@@ -42,7 +42,7 @@ tests. CLI 19 uses `zapier-platform`; the old `zapier` binary was removed.
 After the operator approves this separate platform stage, extract the candidate:
 
 ```sh
-tar -xzf "$candidate_dir/askmyparish-flockbot-zapier-0.0.0.tgz" -C "$candidate_dir"
+tar -xzf "$candidate_dir/askmyparish-flockbot-zapier-2.0.0.tgz" -C "$candidate_dir"
 cd "$candidate_dir/package"
 npm install --omit=dev --ignore-scripts
 npm exec --yes --package=zapier-platform-cli@19.3.0 -- zapier-platform build
