@@ -43,7 +43,7 @@ export interface GroupChoice {
 }
 
 /** One overall budget, including lookup and core preflight before a write. */
-async function withinActionDeadline<T>(
+export async function withinActionDeadline<T>(
   work: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   const controller = new AbortController();
@@ -69,7 +69,7 @@ async function withinActionDeadline<T>(
   }
 }
 
-function actionError(z: HostErrors, error: unknown): Error {
+export function actionError(z: HostErrors, error: unknown): Error {
   if (error instanceof FlockbotError && error.outcome === "unknown") {
     return new z.errors.HaltedError(
       `Flockbot membership completion is unknown (${error.code}). Check Flocknote before any manual repeat. Automatic replay is stopped.`,
@@ -120,7 +120,7 @@ function choices(groups: readonly GroupAttributes[]): GroupChoice[] {
     .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
 }
 
-function memberRequest(bundle: HostBundle): {
+export function memberRequest(bundle: HostBundle): {
   groupId: string;
   member: MemberInput;
 } {
