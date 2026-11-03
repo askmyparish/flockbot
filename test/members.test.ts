@@ -268,6 +268,161 @@ describe("membership requests", () => {
 });
 
 describe("membership results", () => {
+  it.each([200, 403, 422, 503])(
+    "preserves rejection wording and upstream facts for HTTP %s without replay",
+    async (status) => {
+      const f = fixture();
+      f.transport
+        .mockResolvedValueOnce(response(accepted))
+        .mockResolvedValueOnce(
+          response(
+            {
+              success: false,
+              error: "Could not add alex+probe@example.test",
+              userID: 201,
+              existingSubscription: false,
+            },
+            status,
+          ),
+        );
+      const error = await f.client
+        .addMember("101", member)
+        .catch((e: unknown) => e);
+      expect(error).toMatchObject({
+        code: status === 403 ? "permission_denied" : "upstream_rejected",
+        status,
+        outcome: "unknown",
+        response: {
+          success: false,
+          error: "Could not add alex+probe@example.test",
+          userId: "201",
+          existingSubscription: false,
+        },
+      });
+      expect(f.writes()).toHaveLength(1);
+      expect(f.provider.load).not.toHaveBeenCalled();
+    },
+  );
+  it("redacts current and replacement cookies from rejection wording", async () => {
+    const f = fixture();
+    f.transport.mockResolvedValueOnce(response(accepted)).mockResolvedValueOnce(
+      response(
+        {
+          success: false,
+          error: "Could not add user: fictional-session fictional-replacement",
+        },
+        200,
+        "fictional-replacement",
+      ),
+    );
+    const error = await f.client
+      .addMember("101", member)
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({
+      outcome: "unknown",
+      response: { error: "Could not add user: [redacted] [redacted]" },
+    });
+    expect(inspect(error)).not.toMatch(
+      /fictional-session|fictional-replacement/,
+    );
+  });
+  it.each([403, 422, 503])(
+    "preserves HTTP %s classification when its error body is malformed",
+    async (status) => {
+      const f = fixture();
+      f.transport
+        .mockResolvedValueOnce(response(accepted))
+        .mockResolvedValueOnce({
+          status,
+          headers: new Headers({ "content-type": "application/json" }),
+          body: "malformed-private-body",
+        });
+      const error = await f.client
+        .addMember("101", member)
+        .catch((e: unknown) => e);
+      expect(error).toMatchObject({
+        code: status === 403 ? "permission_denied" : "upstream_rejected",
+        status,
+        outcome: "unknown",
+      });
+      expect(error).toHaveProperty("response", undefined);
+      expect(inspect(error)).not.toContain("malformed-private-body");
+      expect(f.writes()).toHaveLength(1);
+    },
+  );
+  it("does not collect member diagnostics from other endpoints or successful adds", async () => {
+    const f = fixture();
+    f.transport.mockResolvedValueOnce(
+      response({ success: false, error: "private-response-sentinel" }),
+    );
+    const error = await f.client
+      .post("other/action", {})
+      .catch((e: unknown) => e);
+    expect(error).toHaveProperty("response", undefined);
+    f.transport
+      .mockResolvedValueOnce(response(accepted))
+      .mockResolvedValueOnce(
+        response({ success: true, error: "ignored", userID: 201 }),
+      );
+    await expect(f.client.addMember("101", member)).resolves.toEqual({
+      success: true,
+    });
+  });
+  it("stops on preflight permission denial without copying its body or submitting", async () => {
+    const f = fixture();
+    f.transport.mockResolvedValueOnce(
+      response({ error: "private-response-sentinel" }, 403),
+    );
+    const error = await f.client
+      .addMember("101", member)
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({
+      code: "permission_denied",
+      status: 403,
+      outcome: "not_submitted",
+    });
+    expect(error).toHaveProperty("response", undefined);
+    expect(f.writes()).toHaveLength(0);
+    expect(f.provider.load).not.toHaveBeenCalled();
+  });
+  it("drops invalid response metadata from an untyped caller", () => {
+    const error = Reflect.construct(FlockbotError, [
+      "upstream_rejected",
+      "private-status-sentinel",
+      "unknown",
+      {
+        error: { private: "value" },
+        userID: [],
+        success: "false",
+        private: "sensitive",
+      },
+    ]) as FlockbotError;
+    expect(error.status).toBeUndefined();
+    expect(error.response).toBeUndefined();
+    expect(inspect(error)).not.toContain("private-");
+  });
+  it.each([NaN, Infinity, 99, 600, 200.5])(
+    "omits invalid HTTP status %s",
+    (status) => {
+      expect(
+        new FlockbotError("upstream_rejected", status, "unknown").status,
+      ).toBeUndefined();
+    },
+  );
+  it("preserves a plus address in the form body without changing the recipient", async () => {
+    const f = fixture();
+    await f.client.addMember("101", {
+      ...member,
+      email: "alex+probe@example.test",
+    });
+    const body = f.writes()[0]?.[0].body;
+    expect(body).toContain("email=alex%2Bprobe%40example.test");
+    expect(new URLSearchParams(body).get("email")).toBe(
+      "alex+probe@example.test",
+    );
+    expect(f.writes()).toHaveLength(1);
+  });
+
   it.each([
     [
       "false success",
@@ -378,7 +533,7 @@ describe("membership results", () => {
     );
   });
 
-  it("discards upstream contacts in success/error/inspect outputs", async () => {
+  it("discards person payloads on success and retains only the selected rejection text", async () => {
     const f = fixture();
     const marker = "private-upstream-contact@example.test";
     f.transport.mockResolvedValueOnce(response(accepted)).mockResolvedValueOnce(
@@ -401,11 +556,12 @@ describe("membership results", () => {
       .addMember("101", member)
       .catch((error: unknown) => error);
     expect(error).toBeInstanceOf(FlockbotError);
+    expect(error).toMatchObject({
+      response: { success: false, error: marker },
+    });
     expect(
       [String(error), inspect(error), JSON.stringify(error)].join(" "),
-    ).not.toMatch(
-      /alex@example|private-upstream|fictional-private|fictional-session/,
-    );
+    ).not.toMatch(/alex@example|fictional-private|fictional-session/);
   });
 });
 

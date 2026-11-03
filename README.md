@@ -329,6 +329,15 @@ requires separate evidence of safety; generic POST provides no replay opt-in. Ad
 this outcome when mapping host retries. A successful POST response is returned
 only after its required cookie persistence succeeds.
 
+Membership failures may include a bounded `FlockbotError.response` object with
+actual upstream `success`, `authorized`, `error` (or `message`), `userId` (from
+`userID`), and `existingSubscription` fields. `upstreamResponse` copies only these
+known fields. Error text is capped at 1,024 characters with `errorTruncated:true`
+when shortened. Cookie values and credential-related text are redacted; whole
+response bodies and headers are discarded. Error text can contain member contact
+data, so adapters must protect access to their error reports. These diagnostics
+never change the write outcome, infer an email-validation rule, or permit replay.
+
 </details>
 
 ### Private Zapier candidate

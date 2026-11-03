@@ -17,6 +17,9 @@ export type {
   SubscriberCountOptions,
 } from "./groups.js";
 import { Cookie, CookieJar } from "tough-cookie";
+import { upstreamResponse, type UpstreamResponse } from "./rejections.js";
+export { upstreamResponse } from "./rejections.js";
+export type { UpstreamResponse } from "./rejections.js";
 import {
   Operation,
   type OperationClock,
@@ -129,11 +132,13 @@ export class FlockbotError extends Error {
   readonly code: ErrorCode;
   readonly status?: number;
   readonly outcome: "not_submitted" | "unknown" | undefined;
+  readonly response?: UpstreamResponse;
 
   constructor(
     code: ErrorCode,
     status?: number,
     outcome?: "not_submitted" | "unknown",
+    response?: UpstreamResponse,
   ) {
     super(`Flockbot request failed (${code}).`);
     this.name = "FlockbotError";
@@ -145,7 +150,15 @@ export class FlockbotError extends Error {
         : code === "request_not_sent"
           ? "not_submitted"
           : undefined);
-    if (status !== undefined) this.status = status;
+    if (
+      typeof status === "number" &&
+      Number.isInteger(status) &&
+      status >= 100 &&
+      status <= 599
+    )
+      this.status = status;
+    const safeResponse = upstreamResponse(response);
+    if (safeResponse) this.response = safeResponse;
   }
 }
 
@@ -371,7 +384,12 @@ export class FlockbotClient {
       } catch (error) {
         if (callbackFailed && error === callbackError) {
           if (error instanceof FlockbotError)
-            throw new FlockbotError(error.code, error.status, error.outcome);
+            throw new FlockbotError(
+              error.code,
+              error.status,
+              error.outcome,
+              error.response,
+            );
           throw new FlockbotError("operation_failed");
         }
         throw new FlockbotError("coordination_failed");
@@ -837,11 +855,21 @@ export class FlockbotClient {
         !(error instanceof FlockbotError && error.code === "request_not_sent")
       ) {
         if (error instanceof FlockbotError && error.code !== "operation_failed")
-          throw new FlockbotError(error.code, error.status, "unknown");
+          throw new FlockbotError(
+            error.code,
+            error.status,
+            "unknown",
+            error.response,
+          );
         throw new FlockbotError("write_outcome_unknown");
       }
       if (error instanceof FlockbotError)
-        throw new FlockbotError(error.code, error.status, "not_submitted");
+        throw new FlockbotError(
+          error.code,
+          error.status,
+          "not_submitted",
+          error.response,
+        );
       throw error;
     }
   }
@@ -900,17 +928,52 @@ export class FlockbotClient {
       this.#capture(connection, response, url);
       throw new FlockbotError("redirect_rejected");
     }
-    if (response.status === 403)
-      throw new FlockbotError("permission_denied", 403);
-    if (response.status >= 400)
-      throw new FlockbotError("upstream_rejected", response.status);
-    let data: unknown;
-    try {
-      data = /(?:^|\/)json(?:;|$)|\+json(?:;|$)/i.test(
+    const membership =
+      method === "POST" &&
+      /^\/?group\/[A-Za-z0-9_-]+\/addToGroupByAdmin$/.test(path);
+    const reject = (
+      code: "permission_denied" | "upstream_rejected",
+      data: unknown,
+    ) =>
+      new FlockbotError(
+        code,
+        response.status,
+        undefined,
+        membership
+          ? upstreamResponse(data, [
+              ...connection.jar
+                .getCookiesSync(url)
+                .map((cookie) => cookie.value),
+              ...response.headers.getSetCookie().flatMap((header) => {
+                const cookie = Cookie.parse(header);
+                return cookie ? [cookie.value] : [];
+              }),
+            ])
+          : undefined,
+      );
+    const parse = () =>
+      /(?:^|\/)json(?:;|$)|\+json(?:;|$)/i.test(
         response.headers.get("Content-Type") ?? "",
       )
         ? (JSON.parse(response.body) as unknown)
         : response.body;
+    if (response.status >= 400) {
+      let data: unknown;
+      if (membership) {
+        try {
+          data = parse();
+        } catch {
+          /* Preserve HTTP errors even when their bodies are malformed. */
+        }
+      }
+      throw reject(
+        response.status === 403 ? "permission_denied" : "upstream_rejected",
+        data,
+      );
+    }
+    let data: unknown;
+    try {
+      data = parse();
     } catch {
       throw new FlockbotError("invalid_response");
     }
@@ -938,8 +1001,9 @@ export class FlockbotClient {
       (("success" in data && data.success === false) ||
         ("authorized" in data && data.authorized === false))
     ) {
-      throw new FlockbotError("upstream_rejected", response.status);
+      throw reject("upstream_rejected", data);
     }
+
     this.#capture(connection, response, url);
     return data;
   }
