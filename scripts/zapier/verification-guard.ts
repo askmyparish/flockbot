@@ -2,9 +2,9 @@ import {
   FlockbotError,
   type AddMemberResult,
   type MemberInput,
-} from "../src/index.js";
-import { identifier } from "../src/groups.js";
-import { membershipRequest } from "../src/members.js";
+} from "../../src/index.js";
+import { identifier } from "../../src/groups.js";
+import { membershipRequest } from "../../src/members.js";
 
 export const LIVE_VERIFICATION_CONSENT = "authorize-isolated-test-parish-run";
 

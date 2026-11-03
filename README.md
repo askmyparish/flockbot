@@ -333,10 +333,10 @@ only after its required cookie persistence succeeds.
 
 ### Private Zapier candidate
 
-`npm run check` also builds, packages, and tests the private [Zapier adapter](adapters/zapier/README.md).
+`npm run check` also builds, packages, and tests the private [Zapier adapter](./docs/zapier/README.md).
 It includes protected connection fields and group choices. Its candidate membership
 action stays blocked until host persistence and coordination are verified.
-See [verification and cutover](docs/verification.md) for the isolated test plan
+See [verification and cutover](./docs/zapier/verification.md) for the isolated test plan
 and the checks required before replacing a running integration.
 
 Tests use fictional data and block unexpected network access. They don't need

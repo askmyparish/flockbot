@@ -6,8 +6,8 @@ import {
   runIsolatedVerification,
   type TargetEvidence,
   type VerificationExecution,
-} from "../scripts/verification-guard.js";
-import { FlockbotError } from "../src/index.js";
+} from "../../scripts/zapier/verification-guard.js";
+import { FlockbotError } from "../../src/index.js";
 
 const target = {
   origin: "https://example-parish.flocknote.com",
@@ -51,7 +51,10 @@ describe("isolated verification guard", () => {
   it("keeps the checked-in example inert before any execution call", async () => {
     const config: unknown = JSON.parse(
       readFileSync(
-        new URL("../scripts/verification-config.example.json", import.meta.url),
+        new URL(
+          "../../scripts/zapier/verification-config.example.json",
+          import.meta.url,
+        ),
         "utf8",
       ),
     );

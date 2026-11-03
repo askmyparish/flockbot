@@ -6,14 +6,14 @@ import {
   createReadExecution,
   runOperationalWrite,
   feasibility,
-} from "../adapters/zapier/src/authentication.js";
+} from "../../adapters/zapier/src/authentication.js";
 import {
   sessionFromToken,
   type SessionState,
   type Transport,
   type TransportResponse,
-} from "../src/index.js";
-import { FakeCoordinator } from "./support.js";
+} from "../../src/index.js";
+import { FakeCoordinator } from "../support.js";
 
 const z = { errors };
 const credentials = {

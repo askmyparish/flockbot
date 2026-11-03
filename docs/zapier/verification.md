@@ -18,7 +18,7 @@ From the repository root on Node.js 22.12+:
 ```sh
 bin/setup
 npm run check
-bin/test test/verification-guard.test.ts
+bin/test test/zapier/verification-guard.test.ts
 candidate_dir="$(mktemp -d)"
 npm pack --workspace @askmyparish/flockbot-zapier --ignore-scripts --offline --cache "$candidate_dir/npm-cache" --pack-destination "$candidate_dir"
 ```
@@ -86,7 +86,7 @@ allowlisted test group IDs, controlled fictional member, operation and write
 budget. Confirm that login exists **and has access only to the test network**.
 An existing test parish doesn't establish that restriction or authorize a run.
 
-Copy [the inert configuration example](../scripts/verification-config.example.json)
+Copy [the inert configuration example](../../scripts/zapier/verification-config.example.json)
 outside the checkout. Replace its placeholders only in private configuration.
 It contains no credentials and defaults to no consent. Supply credentials later
 through protected Zapier connection fields or an approved local secret-store
@@ -95,7 +95,7 @@ contact details in chat, CLI arguments, raw bundles or logs. Keep private config
 and session files access-restricted, outside versioned files, and delete them
 when the approved session ends. Don't search for existing secret files.
 
-The source-only [guard](../scripts/verification-guard.ts) takes an explicit request
+The source-only [guard](../../scripts/zapier/verification-guard.ts) takes an explicit request
 and an injected execution. It has no default runner, credential loader, HTTP
 transport, environment-file discovery or live npm command. Its tests use fictional
 executions. To run live later, review the concrete runner and invocation first;

@@ -2,16 +2,16 @@ import { readFileSync } from "node:fs";
 import { inspect } from "node:util";
 import { errors, createAppTester } from "zapier-platform-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createCandidateApp } from "../adapters/zapier/src/app.js";
-import { createActions } from "../adapters/zapier/src/actions.js";
+import { createCandidateApp } from "../../adapters/zapier/src/app.js";
+import { createActions } from "../../adapters/zapier/src/actions.js";
 import {
   sessionFromToken,
   type SessionState,
   type SessionStore,
   type Transport,
   type TransportResponse,
-} from "../src/index.js";
-import { FakeCoordinator } from "./support.js";
+} from "../../src/index.js";
+import { FakeCoordinator } from "../support.js";
 
 const z = { errors };
 const credentials = {
@@ -29,22 +29,22 @@ const input = {
 const accepted = { success: true, userID: 201 };
 const expired = { success: true, userID: null, authorized: false };
 const legacy = readFileSync(
-  new URL("./fixtures/groups/legacy.html", import.meta.url),
+  new URL("../fixtures/groups/legacy.html", import.meta.url),
   "utf8",
 );
 const shell = readFileSync(
-  new URL("./fixtures/groups/shell.html", import.meta.url),
+  new URL("../fixtures/groups/shell.html", import.meta.url),
   "utf8",
 );
 const navigation = JSON.parse(
   readFileSync(
-    new URL("./fixtures/groups/navigation.json", import.meta.url),
+    new URL("../fixtures/groups/navigation.json", import.meta.url),
     "utf8",
   ),
 ) as unknown;
 const metadata = JSON.parse(
   readFileSync(
-    new URL("./fixtures/groups/metadata.json", import.meta.url),
+    new URL("../fixtures/groups/metadata.json", import.meta.url),
     "utf8",
   ),
 ) as unknown;
