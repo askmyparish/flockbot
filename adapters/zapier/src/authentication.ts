@@ -51,7 +51,7 @@ function configuration(bundle: HostBundle, setup: boolean) {
   return { subdomain, email, password, configurationVersion };
 }
 
-function decode(value: unknown): SessionState | null {
+export function decode(value: unknown): SessionState | null {
   if (value === undefined || value === null || value === "") return null;
   if (typeof value !== "string") invalid();
   let parsed: { version?: unknown; state?: unknown };
@@ -71,7 +71,7 @@ function decode(value: unknown): SessionState | null {
 }
 
 /** A local generation exists only for this invocation. It is never durable CAS. */
-class InvocationStore implements SessionStore {
+export class InvocationStore implements SessionStore {
   #state: SessionState | null;
   #revision = 0;
   constructor(state: SessionState | null) {
@@ -98,7 +98,7 @@ class InvocationStore implements SessionStore {
 }
 
 /** Serializes this one execution, never other Zapier invocations. */
-class InvocationCoordinator implements SessionCoordinator {
+export class InvocationCoordinator implements SessionCoordinator {
   #tail: Promise<unknown> = Promise.resolve();
   async runExclusive<T>(
     _identity: string,
