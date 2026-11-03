@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, symlink } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, symlink } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 
 const require = createRequire(import.meta.url);
@@ -55,6 +56,23 @@ try {
     "dir",
   );
   const app = require(join(packageRoot, metadata.main));
+  assert.equal(app.version, metadata.version);
+  // Zapier's ESM wrapper imports the package by its own name. Verify that
+  // resolves inside this tarball, never back to the repository workspace.
+  execFileSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      `import assert from "node:assert/strict";
+       const resolved = import.meta.resolve(${JSON.stringify(metadata.name)});
+       assert.equal(resolved, ${JSON.stringify(pathToFileURL(await realpath(join(packageRoot, metadata.main))).href)});
+       const { default: app } = await import(resolved);
+       assert.equal(app.platformVersion, "19.3.0");
+       assert.equal(app.createCandidateApp, undefined);`,
+    ],
+    { cwd: packageRoot, stdio: "pipe" },
+  );
   assert.deepEqual(validateApp(app), []);
   assert.equal(app.platformVersion, "19.3.0");
   assert.equal(app.flags.skipHttpPatch, true);
