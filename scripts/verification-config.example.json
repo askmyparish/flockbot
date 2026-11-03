@@ -1,0 +1,15 @@
+{
+  "consent": "",
+  "subdomain": "example-parish",
+  "expectedNetworkId": "<test-network-id>",
+  "testOnlyLoginConfirmed": false,
+  "allowedGroupIds": ["<test-group-id>"],
+  "groupId": "<test-group-id>",
+  "operation": "read-groups",
+  "fictionalRecordConfirmed": false,
+  "member": {
+    "firstName": "Flockbot",
+    "lastName": "Verification",
+    "email": "controlled-record@example.test"
+  }
+}
