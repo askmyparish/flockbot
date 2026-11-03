@@ -81,6 +81,8 @@ function bundle() {
   };
 }
 function fixture() {
+  const log = vi.fn<(message: string) => void>();
+  let writeResponse = response({ success: true });
   const transport = vi.fn<Transport>(async (request) => {
     const path = new URL(request.url).pathname;
     if (path === "/user/userData") return response(accepted);
@@ -100,15 +102,19 @@ function fixture() {
             "fictional-renewed",
           );
     }
-    if (path === "/group/102/addToGroupByAdmin")
-      return response({ success: true, private: "private-upstream-sentinel" });
+    if (path === "/group/102/addToGroupByAdmin") return writeResponse;
     throw new Error("Unexpected fictional request");
   });
   const app = createNativeCandidate({ transport });
   return {
     app,
     transport,
-    perform: (b = bundle()) => app.creates.add_member.operation.perform(z, b),
+    perform: (b = bundle()) =>
+      app.creates.add_member.operation.perform({ ...z, console: { log } }, b),
+    log,
+    rejectWrite: (data: unknown, status = 200, token?: string) => {
+      writeResponse = response(data, status, token);
+    },
     paths: () => transport.mock.calls.map(([r]) => new URL(r.url).pathname),
     writes: () =>
       transport.mock.calls
@@ -125,6 +131,13 @@ function forbidCredentials(b: ReturnType<typeof bundle>) {
     });
 }
 afterEach(() => vi.useRealTimers());
+
+it("emits no failure record for a confirmed successful write", async () => {
+  const f = fixture();
+  await expect(f.perform()).resolves.toEqual({ success: true });
+  expect(f.writes()).toHaveLength(1);
+  expect(f.log).not.toHaveBeenCalled();
+});
 
 it("keeps compatible mappings and a native auth-scoped membership lock", () => {
   const app = createNativeCandidate();
@@ -239,6 +252,7 @@ it.each(["missing", "invalid", "preflight"])(
         .mockResolvedValueOnce(response(rejected));
     const error = await f.perform(b).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(errors.RefreshAuthError);
+    expect(f.log).not.toHaveBeenCalled();
     expect(f.transport).toHaveBeenCalledTimes(
       kind === "missing" ? 0 : kind === "invalid" ? 1 : 3,
     );
@@ -327,7 +341,7 @@ it.each([
   "503",
   "transport",
 ])(
-  "halts an uncertain submitted %s outcome without renewal or replay",
+  "reports an uncertain submitted %s failure once and halts without renewal or replay",
   async (kind) => {
     const f = fixture();
     f.transport
@@ -343,19 +357,175 @@ it.each([
             ? rejected
             : kind === "both-flags"
               ? { success: false, authorized: false }
-              : { success: false },
+              : {
+                  success: false,
+                  error: "Could not add user",
+                  userID: 201,
+                  existingSubscription: false,
+                },
           /^\d{3}$/.test(kind) ? Number(kind) : 200,
         ),
       );
     const error = await f.perform().catch((e: unknown) => e);
     expect(error).toBeInstanceOf(errors.HaltedError);
     expect(error).not.toBeInstanceOf(errors.RefreshAuthError);
-    expect(String(error)).toContain("completion is unknown");
-    expect(String(error)).not.toContain("private-upstream-sentinel");
+    expect(String(error)).toContain("completion is unconfirmed");
+    expect(String(error)).toContain("automatic retry is disabled");
+    expect(String(error)).not.toMatch(/private-|undefined/);
+    expect(f.log).toHaveBeenCalledTimes(1);
+    const report = JSON.parse(f.log.mock.calls[0]?.[0] ?? "");
+    expect(report).toMatchObject({
+      event: "flockbot.membership_failed",
+      parish: "example-parish",
+      app_version: f.app.version,
+      stage: "membership",
+      outcome: "unknown",
+      inputs: {
+        group_id: "102",
+        user_first_name: "Alex",
+        user_last_name: "Example",
+        user_email: "member@example.test",
+        user_mobile_phone: "",
+      },
+    });
+    expect(report.attempt_id).toMatch(/^[a-f0-9-]{36}$/);
+    expect(String(error)).toContain(report.attempt_id);
+    if (kind === "transport") {
+      expect(report.code).toBe("transport_failed");
+      expect(report.http_status).toBeUndefined();
+      expect(report.response).toBeUndefined();
+    } else {
+      expect(report.http_status).toBe(
+        /^\d{3}$/.test(kind) ? Number(kind) : 200,
+      );
+      expect(report.response).toBeDefined();
+    }
+    expect(f.log.mock.calls[0]?.[0] ?? "").not.toMatch(
+      /fictional-password|fictional-saved|operator@example|authData|sessionData|Cookie/,
+    );
     expect(f.writes()).toHaveLength(1);
     expect(f.paths()).not.toContain("/login/twoFactorAuth");
   },
 );
+
+it.each([
+  "alex+probe@example.test",
+  "alex.probe@example.test",
+  "alex%2Bprobe@example.test",
+])(
+  "reports the submitted input and actual response without inferring email validity (%s)",
+  async (email) => {
+    const f = fixture();
+    const b = bundle();
+    b.inputData.user_email = email;
+    b.inputData.user_mobile_phone = "+12025550123";
+    forbidCredentials(b);
+    f.rejectWrite({
+      success: false,
+      error: "Could not add user",
+      userID: 201,
+      existingSubscription: false,
+    });
+    const error = await f.perform(b).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(errors.HaltedError);
+    expect(String(error)).toContain(email);
+    expect(String(error)).toContain("Could not add user");
+    expect(String(error)).not.toMatch(
+      /email_plus|response_hints|email_rejected/,
+    );
+    const report = JSON.parse(f.log.mock.calls[0]?.[0] ?? "");
+    expect(report.response).toEqual({
+      success: false,
+      error: "Could not add user",
+      userId: "201",
+      existingSubscription: false,
+    });
+    expect(report.inputs).toEqual({
+      group_id: "102",
+      user_first_name: "Alex",
+      user_last_name: "Example",
+      user_email: email,
+      user_mobile_phone: "+12025550123",
+    });
+    expect(new URLSearchParams(f.writes()[0]?.body).get("email")).toBe(email);
+    expect(f.log).toHaveBeenCalledTimes(1);
+    expect(f.writes()).toHaveLength(1);
+  },
+);
+
+it("does not make a submitted failure replayable when console reporting throws", async () => {
+  const f = fixture();
+  f.rejectWrite({ success: false, error: "Could not add user" });
+  f.log.mockImplementation(() => {
+    throw new Error("Logging unavailable");
+  });
+  const error = await f.perform().catch((e: unknown) => e);
+  expect(error).toBeInstanceOf(errors.HaltedError);
+  expect(String(error)).toContain("Could not add user");
+  expect(f.writes()).toHaveLength(1);
+  expect(f.log).toHaveBeenCalledTimes(1);
+});
+
+it("reports the original input snapshot when the host bundle changes during execution", async () => {
+  const f = fixture();
+  const b = bundle();
+  b.inputData.user_email = "alex+probe@example.test";
+  f.transport.mockImplementation(async (request) => {
+    b.inputData.user_email = "different@example.test";
+    const path = new URL(request.url).pathname;
+    if (path === "/user/userData") return response(accepted);
+    if (path === "/dashboard") return html(legacy);
+    return response({ success: false, error: "Could not add user" });
+  });
+  await f.perform(b).catch(() => undefined);
+  expect(JSON.parse(f.log.mock.calls[0]?.[0] ?? "").inputs.user_email).toBe(
+    "alex+probe@example.test",
+  );
+  expect(new URLSearchParams(f.writes()[0]?.body).get("email")).toBe(
+    "alex+probe@example.test",
+  );
+});
+
+it("reports invalid inputs without reading protected credentials or making a request", async () => {
+  const f = fixture();
+  const b = bundle();
+  b.inputData.user_email = "not an email";
+  forbidCredentials(b);
+  Reflect.set(b.inputData, "extra", { password: "private-input-sentinel" });
+  const error = await f.perform(b).catch((e: unknown) => e);
+  expect(error).toBeInstanceOf(errors.Error);
+  expect(error).not.toBeInstanceOf(errors.HaltedError);
+  const report = JSON.parse(f.log.mock.calls[0]?.[0] ?? "");
+  expect(report).toMatchObject({
+    stage: "validation",
+    code: "invalid_input",
+    outcome: "not_submitted",
+  });
+  expect(report.inputs.user_email).toBe("not an email");
+  expect(f.log.mock.calls[0]?.[0] ?? "").not.toMatch(
+    /private-input|password|authData|sessionData/,
+  );
+  expect(f.transport).not.toHaveBeenCalled();
+});
+
+it("bounds failed-input snapshots and reports truncation instead of dumping arbitrary objects", async () => {
+  const f = fixture();
+  const b = bundle();
+  b.inputData.user_first_name = "x".repeat(2000);
+  b.inputData.user_email = "invalid";
+  Reflect.set(b.inputData, "user_mobile_phone", {
+    password: "private-input-sentinel",
+  });
+  await f.perform(b).catch(() => undefined);
+  const report = JSON.parse(f.log.mock.calls[0]?.[0] ?? "");
+  expect(report.inputs.user_first_name).toHaveLength(1024);
+  expect(report.inputs_truncated).toBe(true);
+  expect(report.inputs.user_mobile_phone).toBe("[invalid input type]");
+  expect(f.log.mock.calls[0]?.[0] ?? "").not.toContain(
+    "private-input-sentinel",
+  );
+  expect(f.transport).not.toHaveBeenCalled();
+});
 
 it("shares the total 20-second budget across slow discovery and a submitted write", async () => {
   vi.useFakeTimers();

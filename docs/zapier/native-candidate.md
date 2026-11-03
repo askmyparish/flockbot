@@ -66,6 +66,43 @@ replays a submitted membership write. Host autoreplay, user notification and
 visibility of halted runs still need verification; the mapping alone does not
 prove those host guarantees.
 
+Version 2.1.4 reports unsuccessful membership attempts with one structured
+`flockbot.membership_failed` console event. The event contains an attempt ID,
+timestamp, app version, parish when known, failure stage, the five action inputs,
+error code, completion outcome, and available HTTP status and response details.
+Inputs are snapshotted before asynchronous work, trimmed, and bounded to 1,024
+characters per field; `inputs_truncated` identifies a shortened snapshot. Extra
+input fields, connection auth data, credentials, cookies, and whole bundles are
+never copied. Normal Session Auth renewal requests are recovery, not final
+failure events; successful writes produce no failure record.
+
+The selected response details are `success`, `authorized`, `error` (falling back
+to `message`), `userId` (from `userID`), and `existingSubscription`. Error text is
+limited to 1,024 characters, with `errorTruncated:true` when shortened. Current
+and response cookie values are redacted, credential-related wording is withheld,
+and HTML/control characters are removed. These reports intentionally contain
+member contact data; use deployment log access and retention appropriate for it.
+No error reason is inferred from an address or from words in the response.
+Addresses are never rewritten and no plus-sign prohibition is added.
+
+JSON error wording is preserved for HTTP 4xx/5xx responses as well as 2xx
+`success:false` responses. Malformed or non-JSON HTTP error bodies retain their
+HTTP classification without being copied into the report. Returned user IDs and
+subscription flags are diagnostic facts, not evidence that a member was created
+or a membership succeeded. Every submitted failure still has unknown completion.
+
+The halted error includes the attempted contact, group, upstream wording or fixed
+code, HTTP status when available, and attempt ID. Reporting never changes the
+write outcome or triggers a member retry, even if console logging throws. The
+console event supports investigation; it does not itself send a notification or
+configure an external error tracker. HTTP logging remains disabled.
+
+To inspect these records, run
+`zapier-platform logs --type console --status any --version 2.1.4` from the linked
+artifact directory and look for `flockbot.membership_failed`. Include all statuses
+because the action uses a halted outcome. The attempt ID connects the console
+record with the user-facing error.
+
 The low-traffic tradeoff is to reuse the host-saved cookie without a separate
 Storage coordination protocol. Read-only test observations support reuse over
 their observed interval, not maximum lifetime or all rotation behavior. Natural
@@ -73,7 +110,8 @@ expiry, renewal failure and lost-response behavior remain open. The original
 production acceptance requirements have not been waived by this candidate.
 
 No Storage client, Cloudflare service or external session store is included.
-Credentials and member details belong only in protected deployment inputs.
+Credentials belong only in protected deployment inputs; authorized member inputs
+also appear in the structured failure reports described above.
 HTTP logging is disabled with `skipHttpPatch`; whole-host telemetry still needs
 controlled inspection. Keep public examples fictional and omit raw auth bundles
 and HTTP logs from review evidence.

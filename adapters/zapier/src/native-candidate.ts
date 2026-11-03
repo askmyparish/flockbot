@@ -18,7 +18,16 @@ import {
   type HostBundle,
   type HostErrors,
 } from "./authentication.js";
+import {
+  membershipAttempt,
+  membershipFailure,
+  reportMembershipFailure,
+  type FailureConsole,
+  type FailureStage,
+} from "./failures.js";
 import { CLIENT_POLICY, CONFIGURATION_VERSION } from "./policy.js";
+
+const NATIVE_VERSION = "2.1.4";
 
 /** Isolated candidate; this does not replace the default app's write gate. */
 export function createNativeCandidate(
@@ -40,10 +49,23 @@ export function createNativeCandidate(
           scope: ["auth" as const],
           timeout: 60,
         },
-        perform: async (z: HostErrors, bundle: HostBundle) => {
+        perform: async (z: HostErrors & FailureConsole, bundle: HostBundle) => {
           let renewalRequested = false;
+          let attempt = membershipAttempt(bundle.inputData, NATIVE_VERSION);
+          let stage: FailureStage = "validation";
+          let parish: string | undefined;
           try {
             const request = memberRequest(bundle);
+            attempt = Object.freeze({
+              ...attempt,
+              inputs_truncated:
+                attempt.inputs_truncated || request.groupId.length > 1024,
+              inputs: Object.freeze({
+                ...attempt.inputs,
+                group_id: request.groupId.slice(0, 1024),
+              }),
+            });
+            stage = "group_lookup";
             return await withinActionDeadline(async (signal) => {
               const subdomain = bundle.authData.subdomain;
               if (typeof subdomain !== "string")
@@ -66,13 +88,11 @@ export function createNativeCandidate(
                   },
                 },
               });
+              parish = subdomain;
               const groups = await client.groups({ signal });
               if (!groups.some((group) => group.id === request.groupId))
-                throw new z.errors.Error(
-                  "The selected group is unavailable. Refresh the group choice (invalid_input).",
-                  "invalid_input",
-                  400,
-                );
+                throw new FlockbotError("invalid_input", 400, "not_submitted");
+              stage = "membership";
               return client.addMember(request.groupId, request.member, {
                 signal,
               });
@@ -88,14 +108,16 @@ export function createNativeCandidate(
               throw new z.errors.RefreshAuthError(
                 "The saved Flocknote session needs renewal before member submission.",
               );
-            throw actionError(z, error);
+            const report = membershipFailure(error, attempt, stage, parish);
+            reportMembershipFailure(z, report);
+            throw actionError(z, error, report);
           }
         },
       },
     },
   };
   return {
-    version: "2.1.4",
+    version: NATIVE_VERSION,
     platformVersion: version,
     flags: { skipHttpPatch: true },
     authentication: createAuthentication(dependencies),

@@ -7,6 +7,7 @@ import {
   type SessionStore,
   type Transport,
 } from "../../../src/index.js";
+import { failureSummary, type MembershipFailure } from "./failures.js";
 import { membershipRequest } from "../../../src/members.js";
 import { identifier } from "../../../src/groups.js";
 import {
@@ -60,6 +61,7 @@ export async function withinActionDeadline<T>(
         "operation_timeout",
         undefined,
         error instanceof FlockbotError ? error.outcome : undefined,
+        error instanceof FlockbotError ? error.response : undefined,
       );
     }
     throw error;
@@ -69,11 +71,19 @@ export async function withinActionDeadline<T>(
   }
 }
 
-export function actionError(z: HostErrors, error: unknown): Error {
-  if (error instanceof FlockbotError && error.outcome === "unknown") {
-    return new z.errors.HaltedError(
-      `Flockbot membership completion is unknown (${error.code}). Check Flocknote before any manual repeat. Automatic replay is stopped.`,
-    );
+export function actionError(
+  z: HostErrors,
+  error: unknown,
+  report?: MembershipFailure,
+): Error {
+  if (
+    (error instanceof FlockbotError && error.outcome === "unknown") ||
+    report?.outcome === "unknown"
+  ) {
+    const message = report
+      ? failureSummary(report)
+      : `Flockbot membership completion is unknown (${error instanceof FlockbotError ? error.code : "write_outcome_unknown"}). Check Flocknote before any manual repeat. Automatic replay is stopped.`;
+    return new z.errors.HaltedError(message);
   }
   // These fixed SDK errors were already mapped by the read-only execution.
   if (
@@ -88,7 +98,9 @@ export function actionError(z: HostErrors, error: unknown): Error {
       return mappedError(z, error);
     const message =
       error.code === "invalid_input"
-        ? "Check the mapped group, name and contact fields"
+        ? report?.stage === "group_lookup"
+          ? "The selected group is unavailable. Refresh the group choice"
+          : "Check the mapped group, name and contact fields"
         : error.code === "permission_denied"
           ? "The Flocknote login lacks permission for this action"
           : error.code === "credentials_unavailable"
