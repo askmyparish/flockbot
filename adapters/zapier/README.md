@@ -18,6 +18,8 @@ The npm tarball is a local development artifact. It is **not** a Zapier deployme
 ZIP. Uploading, registering, or deploying an integration is a separate step. The
 pinned SDK is `zapier-platform-core` 19.3.0; the bundle targets Zapier's documented
 Node.js 22 runtime. Installation requires registry access; routine tests do not.
+The [verification and cutover guide](../../docs/verification.md) separates offline
+checks, later CLI/host proof, test-parish runs and production rollback.
 
 ## Groups and membership
 
