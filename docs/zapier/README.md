@@ -170,3 +170,11 @@ Adapter and test type checks keep strict checking of repository code. They use
 These sources and the installed pinned SDK were checked during development.
 Documentation is evidence for the stated hooks, not proof of unmentioned host
 persistence or coordination guarantees.
+
+## Verification guides
+
+- [Verification and cutover](verification.md)
+- [Native Session Auth candidate](native-candidate.md)
+- [Restricted membership verification](membership-verification.md)
+- [Read-only host probe](host-probe.md)
+- [Storage probe](storage-probe.md)
