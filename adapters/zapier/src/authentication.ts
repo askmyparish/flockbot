@@ -36,8 +36,8 @@ function configuration(bundle: HostBundle, setup: boolean) {
     ? { ...bundle.authData, ...bundle.inputData }
     : bundle.authData;
   const subdomain = values.subdomain;
-  const email = values.email;
-  const password = values.password;
+  const email = setup ? values.email : undefined;
+  const password = setup ? values.password : undefined;
   const configurationVersion = CONFIGURATION_VERSION;
   if (typeof subdomain !== "string") invalid();
   if (
