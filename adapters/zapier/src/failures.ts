@@ -106,6 +106,45 @@ export function reportMembershipFailure(
   }
 }
 
+/** A recognized business exception completes the Zap without confirming a write. */
+export function pendingMergeWarning(
+  z: FailureConsole,
+  report: MembershipFailure,
+) {
+  const message =
+    "This contact information already exists on a user with a pending merge";
+  if (
+    report.stage !== "membership" ||
+    report.code !== "upstream_rejected" ||
+    report.outcome !== "unknown" ||
+    report.http_status !== 200 ||
+    report.response?.success !== false ||
+    report.response.authorized === false ||
+    report.response.errorTruncated ||
+    report.response.error !== message
+  )
+    return undefined;
+  const warning = `${message}. Resolve the merge in Flocknote. This response does not confirm membership in the selected group.`;
+  try {
+    z.console?.log(
+      JSON.stringify({
+        ...report,
+        event: "flockbot.membership_warning",
+        outcome: "pending_merge",
+      }),
+    );
+  } catch {
+    /* A reporting failure must not turn an accepted warning into a retry. */
+  }
+  return Object.freeze({
+    success: true,
+    status: "pending_merge",
+    membership_confirmed: false,
+    warning,
+    attempt_id: report.attempt_id,
+  });
+}
+
 export function failureSummary(report: MembershipFailure): string {
   const contacts = [
     report.inputs.user_email

@@ -59,7 +59,8 @@ execution. The host's refresh/re-execution limits, concurrent refresh handling
 and persistence timing still need controlled hosted verification. Generic HTTP
 failures, permission denial and transport errors do not request renewal.
 
-Only confirmed upstream success returns `{success:true}`. Every failure after
+Confirmed upstream success returns `{success:true}`. The specific pending-merge
+response described below completes with a warning instead. Every other failure after
 possible submission uses the existing `HaltedError` mapping and tells the operator
 to inspect Flocknote before repeating. The adapter never requests renewal or
 replays a submitted membership write. Host autoreplay, user notification and
@@ -76,6 +77,21 @@ input fields, connection auth data, credentials, cookies, and whole bundles are
 never copied. Normal Session Auth renewal requests are recovery, not final
 failure events; successful writes produce no failure record.
 
+Version 2.1.5 accepts the observed HTTP 200 `success:false` response whose exact
+error is `This contact information already exists on a user with a pending merge`
+as a business warning. It completes the Zap step with `success:true`,
+`status:"pending_merge"`, `membership_confirmed:false`, `warning`, and `attempt_id`.
+Here, `success` means the workflow accepted this exception; it does not assert
+that this response created or verified a membership. Resolve the merge in
+Flocknote and check group membership when needed. No second submission or lookup
+is made. An authorization denial, another HTTP status, truncated text, or any
+different rejection remains an error. The shared client retains its conservative
+rejection classification; this exception belongs to the Zapier workflow.
+
+The accepted exception emits one `flockbot.membership_warning` console event with
+the same input and response details and `outcome:"pending_merge"`, rather than a
+failure event. A logging failure does not cause a retry.
+
 Phone values are sent as entered after trimming, with the existing basic input
 validation. Country codes and punctuation are not rewritten. The input snapshot,
 error summary, and submitted form retain that same number. Blank mobile fields
@@ -88,7 +104,8 @@ limited to 1,024 characters, with `errorTruncated:true` when shortened. Current
 and response cookie values are redacted, credential-related wording is withheld,
 and HTML/control characters are removed. These reports intentionally contain
 member contact data; use deployment log access and retention appropriate for it.
-No error reason is inferred from an address or from words in the response.
+Apart from the exact pending-merge exception above, no error reason is inferred
+from an address or from words in the response.
 Addresses are never rewritten and no plus-sign prohibition is added.
 
 JSON error wording is preserved for HTTP 4xx/5xx responses as well as 2xx

@@ -529,6 +529,102 @@ it("labels a mobile-only failure and omits an absent email from its summary", as
   expect(f.writes()).toHaveLength(1);
 });
 
+const pendingMergeMessage =
+  "This contact information already exists on a user with a pending merge";
+
+it("completes a pending-merge response with an explicit warning and no replay", async () => {
+  const f = fixture();
+  const b = bundle();
+  b.inputData.user_mobile_phone = "202-555-0123";
+  forbidCredentials(b);
+  f.rejectWrite({ success: false, error: pendingMergeMessage, userID: 201 });
+  const result = await f.perform(b);
+  expect(result).toMatchObject({
+    success: true,
+    status: "pending_merge",
+    membership_confirmed: false,
+    warning: expect.stringContaining(pendingMergeMessage),
+  });
+  expect("warning" in result && result.warning).toContain(
+    "does not confirm membership",
+  );
+  const report = JSON.parse(f.log.mock.calls[0]?.[0] ?? "");
+  expect(report).toMatchObject({
+    event: "flockbot.membership_warning",
+    outcome: "pending_merge",
+    stage: "membership",
+    http_status: 200,
+    inputs: { user_mobile_phone: "202-555-0123" },
+    response: { success: false, error: pendingMergeMessage, userId: "201" },
+  });
+  expect("attempt_id" in result && result.attempt_id).toBe(report.attempt_id);
+  expect(new URLSearchParams(f.writes()[0]?.body).get("mobile_phone")).toBe(
+    "202-555-0123",
+  );
+  expect(f.log).toHaveBeenCalledTimes(1);
+  expect(f.writes()).toHaveLength(1);
+  expect(f.paths()).not.toContain("/login/twoFactorAuth");
+});
+
+it("keeps a pending-merge warning completed when logging fails", async () => {
+  const f = fixture();
+  f.rejectWrite({ success: false, error: pendingMergeMessage });
+  f.log.mockImplementation(() => {
+    throw new Error("Logging unavailable");
+  });
+  await expect(f.perform()).resolves.toMatchObject({ status: "pending_merge" });
+  expect(f.writes()).toHaveLength(1);
+});
+
+it.each([
+  { status: 403, body: { success: false, error: pendingMergeMessage } },
+  { status: 500, body: { success: false, error: pendingMergeMessage } },
+  {
+    status: 200,
+    body: { success: false, authorized: false, error: pendingMergeMessage },
+  },
+  {
+    status: 200,
+    body: { success: false, error: "Another pending merge error" },
+  },
+  {
+    status: 200,
+    body: { success: false, error: `${pendingMergeMessage}. Other failure` },
+  },
+  {
+    status: 200,
+    body: { success: false, error: pendingMergeMessage, errorTruncated: true },
+  },
+])(
+  "does not turn a different rejected response into a merge warning: %j",
+  async ({ status, body }) => {
+    const f = fixture();
+    f.rejectWrite(body, status);
+    const error = await f.perform().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(errors.HaltedError);
+    expect(JSON.parse(f.log.mock.calls[0]?.[0] ?? "").event).toBe(
+      "flockbot.membership_failed",
+    );
+    expect(f.writes()).toHaveLength(1);
+  },
+);
+
+it("keeps a matching message during discovery a pre-submission error", async () => {
+  const f = fixture();
+  f.transport
+    .mockResolvedValueOnce(response(accepted))
+    .mockResolvedValueOnce(
+      response({ success: false, error: pendingMergeMessage }),
+    );
+  const error = await f.perform().catch((e: unknown) => e);
+  expect(error).toBeInstanceOf(errors.Error);
+  expect(error).not.toBeInstanceOf(errors.HaltedError);
+  expect(JSON.parse(f.log.mock.calls[0]?.[0] ?? "").event).toBe(
+    "flockbot.membership_failed",
+  );
+  expect(f.writes()).toHaveLength(0);
+});
+
 it("reports the original input snapshot when the host bundle changes during execution", async () => {
   const f = fixture();
   const b = bundle();

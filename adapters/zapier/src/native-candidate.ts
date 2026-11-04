@@ -21,6 +21,7 @@ import {
 import {
   membershipAttempt,
   membershipFailure,
+  pendingMergeWarning,
   reportMembershipFailure,
   type FailureConsole,
   type FailureStage,
@@ -49,6 +50,13 @@ export function createNativeCandidate(
           scope: ["auth" as const],
           timeout: 60,
         },
+        outputFields: [
+          ...base.creates.add_member.operation.outputFields,
+          { key: "status", type: "string" as const },
+          { key: "membership_confirmed", type: "boolean" as const },
+          { key: "warning", type: "string" as const },
+          { key: "attempt_id", type: "string" as const },
+        ],
         perform: async (z: HostErrors & FailureConsole, bundle: HostBundle) => {
           let renewalRequested = false;
           let attempt = membershipAttempt(bundle.inputData, NATIVE_VERSION);
@@ -109,6 +117,8 @@ export function createNativeCandidate(
                 "The saved Flocknote session needs renewal before member submission.",
               );
             const report = membershipFailure(error, attempt, stage, parish);
+            const warning = pendingMergeWarning(z, report);
+            if (warning) return warning;
             reportMembershipFailure(z, report);
             throw actionError(z, error, report);
           }
