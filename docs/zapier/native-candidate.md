@@ -108,7 +108,11 @@ To inspect these records, run
 `zapier-platform logs --type console --status any --version 2.1.4` from the linked
 artifact directory and look for `flockbot.membership_failed`. Include all statuses
 because the action uses a halted outcome. The attempt ID connects the console
-record with the user-facing error.
+record with the user-facing error or warning. Pre-submission errors also include
+the stage and attempt ID. A `membership` stage can include authentication
+preflight before the POST; the completion outcome, rather than the stage alone,
+indicates whether submission was possible. A pre-submission timeout remains an
+error and does not count as a completed membership.
 
 The low-traffic tradeoff is to reuse the host-saved cookie without a separate
 Storage coordination protocol. Read-only test observations support reuse over

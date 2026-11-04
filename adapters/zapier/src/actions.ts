@@ -109,7 +109,7 @@ export function actionError(
               ? "The Flocknote action timed out before member submission"
               : "Flockbot could not complete this action";
     return new z.errors.Error(
-      `${message} (${error.code}).`,
+      `${message} (${error.code}${report ? `; stage=${report.stage}` : ""}).${report ? ` Attempt ${report.attempt_id}.` : ""}`,
       error.code,
       error.status ?? 400,
     );

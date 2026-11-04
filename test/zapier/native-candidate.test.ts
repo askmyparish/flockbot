@@ -616,6 +616,40 @@ it("times out before submission without a POST or native refresh", async () => {
   const error = await pending;
   expect(error).toBeInstanceOf(errors.Error);
   expect(error).not.toBeInstanceOf(errors.RefreshAuthError);
+  expect(error).not.toBeInstanceOf(errors.HaltedError);
+  const report = JSON.parse(f.log.mock.calls[0]?.[0] ?? "");
+  expect(report).toMatchObject({
+    stage: "group_lookup",
+    code: "operation_timeout",
+    outcome: "not_submitted",
+  });
+  expect(String(error)).toContain("stage=group_lookup");
+  expect(String(error)).toContain(`Attempt ${report.attempt_id}`);
+  expect(f.writes()).toHaveLength(0);
+});
+
+it("identifies a timeout in membership preflight without claiming a submission", async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  f.transport
+    .mockResolvedValueOnce(response(accepted))
+    .mockResolvedValueOnce(html(legacy))
+    .mockImplementationOnce(() => new Promise(() => {}));
+  const pending = f.perform().catch((e: unknown) => e);
+  await vi.advanceTimersByTimeAsync(20_001);
+  const error = await pending;
+  expect(error).toBeInstanceOf(errors.Error);
+  expect(error).not.toBeInstanceOf(errors.HaltedError);
+  expect(error).not.toBeInstanceOf(errors.RefreshAuthError);
+  const report = JSON.parse(f.log.mock.calls[0]?.[0] ?? "");
+  expect(report).toMatchObject({
+    stage: "membership",
+    code: "operation_timeout",
+    outcome: "not_submitted",
+  });
+  expect(String(error)).toContain("timed out before member submission");
+  expect(String(error)).toContain("stage=membership");
+  expect(String(error)).toContain(`Attempt ${report.attempt_id}`);
   expect(f.writes()).toHaveLength(0);
 });
 
