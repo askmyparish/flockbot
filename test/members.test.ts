@@ -164,6 +164,29 @@ describe("membership requests", () => {
     },
   );
 
+  it.each([
+    "2025550123",
+    "12025550123",
+    "+12025550123",
+    "202-555-0123",
+    "(202) 555-0123",
+    "202.555.0123",
+    "+44 20 7946 0123",
+    "  +1 (202) 555-0123  ",
+  ])(
+    "preserves mobile %s apart from surrounding whitespace",
+    async (mobilePhone) => {
+      const f = fixture();
+      const input = { ...member, mobilePhone };
+      await f.client.addMember("101", input);
+      expect(
+        new URLSearchParams(f.writes()[0]?.[0].body).get("mobile_phone"),
+      ).toBe(mobilePhone.trim());
+      expect(input.mobilePhone).toBe(mobilePhone);
+      expect(f.writes()).toHaveLength(1);
+    },
+  );
+
   it.each(["new", "existing"])(
     "uses the same minimal request/result for a %s member",
     async (_kind) => {
@@ -226,6 +249,7 @@ describe("membership requests", () => {
     { ...member, mobilePhone: "call me" },
     { ...member, mobilePhone: "123" },
     { ...member, mobilePhone: "1234567890123456" },
+    { ...member, mobilePhone: "202-555-0123 ext. 4" },
   ])(
     "rejects invalid member %# before coordination, storage or transport",
     async (input) => {

@@ -466,6 +466,27 @@ it("does not make a submitted failure replayable when console reporting throws",
   expect(f.log).toHaveBeenCalledTimes(1);
 });
 
+it("rejects unsupported mobile inputs before any Zapier connection access", async () => {
+  const f = fixture();
+  const b = bundle();
+  b.inputData.user_mobile_phone = "call me";
+  Object.defineProperty(b, "authData", {
+    get() {
+      throw new Error("Validation must precede connection access");
+    },
+  });
+  const error = await f.perform(b).catch((e: unknown) => e);
+  expect(error).toBeInstanceOf(errors.Error);
+  expect(error).not.toBeInstanceOf(errors.HaltedError);
+  expect(String(error)).toContain("invalid_input");
+  expect(f.transport).not.toHaveBeenCalled();
+  expect(JSON.parse(f.log.mock.calls[0]?.[0] ?? "")).toMatchObject({
+    stage: "validation",
+    outcome: "not_submitted",
+    inputs: { user_mobile_phone: "call me" },
+  });
+});
+
 it("reports the original input snapshot when the host bundle changes during execution", async () => {
   const f = fixture();
   const b = bundle();

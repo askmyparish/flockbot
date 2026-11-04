@@ -76,6 +76,12 @@ input fields, connection auth data, credentials, cookies, and whole bundles are
 never copied. Normal Session Auth renewal requests are recovery, not final
 failure events; successful writes produce no failure record.
 
+Phone values are sent as entered after trimming, with the existing basic input
+validation. Country codes and punctuation are not rewritten. The input snapshot,
+error summary, and submitted form retain that same number. Blank mobile fields
+stay empty. Flocknote's response supplies the diagnostic evidence; no phone
+formatting rule or contact-conflict cause is inferred.
+
 The selected response details are `success`, `authorized`, `error` (falling back
 to `message`), `userId` (from `userID`), and `existingSubscription`. Error text is
 limited to 1,024 characters, with `errorTruncated:true` when shortened. Current

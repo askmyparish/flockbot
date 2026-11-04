@@ -222,6 +222,10 @@ start, parentheses, hyphens, and periods, with 7–15 digits. Invalid inputs use
 `invalid_input` / `not_submitted` before storage or network access. Keep member
 inputs and transport request bodies out of logs.
 
+Mobile numbers are sent as entered after trimming surrounding whitespace;
+country codes and punctuation are not rewritten. This checks input structure,
+not whether Flocknote accepts a particular contact value.
+
 One coordinated deadline covers verification, any bounded password recovery, and
 the membership POST. Verified cookie rotations are saved before submission.
 The request sends `fname`, `lname`, `email`, and `mobile_phone`; there is no
