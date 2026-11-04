@@ -143,3 +143,9 @@ also appear in the structured failure reports described above.
 HTTP logging is disabled with `skipHttpPatch`; whole-host telemetry still needs
 controlled inspection. Keep public examples fictional and omit raw auth bundles
 and HTTP logs from review evidence.
+
+Version 2.1.6 distinguishes a recognized wrong-password response from other
+authentication intervention in its connection errors. The former asks the user
+to check their password; the latter directs them to resolve authentication in
+Flocknote before reconnecting. The authentication exchange and retry rules are
+unchanged, and unknown failures are not labeled wrong passwords.

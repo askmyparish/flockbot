@@ -99,7 +99,12 @@ absent saved session, expired/missing cookie, or confirmed invalid `user/userDat
 `RefreshAuthError`. The auth hook then performs one password exchange. Permission
 denial, HTTP 401/429/5xx, malformed responses, and unknown failures don't trigger
 refresh. Rejected passwords and interactive challenges become `ExpiredAuthError`
-for manual reconnect. If a fresh password exchange succeeds but its session
+for manual reconnect. A recognized password rejection explicitly asks the user
+to check their password (`credentials_rejected`). A separate `action_required`
+message asks them to resolve login restrictions or verification directly in
+Flocknote before reconnecting. Unknown responses are not labeled wrong passwords,
+and upstream authentication text, credentials, and cookies are never displayed.
+If a fresh password exchange succeeds but its session
 verification is rejected, the hook reports `authentication_required` as a normal
 error; it doesn't mark that as an intervention requiring disconnection. Nonempty
 malformed saved session payloads fail clearly instead of requesting refresh.

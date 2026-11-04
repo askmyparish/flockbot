@@ -130,9 +130,13 @@ export function mappedError(
       return new z.errors.RefreshAuthError(
         "The saved Flocknote session is no longer accepted.",
       );
-    if (["credentials_rejected", "action_required"].includes(error.code))
+    if (error.code === "credentials_rejected")
       return new z.errors.ExpiredAuthError(
-        "Reconnect the Flocknote connection after resolving authentication.",
+        "Flocknote rejected the password for this login. Check your Flocknote password, then reconnect in Zapier (credentials_rejected).",
+      );
+    if (error.code === "action_required")
+      return new z.errors.ExpiredAuthError(
+        "Flocknote requires attention before this connection can authenticate. Sign in to Flocknote directly to resolve any login restrictions or verification steps, then reconnect in Zapier (action_required).",
       );
     return new z.errors.Error(
       `Flockbot connection failed (${error.code}).`,

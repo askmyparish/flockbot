@@ -348,10 +348,46 @@ describe("private Zapier session authentication", () => {
         response(firstFactor, 200, "fictional-unverified"),
       );
     f.transport.mockResolvedValueOnce(response(reply));
-    await expect(
-      f.authentication.sessionConfig.perform(z, bundle()),
-    ).rejects.toMatchObject({ name: "ExpiredAuthError" });
+    const error = await f.authentication.sessionConfig
+      .perform(z, bundle())
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({ name: "ExpiredAuthError" });
+    if (kind === "password") {
+      expect(String(error)).toContain("Flocknote rejected the password");
+      expect(String(error)).toContain("Check your Flocknote password");
+      expect(String(error)).toContain("credentials_rejected");
+    } else {
+      expect(String(error)).toContain("Sign in to Flocknote directly");
+      expect(String(error)).toContain("action_required");
+      expect(String(error)).not.toContain("rejected the password");
+    }
+    expect(String(error)).not.toContain(credentials.password);
+    expect(String(error)).not.toContain(credentials.email);
+    expect(String(error)).not.toContain("fictional-unverified");
     expect(f.transport.mock.calls.length).toBe(kind === "password" ? 2 : 1);
+  });
+
+  it("does not describe an unknown authentication response as a rejected password", async () => {
+    const f = fixture();
+    f.transport
+      .mockResolvedValueOnce(response(firstFactor, 200, "fictional-unverified"))
+      .mockResolvedValueOnce(
+        response({
+          ...firstFactor,
+          loginSuccess: false,
+          message: "Unrecognized private-auth-response-sentinel",
+        }),
+      );
+    const error = await f.authentication.sessionConfig
+      .perform(z, bundle())
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(errors.Error);
+    expect(error).not.toBeInstanceOf(errors.ExpiredAuthError);
+    expect(String(error)).toContain("authentication_protocol_error");
+    expect(String(error)).not.toMatch(
+      /rejected the password|credentials_rejected|private-auth-response-sentinel|fictional-unverified/,
+    );
+    expect(f.transport).toHaveBeenCalledTimes(2);
   });
 
   it("keeps a modeled durable intervention blocked on a later invocation", async () => {
