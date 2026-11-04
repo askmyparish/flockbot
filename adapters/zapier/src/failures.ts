@@ -107,11 +107,19 @@ export function reportMembershipFailure(
 }
 
 export function failureSummary(report: MembershipFailure): string {
-  const contact =
-    report.inputs.user_email || report.inputs.user_mobile_phone || "the member";
+  const contacts = [
+    report.inputs.user_email
+      ? `email ${JSON.stringify(report.inputs.user_email)}`
+      : "",
+    report.inputs.user_mobile_phone
+      ? `mobile ${JSON.stringify(report.inputs.user_mobile_phone)}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
   const response = report.response?.error;
   const detail = response
     ? `Flocknote returned ${JSON.stringify(response)}${report.response?.errorTruncated ? " [truncated]" : ""}`
     : `Flockbot reported ${report.code}`;
-  return `Could not add ${JSON.stringify(contact)} to group ${JSON.stringify(report.inputs.group_id)}. ${detail}${report.http_status ? ` (HTTP ${report.http_status})` : ""}. Membership completion is unconfirmed; automatic retry is disabled. Check Flocknote before repeating. Attempt ${report.attempt_id}.`;
+  return `Could not add member${contacts ? ` (${contacts})` : ""} to group ${JSON.stringify(report.inputs.group_id)}. ${detail}${report.http_status ? ` (HTTP ${report.http_status})` : ""}. Membership completion is unconfirmed; automatic retry is disabled. Check Flocknote before repeating. Attempt ${report.attempt_id}.`;
 }

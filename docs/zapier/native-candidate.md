@@ -97,7 +97,8 @@ HTTP classification without being copied into the report. Returned user IDs and
 subscription flags are diagnostic facts, not evidence that a member was created
 or a membership succeeded. Every submitted failure still has unknown completion.
 
-The halted error includes the attempted contact, group, upstream wording or fixed
+The halted error includes both attempted email and mobile when supplied, the
+group, upstream wording or fixed
 code, HTTP status when available, and attempt ID. Reporting never changes the
 write outcome or triggers a member retry, even if console logging throws. The
 console event supports investigation; it does not itself send a notification or

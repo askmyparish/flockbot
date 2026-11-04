@@ -466,6 +466,36 @@ it("does not make a submitted failure replayable when console reporting throws",
   expect(f.log).toHaveBeenCalledTimes(1);
 });
 
+it.each([
+  "+12025550123",
+  "2025550123",
+  "12025550123",
+  "(202) 555-0123",
+  "202-555-0123",
+  "+44 20 7946 0123",
+])("reports and submits mobile %s without reformatting", async (mobile) => {
+  const f = fixture();
+  const b = bundle();
+  b.inputData.user_email = "alex@example.test";
+  b.inputData.user_mobile_phone = mobile;
+  forbidCredentials(b);
+  f.rejectWrite({ success: false, error: "Could not add user" });
+  const error = await f.perform(b).catch((e: unknown) => e);
+  expect(error).toBeInstanceOf(errors.HaltedError);
+  expect(String(error)).toContain('email "alex@example.test"');
+  expect(String(error)).toContain(`mobile ${JSON.stringify(mobile)}`);
+  expect(String(error)).toContain("Could not add user");
+  expect(String(error)).toContain("automatic retry is disabled");
+  expect(new URLSearchParams(f.writes()[0]?.body).get("mobile_phone")).toBe(
+    mobile,
+  );
+  expect(
+    JSON.parse(f.log.mock.calls[0]?.[0] ?? "").inputs.user_mobile_phone,
+  ).toBe(mobile);
+  expect(f.log).toHaveBeenCalledTimes(1);
+  expect(f.writes()).toHaveLength(1);
+});
+
 it("rejects unsupported mobile inputs before any Zapier connection access", async () => {
   const f = fixture();
   const b = bundle();
@@ -485,6 +515,18 @@ it("rejects unsupported mobile inputs before any Zapier connection access", asyn
     outcome: "not_submitted",
     inputs: { user_mobile_phone: "call me" },
   });
+});
+
+it("labels a mobile-only failure and omits an absent email from its summary", async () => {
+  const f = fixture();
+  const b = bundle();
+  b.inputData.user_email = "";
+  b.inputData.user_mobile_phone = "+12025550123";
+  f.rejectWrite({ success: false, error: "Could not add user" });
+  const error = await f.perform(b).catch((e: unknown) => e);
+  expect(String(error)).toContain('mobile "+12025550123"');
+  expect(String(error)).not.toContain('email "');
+  expect(f.writes()).toHaveLength(1);
 });
 
 it("reports the original input snapshot when the host bundle changes during execution", async () => {
