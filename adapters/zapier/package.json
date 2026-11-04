@@ -1,0 +1,19 @@
+{
+  "name": "@askmyparish/flockbot-zapier",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Private Flockbot Zapier authentication feasibility candidate",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.cjs",
+  "exports": "./dist/index.cjs",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "dependencies": {
+    "zapier-platform-core": "19.3.0"
+  }
+}

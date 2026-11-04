@@ -1,113 +1,424 @@
-# Flockbot Ruby Library
+# Flockbot
 
-The Flockbot Ruby library provides convenient access to some limited features
-of the [Flocknote](https://www.flocknote.com/) application. Flocknote does
-not currently expose a public API, so this gem leverages parts of the
-internal API in order to better integrate with external applications.
+Flockbot connects parish workflows to [Flocknote](https://www.flocknote.com/)
+through its internal API.
 
-## Requirements
+The TypeScript port supports password login, saved sessions, coordinated recovery,
+group discovery, subscriber counts, member additions, and HTTP requests. A private
+Zapier candidate is available for offline development; MCP support
+is still coming. The Ruby gem remains available during the move.
 
-* Ruby 3.3
+## TypeScript development
 
-## Setup
+You'll need Node.js 22.12+ and npm. Ruby isn't needed for the TypeScript package.
 
-Add the following to your `Gemfile`:
-
-``` ruby
-gem "flockbot", git: "git://github.com/setonparish/flockbot"
+```sh
+bin/setup       # Install locked npm dependencies
+bin/test        # Run offline tests
+npm run check   # Run all checks and build the package
 ```
 
-## Usage
+<details>
+<summary>More development commands</summary>
 
-### Create a `Flockbot::Client` with authenticated session
+The bin scripts work from any directory. They call `npm ci --ignore-scripts`
+and `npm test`; CI uses those same npm commands on Node 22.
+
+`npm run check` covers formatting, lint, types, tests, build, and package import.
+Use `npm run format` to format files, or run individual checks with
+`npm run format:check`, `npm run lint`, `npm run typecheck`, `npm run build`,
+and `npm run test:package` (after building). To run a focused test:
+
+```sh
+bin/test -t "reuses cookies"
+```
+
+</details>
+
+### Use a saved session
+
+The package is private and unpublished for now. After building, import it from
+`dist/index.js`. An adapter supplies protected, persistent `sessionStore` and
+`coordinator` implementations:
+
+```typescript
+import { FlockbotClient } from "./dist/index.js";
+
+const client = new FlockbotClient({
+  subdomain: "example-parish",
+  sessionStore,
+  coordinator,
+  configurationVersion: "credentials-v1",
+});
+const result = await client.get("dashboard");
+```
+
+To import an existing token, use `sessionFromToken("example-parish", savedToken)`
+and save it through the adapter's coordinated revision check. Stored sessions are
+credentials. Library-created state hides secrets during Node inspection, but JSON
+and structured clones retain them for storage. Don't log serialized state.
+
+### Log in with a password
+
+Your adapter supplies a protected `SessionStore` and a `CredentialProvider`
+that returns `{ email, password }`. Keep those credentials out of chats and logs.
+The client doesn't pick a credential store or load environment files.
+
+```typescript
+const client = new FlockbotClient({
+  subdomain: "example-parish",
+  sessionStore,
+  coordinator,
+  configurationVersion: "credentials-v1",
+  credentialProvider: {
+    load: async () => secureCredentials.load(),
+  },
+});
+await client.connect();
+```
+
+Here, `sessionStore`, `coordinator`, and `secureCredentials` come from your adapter.
+`connect()` verifies a saved session without reading credentials and can renew it
+once. `get("user/userData")` can also recover a confirmed invalid session; other
+endpoints don't infer expiry. Call `connect()` before adapter work when verification
+is needed. All requests can bootstrap a missing session. Submitted writes are
+never renewed or replayed.
+
+<details>
+<summary>Authentication, recovery, and error details</summary>
+
+Setup and saved-session checks keep cookie changes private until verification
+succeeds. `connect()` returns no token or user details. A failed save retains
+verified state in the same client for a later retry, provided the durable revision
+has not changed. A peer update or reset discards that pending state. A save that
+committed before throwing is reconciled by reloading its advanced revision.
+
+A confirmed password mismatch or password-disabled response saves an intervention
+record containing only a fixed reason and the nonsecret `configurationVersion`.
+Later calls, including `connect({ forcePasswordLogin: true })`, return
+`action_required` without attempting login. Change the adapter's configuration
+version when credentials change, or call `clearSession()` from an authorized
+operator interface. Neither mechanism stores a password in diagnostic state.
+All clients for one connection must use its current configuration version; retire
+old invocations when changing it. Session reset must not be exposed to ordinary
+request callers. Forced password login still obeys coordination and intervention.
+
+Authentication errors use fixed codes:
+
+| Code | Meaning |
+| --- | --- |
+| `credentials_unavailable` | Credentials are missing or couldn't be loaded |
+| `credentials_rejected` | A known password-mismatch response; intervention was saved |
+| `authentication_required` | A confirmed invalid session remained after bounded recovery |
+| `action_required` | Password login needs intervention or the connection is paused |
+| `permission_denied` | Permission was denied; no password renewal |
+| `authentication_unavailable` | A network failure, rate limit, or server error |
+| `authentication_protocol_error` | An unexpected authentication response |
+
+The observed invalid-session signal is specifically HTTP 200 from `user/userData`
+with `success: true`, `userID: null`, and `authorized: false`. Its replacement
+cookie is discarded. HTTP 401, HTTP 403, generic server errors, and similar bodies
+from other endpoints never trigger renewal. HTTP 403 reports permission denial;
+other unknown authentication shapes fail clearly. Other invalid-session and
+permission signals still need controlled verification.
+
+</details>
+
+Flocknote may still send a login email during password setup. The client doesn't
+request, fetch, or enter codes. Password-disabled handling uses simulated test
+responses; real code challenges haven't been verified. Unknown responses fail
+clearly rather than being guessed to mean a bad password.
+
+### Read groups and subscriber counts
+
+```typescript
+const groups = await client.groups();
+const choices = groups.map(({ id, name, shortName }) => ({ id, name, shortName }));
+const everyone = groups.find((group) => group.isEveryone);
+const count = await everyone?.subscriberCount();
+const refreshed = await everyone?.subscriberCount({ force: true });
+```
+
+`groups()` discovers groups afresh; `everyoneGroup()` discovers and selects Everyone,
+or returns `undefined` after a successful response without it. Discovery and uncached
+counts verify the session and can recover once through the shared login lifecycle.
+They read no member contact records. Failures throw `FlockbotError`.
+
+<details>
+<summary>Group identifiers, discovery, and count caching</summary>
+
+Groups expose `id`, `name`, `shortName`, and `isEveryone`. IDs are strings for stable
+choice values. Positive safe integer IDs become decimal strings; decimal string
+IDs lose leading zeros without numeric conversion. Larger decimal strings retain
+all digits. Other nonempty IDs containing only letters, digits, `_`, or `-` are
+preserved. Unsafe numeric IDs and malformed required fields fail as
+`invalid_response`; optional upstream fields are ignored. Names and short names
+are trimmed, and HTML text entities are decoded without evaluating scripts.
+
+Legacy dashboard `.group_item` markup supplies groups directly. Repeated IDs and
+case-insensitive `everyone` short names keep the first legacy entry. The observed
+structural rows with neither `data-shortname` nor `.group_name` are ignored;
+partial group rows still fail. An all-structural page isn't an empty result. The
+`fnReactHolder` dashboard shell triggers `navigation/groups` plus
+`network/getMetadata`. Metadata supplies Everyone's ID and canonical `Everyone` /
+`everyone` names, taking precedence over entries with that ID or an `everyone`
+short name. Other duplicate IDs keep their first entry; other distinct IDs are
+retained even when their short names match. No parish-specific ID is built in.
+
+The supported explicit empty fallback is `{"groups": []}` together with
+`{"everyoneGroupID": null}`. This no-Everyone shape is simulated in tests and
+has not been verified live. A non-null metadata ID still yields Everyone when
+navigation groups are empty. Missing metadata, unknown dashboard/login pages,
+malformed JSON and malformed required fields fail rather than becoming empty
+collections. HTTP 403 stays `permission_denied`; other HTTP errors and explicit
+upstream rejection use `upstream_rejected`, and network failures use
+`transport_failed`. Verification retains the common authentication error codes.
+
+`subscriberCount()` accepts nonnegative safe integers or trimmed decimal digit
+strings, including zero. Missing, negative, fractional, unsafe, or other count
+values fail as `invalid_response`. A successful count is cached for that Group
+object's lifetime with no expiry; zero is cacheable. A cache hit makes no network
+or storage call and does not reverify authentication. `{ force: true }` verifies
+and fetches again. A failed refresh throws and retains the last successful cached
+value for later ordinary reads; failed initial reads are never cached. A fresh
+`groups()` result has fresh count caches. Obtain fresh groups or force refresh
+when current authorization/counts matter, including after a session reset.
+
+`groups`, `everyoneGroup`, and `subscriberCount` accept `{ signal }`. Each network
+operation shares one coordination lock, deadline and transient GET retry budget
+across verification, recovery and all its endpoint reads. Cancellation also rejects
+an already-aborted cache read. These methods reuse `user/userData` verification;
+other endpoint bodies never introduce additional session-expiry heuristics.
+Verified session rotations are saved before later discovery/count reads, even if
+those reads fail. Cookies from those later responses are saved only after their
+group/count validation succeeds. No adapter,
+AI client, browser runtime, or live credentials are required by these APIs.
+
+</details>
+
+### Add a member
+
+```typescript
+await client.addMember("101", {
+  firstName: "Alex",
+  lastName: "Rivera",
+  email: "alex@example.test",
+  // Or mobilePhone: "+1 (202) 555-0123", or both.
+}); // { success: true }
+```
+
+Provide first and last names and at least one contact method. The client checks
+the session before submitting and returns only confirmed success. A submitted
+write is never automatically repeated; preserve an error's `outcome` in adapters.
+
+<details>
+<summary>Member inputs, failures, and retry limits</summary>
+
+`addMember(groupId, member, { signal })` uses the same group-ID normalization as
+discovery. Names and contact fields are trimmed; optional `null`, `undefined`,
+and blank contact fields become empty form values. Email needs a nonblank address
+with one `@` and a dotted domain. Mobile numbers accept digits, spaces, `+` at the
+start, parentheses, hyphens, and periods, with 7–15 digits. Invalid inputs use
+`invalid_input` / `not_submitted` before storage or network access. Keep member
+inputs and transport request bodies out of logs.
+
+Mobile numbers are sent as entered after trimming surrounding whitespace;
+country codes and punctuation are not rewritten. This checks input structure,
+not whether Flocknote accepts a particular contact value.
+
+One coordinated deadline covers verification, any bounded password recovery, and
+the membership POST. Verified cookie rotations are saved before submission.
+The request sends `fname`, `lname`, `email`, and `mobile_phone`; there is no
+separate create/update branch or automatic identity editing. Only an object with
+`success: true` yields `{ success: true }`; upstream person/contact details are
+discarded. A false result uses `upstream_rejected`, unavailable groups retain
+their HTTP error status (for example 404), permission denial uses
+`permission_denied`, and malformed success responses use `invalid_response`.
+
+Before membership submission, errors have `outcome: "not_submitted"`. After
+possible submission, rejection, timeout, connection loss, cancellation, or failed
+cookie persistence keeps `outcome: "unknown"`. Even an auth-like POST response
+doesn't prove the write was unexecuted, so it never triggers replay. The shared
+write-outcome rules below also apply. Existing Group count caches aren't changed;
+force refresh or rediscover groups when current counts matter.
+
+Repeated-add, existing-member matching, duplicate, and notification effects still
+need controlled test-parish verification before any operation-specific replay is
+enabled. There is no idempotency guarantee, deduplication store, or background
+queue, and routine tests never make live membership writes.
+
+</details>
+
+### Requests and storage
+
+`get(path)` returns JSON or text. `post(path, fields)` sends URL-encoded string
+fields. Use paths like `user/userData`, not full URLs or query strings. Requests
+stay on the configured parish's HTTPS origin, and redirects are rejected.
+Failures throw `FlockbotError` with a safe `code`, without copying sensitive
+upstream bodies or exception details.
+
+<details>
+<summary>Adapter storage and coordination</summary>
+
+`SessionStore` provides `revision`, `load`, `save(state, expectedRevision)`, and
+`clear(expectedRevision)`. Under identity coordination, `revision` and `load`
+must read the same current durable generation. `save` and `clear` must atomically
+compare the expected revision and advance it on success, including clearing an
+already-empty store. Revisions must never be reused. A stale comparison must
+throw `FlockbotError("stale_session_state")`. Save and clear failures use sanitized
+`session_save_failed` and `session_clear_failed` errors; load/revision failures use
+`session_load_failed`. Persist session and intervention state together.
+
+`SessionCoordinator.runExclusive(identity, signal, work)` must serialize **all**
+operations, cookie writes and resets for that connection across invocations and
+restarts. The supplied identity is the parish origin; scope the coordinator and
+store to the same protected login/connection namespace. State is reloaded after
+acquiring coordination. All writers, including administrative token imports, must
+follow this contract. A process-local mutex is insufficient for a distributed
+adapter. Use durable fencing to prevent an expired lease holder from publishing
+state, and do not release a running callback until its work settles. CAS storage
+is an additional stale-write guard, not a replacement for login coordination.
+There is no fallback lock or uncoordinated login when coordination fails.
+
+Unchanged cookies need no save. Cookie replacements on successful requests and
+rejected redirects are persisted; redirects are never followed. HTTP errors,
+recognized authentication rejection, malformed responses and failed verification
+cannot publish replacement cookies. A failed operation is never replayed merely
+to retry a save. `clearSession()` advances durable state under the same lock, so
+other clients reload the reset and discard older pending rotations.
+
+</details>
+
+<details>
+<summary>Deadlines, retries, and cancellation</summary>
+
+Each operation has one deadline covering lock wait, storage, login, transport and
+backoff. Defaults are 20 seconds, one transient GET retry across the entire
+operation, and 200 ms initial exponential backoff. Configure `policy` with
+`timeoutMs`, `maxReadRetries` (0–5), and `readBackoffMs`; inject `clock` for tests.
+Only network failures, HTTP 429 and HTTP 5xx on GET are retried. Password POSTs
+never retry. Adapters must configure and measure this budget within their host's
+confirmed execution limit, including response overhead. No hosted adapter or real
+runtime budget has been proven yet.
+
+Pass `{ signal }` to `get`, `post`, `connect`, or `clearSession` to cancel. The
+default transport passes the signal to fetch, including body reading. Custom
+transports must use only the supplied URL, honor manual redirects and abort.
+Coordinators must reject cancelled queued work without running it. A deadline or
+cancellation returns promptly even if an injected dependency ignores abort, but
+cannot undo a submitted request or storage write. Coordination must remain held
+until that dependency settles; subsequent signal checks prevent new requests or
+cookie saves. Storage calls already in progress may finish before a queued reset.
+Adapters must bound their own storage and lock lifetimes and fence late holders.
+
+</details>
+
+Submitted writes aren't replayed automatically. A timeout can leave completion
+unknown; preserve that outcome when mapping host retries.
+
+<details>
+<summary>Write outcomes and retry safety</summary>
+
+`operation_timeout`, `operation_cancelled`, and `coordination_failed` are sanitized
+failures. Unclassified callback failures on reads use `operation_failed`.
+For POST, an error before submission has `outcome: "not_submitted"`.
+A transport may throw `RequestNotSentError` only when it guarantees no request was
+submitted; it becomes `request_not_sent`. After submission, a transport error,
+timeout, cancellation, rejected response or persistence failure keeps its sanitized
+error code and HTTP status, with `outcome: "unknown"`. Unclassified failures use
+`write_outcome_unknown`. The outcome stays unknown even for an explicit rejection;
+the response alone doesn't prove that no side effect occurred. No public POST is
+replayed or renewed after submission. Operation-specific verification/replay
+requires separate evidence of safety; generic POST provides no replay opt-in. Adapters must preserve
+this outcome when mapping host retries. A successful POST response is returned
+only after its required cookie persistence succeeds.
+
+Membership failures may include a bounded `FlockbotError.response` object with
+actual upstream `success`, `authorized`, `error` (or `message`), `userId` (from
+`userID`), and `existingSubscription` fields. `upstreamResponse` copies only these
+known fields. Error text is capped at 1,024 characters with `errorTruncated:true`
+when shortened. Cookie values and credential-related text are redacted; whole
+response bodies and headers are discarded. Error text can contain member contact
+data, so adapters must protect access to their error reports. These diagnostics
+never change the write outcome, infer an email-validation rule, or permit replay.
+
+</details>
+
+### Private Zapier candidate
+
+`npm run check` also builds, packages, and tests the private [Zapier adapter](./docs/zapier/README.md).
+It includes protected connection fields and group choices. Its candidate membership
+action stays blocked until host persistence and coordination are verified.
+See [verification and cutover](./docs/zapier/verification.md) for the isolated test plan
+and the checks required before replacing a running integration.
+
+Tests use fictional data and block unexpected network access. They don't need
+credentials, environment files, or live Flocknote access, and never record missing
+fixtures. CI runs checks without live credentials, deployment, or publishing.
+
+## Ruby gem
+
+<details>
+<summary>Legacy Ruby installation, usage, and development</summary>
+
+Requires Ruby 3.3. Add this to your `Gemfile`:
 
 ```ruby
-#
-# 1. Create a session
-#
-# Note: The `subdomain` is the first part of your Flocknote URL.  Example: https://myparish.flocknote.com
-session = Flockbot::Session.new(subdomain: "myparish", email: "me@example.com")
+gem "flockbot", git: "https://github.com/askmyparish/flockbot"
+```
 
-#
-# 2. Authenticate session using one of three ways:
-#
-# (A) using password
-session.login!(password: "mypassword")
+### Connect
 
-# (B) using one time code
+Create a session, choose a login method, then create the client. The subdomain
+is the first part of your Flocknote URL.
+
+```ruby
+session = Flockbot::Session.new(subdomain: "example-parish", email: "user@example.com")
+
+# Choose one:
+session.login!(password: "example-password")
+
+# Or request a code:
 session.send_one_time_code
-session.login!(code: "1234") # from flocknote email
+session.login!(code: "1234")
 
-# (C) using a previous session token
-token = some_prior_session.session_token
-session.login!(token: token)
+# Or reuse a saved session:
+session.login!(token: saved_token)
 
-#
-# 3. Create a client
-#
 client = Flockbot::Client.new(session: session)
 ```
 
-### Client Usage
-
-#### List all of your groups
+### Groups and members
 
 ```ruby
 client.groups
-=> [#<Flockbot::Models::Group {:id=>971110, :name=>"Everyone", :short_name=>"everyone", :everyone?=>true, :subscriber_count=>nil}>,
- #<Flockbot::Models::Group {:id=>977777, :name=>"Lectors", :short_name=>"LectorsGroup", :everyone?=>false, :subscriber_count=>nil}>,
- #<Flockbot::Models::Group {:id=>876666, :name=>"Alpha", :short_name=>"Alpha", :everyone?=>false, :subscriber_count=>nil}>]
-```
-
-#### Get a subscriber count for any group
-
-```ruby
-client.groups.first.subscriber_count
-#=> 924
-```
-
-#### Find the `everyone` group
-
-```ruby
 client.everyone_group
-=> #<Flockbot::Models::Group {:id=>971110, :name=>"Everyone", :short_name=>"everyone", :everyone?=>true, :subscriber_count=>nil}>
+client.groups.first.subscriber_count
 ```
 
-#### Add a new or existing user to any Flocknote group
-
-A `first_name` and `last_name` are always required and then you must supply either an `email`, `mobile_phone`, or both.
-
-If the user is not currently in Flocknote, they will be added to the group you specified as well as your "everyone" group.
-
-If the user already exists in Flocknote, they will be automatically matched on either `email` or `mobile_phone` and added to the specified group.  This is true even if the name provided is not the exact one found in Flocknote.  As an example, if you already have a user named "James Smith" in Flocknote with email "jim@example.com" and you use Flockbot to add "Jimmy Smith" with email "jim@example.com" to your "Lectors" group, your existing user will added to the "RCIA group".  A duplicate user will not be created, nor will Flockbot change the existing user's name.
+Adding a member requires first and last names, plus an email, mobile number,
+or both. New members also join Everyone. Existing members are matched by email
+or phone; the supplied name doesn't rename them.
 
 ```ruby
 group = client.groups.last
- #<Flockbot::Models::Group {:id=>977777, :name=>"Lectors", :short_name=>"LectorsGroup", :everyone?=>false, :subscriber_count=>nil}>
 
-# adding a new user with just an email
-group.add_user(first_name: "New", last_name: "User", email: "newuser@example.com")
-#=> true
-
-# adding a new user with just a mobile phone
-group.add_user(first_name: "New", last_name: "User", mobile_phone: "555-555-5555")
-#=> true
-
-# adding an existing user
-group.add_user(first_name: "Existing", last_name: "User", email: "existinguser@example.com")
-#=> true
+group.add_user(first_name: "Alex", last_name: "Rivera", email: "alex@example.com")
+group.add_user(first_name: "Sam", last_name: "Lee", mobile_phone: "555-555-5555")
 ```
 
-## Development
+### Ruby development
 
-After checking out the repo, run `bin/setup` to install dependencies. You can also run `bin/console` for an interactive prompt that will allow you to experiment.
+Use `bundle install` and `bundle exec rspec`. `bin/console` still opens a Ruby/Pry
+prompt; `bin/setup` and `bin/test` now serve TypeScript.
+
+</details>
 
 ## Contributing
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/setonparish/flockbot.
-
-Tests can be run by running `bundle exec rspec`
+Issues and pull requests are welcome at
+[askmyparish/flockbot](https://github.com/askmyparish/flockbot).
 
 ## License
 
-The gem is available as open source under the terms of the [MIT License](https://opensource.org/licenses/MIT).
+Available under the [MIT License](https://opensource.org/licenses/MIT).

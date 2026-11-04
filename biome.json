@@ -1,0 +1,17 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.6.4/schema.json",
+  "files": {
+    "includes": [
+      "src/**",
+      "adapters/zapier/src/**",
+      "adapters/zapier/*.json",
+      "test/**",
+      "scripts/**",
+      "*.json",
+      "vitest.config.ts",
+      "!package-lock.json"
+    ]
+  },
+  "formatter": { "indentStyle": "space" },
+  "linter": { "rules": { "preset": "recommended" } }
+}
