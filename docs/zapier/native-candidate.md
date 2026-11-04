@@ -6,7 +6,7 @@ retains its write block. This candidate is prepared for controlled verification;
 building it does not upload, publish, migrate Zaps, or authorize live writes.
 
 On Node 22, run `node scripts/zapier/build-native-candidate.mjs`. The command
-prints a temporary directory containing a private 2.1.4 package with a root
+prints a temporary directory containing a private 2.1.6 package with a root
 CommonJS entry. Run `npm run check` for offline verification. Inspect the actual
 CLI ZIPs and hosted loader before any separately authorized upload.
 
@@ -122,7 +122,7 @@ console event supports investigation; it does not itself send a notification or
 configure an external error tracker. HTTP logging remains disabled.
 
 To inspect these records, run
-`zapier-platform logs --type console --status any --version 2.1.4` from the linked
+`zapier-platform logs --type console --status any --version 2.1.6` from the linked
 artifact directory and look for `flockbot.membership_failed`. Include all statuses
 because the action uses a halted outcome. The attempt ID connects the console
 record with the user-facing error or warning. Pre-submission errors also include

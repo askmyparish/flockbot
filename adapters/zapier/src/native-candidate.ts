@@ -28,7 +28,7 @@ import {
 } from "./failures.js";
 import { CLIENT_POLICY, CONFIGURATION_VERSION } from "./policy.js";
 
-const NATIVE_VERSION = "2.1.4";
+const NATIVE_VERSION = "2.1.6";
 
 /** Isolated candidate; this does not replace the default app's write gate. */
 export function createNativeCandidate(
