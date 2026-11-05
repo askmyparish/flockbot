@@ -7,16 +7,16 @@
 Flockbot connects parish workflows to [Flocknote](https://www.flocknote.com/)
 through its internal API.
 
-The TypeScript port supports password login, saved sessions, coordinated recovery,
+The TypeScript client supports password login, saved sessions, coordinated recovery,
 group discovery, subscriber counts, member additions, and HTTP requests. A private
 Zapier candidate is available for offline development. A private
 [Codex MCP candidate](./docs/mcp/README.md) uses a dedicated local browser session
 with test-parish sign-in, read operations and explicitly requested membership
-additions verified on macOS. It remains a private candidate. The Ruby gem remains available during the move.
+additions verified on macOS. It remains a private candidate.
 
 ## TypeScript development
 
-You'll need Node.js 22.13+ and npm. Ruby isn't needed for the TypeScript package.
+You'll need Node.js 22.13+ and npm.
 
 ```sh
 bin/setup       # Install locked npm dependencies
@@ -416,64 +416,6 @@ and the checks required before replacing a running integration.
 Tests use fictional data and block unexpected network access. They don't need
 credentials, environment files, or live Flocknote access, and never record missing
 fixtures. CI runs checks without live credentials, deployment, or publishing.
-
-## Ruby gem
-
-<details>
-<summary>Legacy Ruby installation, usage, and development</summary>
-
-Requires Ruby 3.3. Add this to your `Gemfile`:
-
-```ruby
-gem "flockbot", git: "https://github.com/askmyparish/flockbot"
-```
-
-### Connect
-
-Create a session, choose a login method, then create the client. The subdomain
-is the first part of your Flocknote URL.
-
-```ruby
-session = Flockbot::Session.new(subdomain: "example-parish", email: "user@example.com")
-
-# Choose one:
-session.login!(password: "example-password")
-
-# Or request a code:
-session.send_one_time_code
-session.login!(code: "1234")
-
-# Or reuse a saved session:
-session.login!(token: saved_token)
-
-client = Flockbot::Client.new(session: session)
-```
-
-### Groups and members
-
-```ruby
-client.groups
-client.everyone_group
-client.groups.first.subscriber_count
-```
-
-Adding a member requires first and last names, plus an email, mobile number,
-or both. New members also join Everyone. Existing members are matched by email
-or phone; the supplied name doesn't rename them.
-
-```ruby
-group = client.groups.last
-
-group.add_user(first_name: "Alex", last_name: "Rivera", email: "alex@example.com")
-group.add_user(first_name: "Sam", last_name: "Lee", mobile_phone: "555-555-5555")
-```
-
-### Ruby development
-
-Use `bundle install` and `bundle exec rspec`. `bin/console` still opens a Ruby/Pry
-prompt; `bin/setup` and `bin/test` now serve TypeScript.
-
-</details>
 
 ## Contributing
 

@@ -209,7 +209,7 @@ service running.
    any subscriber-count consumer. The candidate omits unfetched counts and uses
    `is_everyone` instead of the old serializer key. Legacy opaque-ID write paths
    and listing completeness need proof; don't silently drop compatible groups.
-2. Preserve a disabled rollback copy/export and the still-working Rails
+2. Preserve a disabled rollback copy/export and the still-working integration
    connection privately. Confirm the rollback operator can restore the old
    version without recovering credentials from logs. Configure a separate private
    replacement connection; never put credentials in ordinary action inputs.
@@ -229,7 +229,7 @@ service running.
    agreed observation period. If the source can't recover paused events safely,
    resolve that before enabling normal traffic.
 6. On failure or uncertainty, pause the replacement first. Inspect whether a
-   write happened before replaying any event. Restore the saved Rails Zap and
+   write happened before replaying any event. Restore the saved Zap and
    connection, verify it with an explicitly authorized controlled run, and resume
    only reconciled events. Restoring code doesn't undo a membership change.
 7. Retire the old hosted service and endpoints only after accepted real-workflow
