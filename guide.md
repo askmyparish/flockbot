@@ -79,7 +79,10 @@ keep retrying or delete unfamiliar settings. See [recovery details](https://gith
 Ask only for the parish subdomain if needed. Use the installed `flocknote_connect`
 tool and let the user enter passwords and codes on Flocknote’s real website.
 Never ask for or inspect credentials, cookies, browser profiles or authentication
-traffic. When the user says sign-in is complete, check `flocknote_status`.
+traffic. The connect tool waits briefly for sign-in; if it returns `ready`, resume
+the original request without asking the user to type “done.” Only if it returns
+`pending` should you ask the user to finish sign-in and let you know, then check
+`flocknote_status` once before continuing. Never replay a write with unknown outcome.
 Saved readiness is a previous sign-in, not proof of a fresh live authentication check.
 
 To update, follow this guide using a newer matching published prompt. Preserve

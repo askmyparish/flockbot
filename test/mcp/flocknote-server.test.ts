@@ -7,22 +7,38 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BrowserConnection } from "../../adapters/mcp/src/browser-connection.js";
 import { createFlocknoteServer } from "../../adapters/mcp/src/flocknote-server.js";
+import {
+  BrowserConnectionError,
+  type BrowserFactory,
+  type BrowserSession,
+} from "../../adapters/mcp/src/browser-runtime.js";
+import { waitFor } from "./support.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const close of cleanup.splice(0)) await close();
 });
 
-async function fixture() {
+async function fixture(
+  options: {
+    factory?: BrowserFactory;
+    signInWaitMs?: number;
+    signInPollMs?: number;
+  } = {},
+) {
   const profile = mkdtempSync(join(tmpdir(), "flockbot-server-test-"));
   const connection = new BrowserConnection({
     coordinator: new SerialCoordinator(),
     profile,
-    factory: async () => {
-      throw new Error("fictional-secret-never-returned");
-    },
+    pollMs: 5,
+    setupMs: 5000,
+    factory:
+      options.factory ??
+      (async () => {
+        throw new Error("fictional-secret-never-returned");
+      }),
   });
-  const server = createFlocknoteServer(connection);
+  const server = createFlocknoteServer(connection, options);
   const client = new Client({ name: "fictional-codex", version: "1" });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(a);
@@ -36,6 +52,299 @@ async function fixture() {
 }
 
 describe("Flocknote MCP contract", () => {
+  it("holds connect until fictional sign-in completes, then allows the original Everyone count without a user-done message", async () => {
+    let finishLogin = (_value: unknown) => {};
+    const login = new Promise<unknown>((resolve) => {
+      finishLogin = resolve;
+    });
+    const events: string[] = [];
+    const session: BrowserSession = {
+      signIn: vi.fn(async () => {
+        events.push("window_opened");
+      }),
+      finishSignIn: vi.fn(async () => {
+        events.push("window_hidden");
+      }),
+      close: vi.fn(async () => undefined),
+      isOpen: () => true,
+      request: vi.fn(async (path) => {
+        if (path === "user/userData") return login;
+        if (path === "dashboard") return '<div id="fnReactHolder"></div>';
+        if (path === "navigation/groups") return { groups: [] };
+        if (path === "network/getMetadata") return { everyoneGroupID: 101 };
+        if (path === "group/101/getSubscriberCount")
+          return { subscriberCount: "7" };
+        throw new Error("Unexpected fictional request");
+      }),
+    };
+    const { client, connection } = await fixture({
+      factory: async () => session,
+      signInWaitMs: 5000,
+      signInPollMs: 5,
+    });
+    try {
+      const first = await client.callTool({ name: "flocknote_groups" });
+      expect(first.structuredContent).toMatchObject({
+        ok: false,
+        code: "not_configured",
+      });
+      const status = vi.spyOn(connection, "status");
+      let returned = false;
+      const connecting = client
+        .callTool({
+          name: "flocknote_connect",
+          arguments: { subdomain: "example-parish" },
+        })
+        .then((result) => {
+          returned = true;
+          events.push("connect_returned");
+          return result;
+        });
+      await waitFor(() =>
+        expect(status.mock.calls.length).toBeGreaterThanOrEqual(2),
+      );
+      expect(returned).toBe(false);
+      expect(events).toEqual(["window_opened"]);
+      // Polling saved status adds no Flocknote requests to the single in-flight login check.
+      expect(session.request).toHaveBeenCalledTimes(1);
+      finishLogin({ success: true, userID: 201 });
+      const connected = await connecting;
+      expect(connected.structuredContent).toMatchObject({
+        ok: true,
+        state: "ready",
+        parish: "example-parish",
+        message: expect.stringContaining("original request"),
+      });
+      expect(events).toEqual([
+        "window_opened",
+        "window_hidden",
+        "connect_returned",
+      ]);
+      const groups = await client.callTool({ name: "flocknote_groups" });
+      expect(groups.structuredContent).toMatchObject({
+        groups: [expect.objectContaining({ id: "101", isEveryone: true })],
+      });
+      const count = await client.callTool({
+        name: "flocknote_subscriber_count",
+        arguments: { groupId: "101" },
+      });
+      expect(count.structuredContent).toMatchObject({
+        ok: true,
+        subscriberCount: 7,
+      });
+      expect(JSON.stringify(connected)).not.toMatch(
+        /userID|cookie|password|flockbot-server-test-/,
+      );
+      expect(client.getInstructions()).toContain(
+        "continue the user's original request",
+      );
+      expect(client.getInstructions()).toContain(
+        "Never repeat a write with outcome unknown",
+      );
+    } finally {
+      finishLogin({ success: true, userID: 201 });
+    }
+  });
+
+  it("returns an already-ready connect immediately without polling saved status", async () => {
+    const { client, connection } = await fixture();
+    vi.spyOn(connection, "connect").mockResolvedValue({
+      state: "ready",
+      parish: "example-parish",
+    });
+    const status = vi.spyOn(connection, "status");
+    const result = await client.callTool({
+      name: "flocknote_connect",
+      arguments: { subdomain: "example-parish" },
+    });
+    expect(result.structuredContent).toMatchObject({
+      state: "ready",
+      message: expect.stringContaining("original request"),
+    });
+    expect(status).not.toHaveBeenCalled();
+  });
+
+  it("returns truthful pending on a bounded wait even if a status dependency ignores abort", async () => {
+    const { client, connection } = await fixture({
+      signInWaitMs: 30,
+      signInPollMs: 5,
+    });
+    vi.spyOn(connection, "connect").mockResolvedValue({
+      state: "pending",
+      parish: "example-parish",
+    });
+    let finishStatus = (
+      _value: Awaited<ReturnType<BrowserConnection["status"]>>,
+    ) => {};
+    vi.spyOn(connection, "status").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishStatus = resolve;
+        }),
+    );
+    const result = await client.callTool({
+      name: "flocknote_connect",
+      arguments: { subdomain: "example-parish" },
+    });
+    expect(result.structuredContent).toMatchObject({
+      ok: true,
+      state: "pending",
+      message: expect.stringContaining("Finish sign-in"),
+    });
+    finishStatus({ state: "ready", parish: "example-parish" });
+  });
+
+  it("cancels waiting without closing or forgetting the browser connection", async () => {
+    const { client, connection } = await fixture({
+      signInWaitMs: 5000,
+      signInPollMs: 5,
+    });
+    vi.spyOn(connection, "connect").mockResolvedValue({
+      state: "pending",
+      parish: "example-parish",
+    });
+    let statusSignal: AbortSignal | undefined;
+    let finishStatus = (
+      _value: Awaited<ReturnType<BrowserConnection["status"]>>,
+    ) => {};
+    vi.spyOn(connection, "status").mockImplementation((options) => {
+      statusSignal = options?.signal;
+      return new Promise((resolve) => {
+        finishStatus = resolve;
+      });
+    });
+    const close = vi.spyOn(connection, "close");
+    const controller = new AbortController();
+    const pending = client.callTool(
+      { name: "flocknote_connect", arguments: { subdomain: "example-parish" } },
+      undefined,
+      { signal: controller.signal },
+    );
+    const rejection = expect(pending).rejects.toThrow();
+    await waitFor(() => expect(statusSignal).toBeDefined());
+    controller.abort();
+    await rejection;
+    await waitFor(() => expect(statusSignal?.aborted).toBe(true));
+    expect(close).not.toHaveBeenCalled();
+    finishStatus({ state: "ready", parish: "example-parish" });
+  });
+
+  it("returns pending when the polling interval is interrupted by its wait deadline", async () => {
+    const { client, connection } = await fixture({
+      signInWaitMs: 30,
+      signInPollMs: 50,
+    });
+    vi.spyOn(connection, "connect").mockResolvedValue({
+      state: "pending",
+      parish: "example-parish",
+    });
+    vi.spyOn(connection, "status").mockResolvedValue({
+      state: "pending",
+      parish: "example-parish",
+    });
+    const close = vi.spyOn(connection, "close");
+    const result = await client.callTool({
+      name: "flocknote_connect",
+      arguments: { subdomain: "example-parish" },
+    });
+    expect(result.structuredContent).toMatchObject({
+      ok: true,
+      state: "pending",
+    });
+    expect(result.isError).toBeUndefined();
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      state: "action_required" as const,
+      parish: "example-parish",
+      setupError: "browser_unavailable" as const,
+    },
+    { state: "not_configured" as const },
+  ])(
+    "returns terminal saved state $state without claiming sign-in succeeded",
+    async (saved) => {
+      const { client, connection } = await fixture({
+        signInWaitMs: 5000,
+        signInPollMs: 5,
+      });
+      vi.spyOn(connection, "connect").mockResolvedValue({
+        state: "pending",
+        parish: "example-parish",
+      });
+      vi.spyOn(connection, "status").mockResolvedValue(saved);
+      const result = await client.callTool({
+        name: "flocknote_connect",
+        arguments: { subdomain: "example-parish" },
+      });
+      expect(result.structuredContent).toMatchObject({ state: saved.state });
+      expect(JSON.stringify(result)).not.toContain("Sign-in is complete");
+    },
+  );
+
+  it("refuses a parish change while waiting instead of resuming against another connection", async () => {
+    const { client, connection } = await fixture({
+      signInWaitMs: 5000,
+      signInPollMs: 5,
+    });
+    vi.spyOn(connection, "connect").mockResolvedValue({
+      state: "pending",
+      parish: "example-parish",
+    });
+    vi.spyOn(connection, "status").mockResolvedValue({
+      state: "ready",
+      parish: "another-example",
+    });
+    const result = await client.callTool({
+      name: "flocknote_connect",
+      arguments: { subdomain: "example-parish" },
+    });
+    expect(result.structuredContent).toMatchObject({
+      ok: false,
+      code: "connection_changed",
+    });
+    expect(result.isError).toBe(true);
+  });
+
+  it("bounds initial connect too and sanitizes status failures", async () => {
+    const first = await fixture({ signInWaitMs: 30, signInPollMs: 5 });
+    let finishConnect = (
+      _value: Awaited<ReturnType<BrowserConnection["connect"]>>,
+    ) => {};
+    vi.spyOn(first.connection, "connect").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishConnect = resolve;
+        }),
+    );
+    const timedOut = await first.client.callTool({
+      name: "flocknote_connect",
+      arguments: { subdomain: "example-parish" },
+    });
+    expect(timedOut.structuredContent).toMatchObject({
+      ok: false,
+      code: "operation_timeout",
+    });
+    finishConnect({ state: "pending", parish: "example-parish" });
+    const next = await fixture();
+    vi.spyOn(next.connection, "connect").mockResolvedValue({
+      state: "pending",
+      parish: "example-parish",
+    });
+    vi.spyOn(next.connection, "status").mockRejectedValue(
+      new BrowserConnectionError("profile_unavailable"),
+    );
+    const failed = await next.client.callTool({
+      name: "flocknote_connect",
+      arguments: { subdomain: "example-parish" },
+    });
+    expect(failed.structuredContent).toMatchObject({
+      ok: false,
+      code: "profile_unavailable",
+    });
+  });
+
   it("routes a named addition directly and requires exactly one group selector", async () => {
     const { client, connection } = await fixture();
     const add = vi

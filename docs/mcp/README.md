@@ -175,3 +175,23 @@ Claude distribution is outside this Codex-first candidate.
 The [member-browsing discovery record](./discovery/member-browsing.md) documents
 sanitized observations for possible future tools; it does not expand the current
 connector's supported operations.
+
+## Continue after browser sign-in
+
+The MCP `flocknote_connect` call stays active for up to 45 seconds, including
+browser startup, while checking only saved local connection status. When login
+finishes in that window, it returns `ready` and tells the assistant to continue
+the original parish request without another user confirmation. The browser’s
+existing five-minute sign-in lifecycle and private authentication flow are unchanged.
+
+If sign-in takes longer, the tool returns truthful `pending` with the existing
+finish-sign-in/status fallback. Cancellation stops waiting without resetting or
+forgetting the connection. A closed/failed setup or changed parish cannot report
+success. This fits beneath Codex’s documented default 60-second tool timeout; a
+custom shorter host timeout may still cancel the call sooner. No user config is
+edited to extend that timeout.
+
+Login success is a prerequisite, not completion of the original task. Resume
+read-only work after `ready`; never automatically repeat a write whose outcome is
+unknown. Real desktop/TUI conversation continuation still needs manual host
+verification; fixture-backed MCP calls do not prove model behavior.

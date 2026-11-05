@@ -152,7 +152,14 @@ export class BrowserConnection {
     | { generation: string; interactive: boolean; session: BrowserSession }
     | undefined;
   #network: { generation: string; model: Network } | undefined;
-  #setup: { controller: AbortController; task: Promise<void> } | undefined;
+  #setup:
+    | {
+        controller: AbortController;
+        task: Promise<void>;
+        parish: string;
+        started: Promise<BrowserStatus>;
+      }
+    | undefined;
 
   constructor(options: {
     profile?: string;
@@ -372,10 +379,13 @@ export class BrowserConnection {
     if (options.signal?.aborted) throw new FlockbotError("operation_cancelled");
     if (!existsSync(this.#profile)) return { state: "not_configured" };
     this.#ensure();
+    // An in-flight reconnect may still be queued behind work using an older
+    // ready session. Don't let a waiting MCP call mistake that saved flag for
+    // completion of the active sign-in attempt.
+    if (this.#setup) return { state: "pending", parish: this.#setup.parish };
     let saved = this.#read();
     if (!saved) return { state: "not_configured" };
     if (saved.state === "pending") {
-      if (this.#setup) return { state: "pending", parish: saved.parish };
       try {
         await this.#exclusive(AbortSignal.timeout(100), async () => {
           saved = this.#read();
@@ -424,10 +434,9 @@ export class BrowserConnection {
   async connect(subdomain: string): Promise<BrowserStatus> {
     const selected = normalizeSubdomain(subdomain);
     if (this.#setup) {
-      const saved = this.#read();
-      if (saved && saved.parish !== selected)
+      if (this.#setup.parish !== selected)
         throw new BrowserConnectionError("connection_changed");
-      return { state: "pending", parish: selected };
+      return this.#setup.started;
     }
     const controller = new AbortController();
     let resolveStarted: (value: BrowserStatus) => void = () => undefined;
@@ -558,7 +567,7 @@ export class BrowserConnection {
       .finally(() => {
         this.#setup = undefined;
       });
-    this.#setup = { controller, task };
+    this.#setup = { controller, task, parish: selected, started };
     return started;
   }
 

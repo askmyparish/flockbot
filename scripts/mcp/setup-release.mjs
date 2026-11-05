@@ -35,7 +35,7 @@ Report the bounded result and requested/installed versions when present, using p
 
 Do not blindly retry refusals. For downgrade_rejected use the installed or newer compatible release; version_collision needs matching verified release bytes. For ownership_conflict, malformed_data or source_changed preserve existing files and have their catalog/source or connection metadata reconciled before retrying. For connection_incompatible use a compatible release without resetting the connection. Other failures need their stated cause resolved. Never run Forget to repair setup.
 
-After installation/reload, check flocknote_status through the installed plugin. Saved readiness describes a previous sign-in, not a fresh authentication check. If sign-in is required, ask only for the parish subdomain and call flocknote_connect. The user enters passwords and codes solely on Flocknote's real website. Check status when the user says sign-in is complete. No real-host or sign-in success is established by this prompt.
+After installation/reload, check flocknote_status through the installed plugin. Saved readiness describes a previous sign-in, not a fresh authentication check. If sign-in is required, ask only for the parish subdomain and call flocknote_connect. The user enters passwords and codes solely on Flocknote's real website. The connect call waits briefly. On ready, continue the original requested task immediately without asking for a done message. Only if it returns pending should you ask the user to finish sign-in and let you know, then check status once. Never replay a write with unknown outcome. No real-host or sign-in success is established by this prompt.
 `;
 }
 

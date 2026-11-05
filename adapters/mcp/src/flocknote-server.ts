@@ -2,6 +2,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { FlockbotError } from "../../../src/index.js";
+import { Operation } from "../../../src/operation.js";
+import { setTimeout as delay } from "node:timers/promises";
 import type { BrowserConnection, BrowserStatus } from "./browser-connection.js";
 import { BrowserConnectionError } from "./browser-runtime.js";
 import { MCP_VERSION } from "./version.js";
@@ -9,6 +11,8 @@ import { MCP_VERSION } from "./version.js";
 const INSTRUCTIONS =
   "Use these tools for the user's Flocknote parish requests. Trust the saved session and call the requested tool directly; no preliminary status or authentication check is needed. " +
   "If sign-in is needed, ask for the parish subdomain and call flocknote_connect; the user signs in on Flocknote's real website. " +
+  "The connect call waits briefly for sign-in. When it returns ready, continue the user's original request without asking them to say they are signed in. Sign-in alone does not finish their parish task. " +
+  "Only if connect still returns pending should you ask the user to finish sign-in and let you know, then check flocknote_status once. " +
   "Never request passwords, codes, cookies, browser storage, arbitrary URLs or scripts. " +
   "For additions use a known groupId, or supply the user's groupName for a case-insensitive unique match to resolve it in the same call. List groups only when the choice is unclear. " +
   "Add members only when requested, after resolving the parish, group and contact details. " +
@@ -86,7 +90,72 @@ export type FlocknoteConnection = Pick<
   | "close"
 >;
 
-export function createFlocknoteServer(connection: FlocknoteConnection) {
+async function connectForTurn(
+  connection: FlocknoteConnection,
+  subdomain: string,
+  signal: AbortSignal,
+  waitMs: number,
+  pollMs: number,
+): Promise<BrowserStatus> {
+  // Keep the original MCP call alive, not a new authentication request or a
+  // background chat-wakeup service. Browser ownership/setup keeps its own budget.
+  const op = new Operation(
+    { timeoutMs: waitMs, maxReadRetries: 0 },
+    undefined,
+    { signal },
+  );
+  let latest: BrowserStatus | undefined;
+  try {
+    return await op.run(async () => {
+      op.check();
+      latest = await connection.connect(subdomain);
+      op.check();
+      const parish = subdomain.toLowerCase();
+      if (latest.state !== "not_configured" && latest.parish !== parish)
+        throw new BrowserConnectionError("connection_changed");
+      if (latest.state !== "pending") return latest;
+      while (true) {
+        const status = await connection.status({ signal: op.signal });
+        op.check();
+        if (status.state !== "not_configured" && status.parish !== parish)
+          throw new BrowserConnectionError("connection_changed");
+        latest = status;
+        if (status.state !== "pending") return status;
+        await delay(pollMs, undefined, { signal: op.signal }).catch(
+          (error: unknown) => {
+            op.check();
+            throw error;
+          },
+        );
+        op.check();
+      }
+    });
+  } catch (error) {
+    if (
+      error instanceof FlockbotError &&
+      error.code === "operation_timeout" &&
+      latest?.state === "pending"
+    )
+      return latest;
+    throw error;
+  }
+}
+
+export function createFlocknoteServer(
+  connection: FlocknoteConnection,
+  options: { signInWaitMs?: number; signInPollMs?: number } = {},
+) {
+  // Leave headroom below Codex's documented default 60-second tool timeout.
+  const waitMs = options.signInWaitMs ?? 45_000;
+  const pollMs = options.signInPollMs ?? 500;
+  if (
+    !Number.isFinite(waitMs) ||
+    waitMs <= 0 ||
+    waitMs > 45_000 ||
+    !Number.isFinite(pollMs) ||
+    pollMs <= 0
+  )
+    throw new FlockbotError("invalid_configuration");
   const server = new McpServer(
     { name: "flockbot", version: MCP_VERSION },
     { instructions: INSTRUCTIONS },
@@ -142,9 +211,9 @@ export function createFlocknoteServer(connection: FlocknoteConnection) {
   server.registerTool(
     "flocknote_connect",
     {
-      title: "Open Flocknote sign-in",
+      title: "Sign in to Flocknote",
       description:
-        "Use when the user wants to connect or reconnect their parish. Opens Flocknote's real website in a dedicated local browser. Returns pending; the user signs in privately, then call flocknote_status. Takes no login credentials.",
+        "Use when sign-in is needed for the user's request, or to connect/reconnect. Opens Flocknote's real website in a dedicated local browser and waits briefly for sign-in. On ready, continue the original task without asking for a done message. If still pending, finish sign-in and check flocknote_status later. Takes no credentials. Never repeat a write with unknown outcome.",
       inputSchema: {
         subdomain: z
           .string()
@@ -158,13 +227,22 @@ export function createFlocknoteServer(connection: FlocknoteConnection) {
         openWorldHint: true,
       },
     },
-    async ({ subdomain }) =>
+    async ({ subdomain }, extra) =>
       guarded(async () => {
-        const status = await connection.connect(subdomain);
+        const status = await connectForTurn(
+          connection,
+          subdomain,
+          extra.signal,
+          waitMs,
+          pollMs,
+        );
         return {
           ok: true,
           ...status,
-          message: statusMessage(status),
+          message:
+            status.state === "ready"
+              ? "Sign-in is complete. Continue the user's original request now without asking them to confirm sign-in. Never repeat a write with unknown outcome."
+              : statusMessage(status),
         };
       }),
   );

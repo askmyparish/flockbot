@@ -99,6 +99,69 @@ async function ready(connection: BrowserConnection) {
 }
 
 describe("browser-owned local connection", () => {
+  it("coalesces startup failure rather than reporting a sign-in window before it opens", async () => {
+    const f = fixture();
+    await ready(f.connection);
+    let finishCount = (_value: unknown) => {};
+    f.responses["group/101/getSubscriberCount"] = () =>
+      new Promise((resolve) => {
+        finishCount = resolve;
+      });
+    const count = f.connection.count("101");
+    await waitFor(() =>
+      expect(
+        f.requests.some(
+          (request) => request.path === "group/101/getSubscriberCount",
+        ),
+      ).toBe(true),
+    );
+    const first = f.connection.connect("example-parish").then(
+      (status) => status.state,
+      (error: unknown) => (error as BrowserConnectionError).code,
+    );
+    const second = f.connection.connect("example-parish").then(
+      (status) => status.state,
+      (error: unknown) => (error as BrowserConnectionError).code,
+    );
+    try {
+      expect(await second).toBe("connection_busy");
+      expect(await first).toBe("connection_busy");
+      expect(await f.connection.status()).toMatchObject({
+        state: "ready",
+        parish: "example-parish",
+      });
+    } finally {
+      finishCount({ subscriberCount: "7" });
+      await Promise.allSettled([count, first, second]);
+    }
+  });
+  it("reports active reconnect as pending instead of exposing an older saved ready state while queued", async () => {
+    const f = fixture();
+    await ready(f.connection);
+    let finishCount = (_value: unknown) => {};
+    f.responses["group/101/getSubscriberCount"] = () =>
+      new Promise((resolve) => {
+        finishCount = resolve;
+      });
+    const count = f.connection.count("101");
+    await waitFor(() =>
+      expect(
+        f.requests.some(
+          (request) => request.path === "group/101/getSubscriberCount",
+        ),
+      ).toBe(true),
+    );
+    const reconnect = f.connection.connect("example-parish");
+    try {
+      expect(await f.connection.status()).toMatchObject({
+        state: "pending",
+        parish: "example-parish",
+      });
+    } finally {
+      finishCount({ subscriberCount: "7" });
+      await Promise.allSettled([count, reconnect]);
+    }
+  });
   it("reports busy when an operation exhausts its budget while queued", async () => {
     const f = fixture();
     await ready(f.connection);
