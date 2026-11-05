@@ -1,6 +1,6 @@
 {
   "name": "flockbot-macos",
-  "version": "0.2.0",
+  "version": "0.2.1-dev.8",
   "description": "Unofficial Flocknote tools using a dedicated local browser session. Apple silicon Mac candidate.",
   "author": {
     "name": "AskMyParish",
