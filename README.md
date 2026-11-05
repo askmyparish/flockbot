@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/flockbot.svg" alt="Flockbot robot sheep logo" width="240">
+</p>
+
 # Flockbot
 
 Flockbot connects parish workflows to [Flocknote](https://www.flocknote.com/)
