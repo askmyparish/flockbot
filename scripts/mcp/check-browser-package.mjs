@@ -7,6 +7,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -24,7 +25,9 @@ export const FLOCKNOTE_TOOLS = [
   "flocknote_status",
   "flocknote_subscriber_count",
 ];
-const scratch = await mkdtemp(join(tmpdir(), "flockbot-browser-package-"));
+const scratch = await mkdtemp(
+  join(await realpath(tmpdir()), "flockbot-browser-package-"),
+);
 try {
   const payload = join(scratch, "runtime payload");
   await cp(resolve("adapters/mcp/dist/browser"), payload, { recursive: true });
@@ -105,15 +108,34 @@ try {
       await readFile(join(root, "browser-setup-ran"), "utf8"),
       "fictional-check",
     );
-    // An existing incomplete runtime must never be announced as ready.
-    await rm(join(root, ".complete"));
-    assert.notEqual(
-      spawnSync(setupCommand, setupArgs(archive), {
+    if (process.platform === "darwin") {
+      // Setup repairs an owned incomplete target rather than requiring deletion.
+      await rm(join(root, ".complete"));
+      execFileSync(setupCommand, setupArgs(archive), {
         env: environment,
-      }).status,
-      0,
-    );
-    await writeFile(join(root, ".complete"), "");
+        stdio: "pipe",
+      });
+      assert.ok(await readFile(join(root, ".complete"), "utf8"));
+      assert.equal(
+        await readFile(join(root, "browser-setup-ran"), "utf8"),
+        "fictional-check",
+      );
+    } else {
+      // Windows retains its original incomplete-target failure contract.
+      const marker = await readFile(join(root, ".complete"));
+      await rm(join(root, ".complete"));
+      const incomplete = spawnSync(setupCommand, setupArgs(archive), {
+        env: environment,
+        encoding: "utf8",
+      });
+      assert.notEqual(incomplete.status, 0);
+      assert.doesNotMatch(
+        `${incomplete.stdout}${incomplete.stderr}`,
+        /runtime is ready/,
+      );
+      await assert.rejects(readFile(join(root, ".complete")));
+      await writeFile(join(root, ".complete"), marker);
+    }
     // An already complete immutable runtime can be reused without its archive.
     await rm(archive);
     execFileSync(setupCommand, setupArgs(), {
@@ -142,7 +164,11 @@ try {
       FLOCKNOTE_TOOLS,
     );
     const status = await client.callTool({ name: "flocknote_status" });
-    assert.equal(status.structuredContent.state, "not_configured");
+    assert.equal(
+      status.structuredContent.state,
+      "not_configured",
+      `Offline status failed with code: ${status.structuredContent.code ?? "unknown"}`,
+    );
     assert.equal(JSON.stringify(status).includes(scratch), false);
   } finally {
     await client.close();

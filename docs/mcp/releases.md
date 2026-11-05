@@ -81,7 +81,12 @@ by the installed plugin and verify its pinned digest before activation.
 Use the source catalog and plugins from the matching published tag when setting
 up staff. `main` can contain a newly prepared version whose assets have not yet
 been published. A release tag provides the matching source, version and pins.
-Updating the runtime retains the separate local browser connection.
+Updating the runtime retains the separate local browser connection. macOS setup
+serializes download, preparation and activation with the system `lockf` utility;
+its persistent lock file must never be removed while a setup is running. Failed
+or interrupted owned stages and incomplete targets recover on rerun, as described
+in [setup recovery](./setup.md#reconnect-replace-and-remove). Windows activation
+parity remains unverified and is not established by macOS process tests.
 
 To verify an archive independently:
 

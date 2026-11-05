@@ -78,10 +78,41 @@ clients as well so they use the updated tool schemas and instructions.
 
 ## Reconnect, replace and remove
 
-If setup reports an incomplete runtime, remove only that incomplete version's
-directory beneath `runtimes` and rerun setup. The browser profile lives outside
-`runtimes`; keep it when repairing an installation. Setup never reports readiness
-for a runtime missing its completion marker.
+On macOS, rerun the same plugin setup skill after a failed or interrupted setup.
+It serializes setup across processes with the system `lockf` utility, waits up to
+two minutes for an active setup, and never steals its lock because it looks old.
+A slow setup may still be running: let it finish before retrying. Do not delete
+the lock file or temporary directories while setup is active.
+
+A retry removes only marked stages left by a previous lock holder and repairs an
+empty target or an incomplete runtime carrying this release's ownership receipt.
+A legacy incomplete target without a receipt is repaired only when every remaining
+file matches the checksum-verified archive; foreign additions are preserved.
+It preserves completed runtimes, unrecognized files and the separate browser
+profile. A foreign collision or damaged completion marker requires administrator
+help or a separate install root; setup reports the conflict without replacing it.
+Install paths, including their ancestors and the browser cache, must be direct
+local directories without symlinks. No manual directory deletion is needed for
+an owned interrupted setup.
+
+Downloads have a 15-second connection limit and a three-minute total limit.
+Browser preparation has a five-minute limit, with a 30-second socket idle timeout
+for browser downloads. On macOS a temporary supervisor retains that deadline and
+the lock if the calling shell and helper are killed. Ordinary interrupt, terminate
+and hangup signals stop browser preparation before its stage is removed. A retry
+waits until surviving download work has stopped before reclaiming the stage.
+System `lockf` descriptor support still needs verification on the minimum macOS
+version and CI runner; current local evidence does not establish that support.
+If setup reports a timeout or integrity, permission or disk failure, resolve that
+cause and rerun setup with the same published plugin.
+Failures do not report readiness. A ready immutable runtime is reused without a
+download, and launch, stop and forget commands never install software.
+
+These activation/recovery checks apply to the macOS candidate. Windows activation
+has not been hardened or executed in this change; Windows packaging remains
+experimental and unverified. The shared browser-preparation deadline is present,
+but Windows concurrency and interrupted-setup recovery still need implementation
+and native verification before support can be claimed.
 
 A confirmed expired session pauses tools until the user opens sign-in again. No
 password renewal, email-code retrieval or automatic write retry occurs. A network

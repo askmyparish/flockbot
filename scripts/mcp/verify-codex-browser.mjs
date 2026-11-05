@@ -2,11 +2,11 @@
 // It verifies actual Codex plugin parsing and MCP launch, not the desktop GUI.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { CODEX_VERSION } from "./browser-build.mjs";
+import { prepareCodexBrowserHome } from "./codex-browser-fixture.mjs";
 
 assert.equal(
   process.platform,
@@ -18,17 +18,17 @@ assert.equal(
   "arm64",
   "This host check currently targets Apple silicon.",
 );
-const scratch = await mkdtemp(join(tmpdir(), "flockbot-codex-browser-"));
-const temporaryHome = join(scratch, "home");
-const installRoot = join(
-  temporaryHome,
-  "Library/Application Support/Flockbot MCP",
-);
+const {
+  scratch,
+  home: temporaryHome,
+  codexHome,
+  installRoot,
+} = await prepareCodexBrowserHome(resolve("adapters/mcp/.cache/browsers"));
 const env = {
   PATH: process.env.PATH ?? "",
   HOME: temporaryHome,
   USERPROFILE: temporaryHome,
-  CODEX_HOME: join(temporaryHome, ".codex"),
+  CODEX_HOME: codexHome,
   FLOCKBOT_INSTALL_ROOT: installRoot,
 };
 const options = {
@@ -91,15 +91,6 @@ function statusOverAppServer() {
 }
 
 try {
-  await mkdir(temporaryHome);
-  await mkdir(env.CODEX_HOME);
-  await mkdir(installRoot, { recursive: true });
-  // Browser binary cache only; this check never opens a browser or uses a session.
-  await symlink(
-    resolve("adapters/mcp/.cache/browsers"),
-    join(installRoot, "browser-engines"),
-    "dir",
-  );
   execFileSync(
     "/bin/bash",
     [
