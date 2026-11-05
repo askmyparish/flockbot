@@ -49,6 +49,7 @@ try {
   const environment = {
     PATH: process.env.PATH ?? "",
     HOME: home,
+    FLOCKBOT_UPDATE_CHECKS: "0",
     USERPROFILE: home,
     LOCALAPPDATA: join(home, "AppData/Local"),
     FLOCKBOT_INSTALL_ROOT: join(scratch, "installed runtime with spaces"),

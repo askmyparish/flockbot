@@ -27,6 +27,7 @@ const {
 const env = {
   PATH: process.env.PATH ?? "",
   HOME: temporaryHome,
+  FLOCKBOT_UPDATE_CHECKS: "0",
   USERPROFILE: temporaryHome,
   CODEX_HOME: codexHome,
   FLOCKBOT_INSTALL_ROOT: installRoot,

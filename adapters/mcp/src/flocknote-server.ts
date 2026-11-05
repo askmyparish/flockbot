@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { BrowserConnection, BrowserStatus } from "./browser-connection.js";
 import { BrowserConnectionError } from "./browser-runtime.js";
 import { MCP_VERSION } from "./version.js";
+import { UpdateChecker, type UpdateNotifications } from "./update-check.js";
 
 const INSTRUCTIONS =
   "Use these tools for the user's Flocknote parish requests. Trust the saved session and call the requested tool directly; no preliminary status or authentication check is needed. " +
@@ -15,6 +16,7 @@ const INSTRUCTIONS =
   "Only if connect still returns pending should you ask the user to finish sign-in and let you know, then check flocknote_status once. " +
   "Never request passwords, codes, cookies, browser storage, arbitrary URLs or scripts. " +
   "For additions use a known groupId, or supply the user's groupName for a case-insensitive unique match to resolve it in the same call. List groups only when the choice is unclear. " +
+  "When a tool includes update metadata, answer the parish request first, then briefly mention the available Flockbot version (label prereleases) and say ‘Update Flockbot’ to install it. Mention it once per conversation unless asked again. Do not interrupt sign-in, hide an error or unknown write outcome, or install automatically. For an explicit update request, follow the canonical Flockbot guide, not the older installed setup script. " +
   "Add members only when requested, after resolving the parish, group and contact details. " +
   "Never repeat a write with outcome unknown: tell the user to check Flocknote before deciding what to do.";
 
@@ -143,7 +145,11 @@ async function connectForTurn(
 
 export function createFlocknoteServer(
   connection: FlocknoteConnection,
-  options: { signInWaitMs?: number; signInPollMs?: number } = {},
+  options: {
+    signInWaitMs?: number;
+    signInPollMs?: number;
+    updates?: UpdateNotifications;
+  } = {},
 ) {
   // Leave headroom below Codex's documented default 60-second tool timeout.
   const waitMs = options.signInWaitMs ?? 45_000;
@@ -160,16 +166,30 @@ export function createFlocknoteServer(
     { name: "flockbot", version: MCP_VERSION },
     { instructions: INSTRUCTIONS },
   );
+  const respond = (body: Record<string, unknown>, isError = false) => {
+    // Update discovery is optional; it must never replace a parish result/error.
+    try {
+      const update = options.updates?.notice();
+      return result({ ...body, ...(update ? { update } : {}) }, isError);
+    } catch {
+      return result(body, isError);
+    }
+  };
   const guarded = async (work: () => Promise<Record<string, unknown>>) => {
     try {
-      return result(await work());
+      options.updates?.touch();
+    } catch {
+      /* Optional update check. */
+    }
+    try {
+      return respond(await work());
     } catch (error) {
       const known =
         error instanceof FlockbotError ||
         error instanceof BrowserConnectionError;
       const code =
         known && MESSAGES[error.code] ? error.code : "connector_unavailable";
-      return result(
+      return respond(
         {
           ok: false,
           code,
@@ -318,6 +338,11 @@ export function createFlocknoteServer(
       }),
   );
   server.server.onclose = () => {
+    try {
+      options.updates?.close();
+    } catch {
+      /* Optional update check. */
+    }
     void connection.close();
   };
   return server;
@@ -326,7 +351,9 @@ export function createFlocknoteServer(
 export async function serveFlocknote(
   connection: FlocknoteConnection,
 ): Promise<void> {
-  const server = createFlocknoteServer(connection);
+  const server = createFlocknoteServer(connection, {
+    updates: new UpdateChecker(),
+  });
   const close = async () => {
     await connection.close();
     await server.close();

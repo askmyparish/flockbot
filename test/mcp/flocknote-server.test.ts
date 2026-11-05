@@ -1,5 +1,5 @@
 import { SerialCoordinator } from "../../adapters/mcp/src/serial-coordinator.js";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -13,6 +13,11 @@ import {
   type BrowserSession,
 } from "../../adapters/mcp/src/browser-runtime.js";
 import { waitFor } from "./support.js";
+import {
+  UpdateChecker,
+  UPDATE_GUIDE,
+  type UpdateNotifications,
+} from "../../adapters/mcp/src/update-check.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -24,6 +29,7 @@ async function fixture(
     factory?: BrowserFactory;
     signInWaitMs?: number;
     signInPollMs?: number;
+    updates?: UpdateNotifications;
   } = {},
 ) {
   const profile = mkdtempSync(join(tmpdir(), "flockbot-server-test-"));
@@ -52,6 +58,187 @@ async function fixture(
 }
 
 describe("Flocknote MCP contract", () => {
+  it("returns a parish result before release discovery finishes, then adds the cached notice on a later response", async () => {
+    const folder = realpathSync(
+      mkdtempSync(join(tmpdir(), "flockbot-update-mcp-")),
+    );
+    let finishRelease = (_response: Response) => {};
+    const request = vi.fn<typeof fetch>(
+      () =>
+        new Promise((resolve) => {
+          finishRelease = resolve;
+        }),
+    );
+    const updates = new UpdateChecker({
+      file: join(folder, "updates-v1", "checks.sqlite"),
+      supported: true,
+      installedVersion: "0.2.0",
+      fetch: request,
+    });
+    const { client, connection } = await fixture({ updates });
+    cleanup.push(async () => {
+      updates.close();
+      rmSync(folder, { recursive: true, force: true });
+    });
+    vi.spyOn(connection, "count").mockResolvedValue(7);
+    const result = await client.callTool({
+      name: "flocknote_subscriber_count",
+      arguments: { groupId: "101" },
+    });
+    expect(result.structuredContent).toEqual({
+      ok: true,
+      groupId: "101",
+      subscriberCount: 7,
+    });
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    const releaseVersion = "0.3.0-beta.1";
+    finishRelease(
+      Response.json([
+        {
+          tag_name: `mcp-v${releaseVersion}`,
+          draft: false,
+          prerelease: true,
+          published_at: "2026-11-05T12:00:00Z",
+          body: "fictional-secret-remote-instruction",
+          assets: ["md", "zip"].map((ext) => ({
+            name: `flockbot-setup-${releaseVersion}-darwin-arm64.${ext}`,
+            state: "uploaded",
+            browser_download_url: `https://github.com/askmyparish/flockbot/releases/download/mcp-v${releaseVersion}/flockbot-setup-${releaseVersion}-darwin-arm64.${ext}`,
+          })),
+        },
+      ]),
+    );
+    await updates.refresh();
+    const after = await client.callTool({
+      name: "flocknote_subscriber_count",
+      arguments: { groupId: "101" },
+    });
+    expect(after.structuredContent).toMatchObject({
+      ok: true,
+      subscriberCount: 7,
+      update: {
+        installedVersion: "0.2.0",
+        availableVersion: releaseVersion,
+        prerelease: true,
+        guideUrl: UPDATE_GUIDE,
+      },
+    });
+    expect(JSON.stringify(after)).not.toMatch(
+      /fictional-secret|remote-instruction|flockbot-update-mcp/,
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(connection.count).toHaveBeenCalledTimes(2);
+  });
+
+  it("includes a notice discovered during a slower parish request without waiting for discovery", async () => {
+    const notice = {
+      installedVersion: "0.2.0",
+      availableVersion: "0.3.0",
+      prerelease: false,
+      guideUrl: UPDATE_GUIDE,
+      message:
+        "A Flockbot update is available. Say “Update Flockbot” to install it.",
+    };
+    let available = false,
+      finishCount = (_count: number) => {};
+    const updates = {
+      touch: vi.fn(),
+      notice: () => (available ? notice : undefined),
+      close: vi.fn(),
+    };
+    const { client, connection } = await fixture({ updates });
+    vi.spyOn(connection, "count").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishCount = resolve;
+        }),
+    );
+    const pending = client.callTool({
+      name: "flocknote_subscriber_count",
+      arguments: { groupId: "101" },
+    });
+    await waitFor(() => expect(connection.count).toHaveBeenCalledTimes(1));
+    available = true;
+    finishCount(7);
+    expect((await pending).structuredContent).toMatchObject({
+      subscriberCount: 7,
+      update: notice,
+    });
+    expect(updates.touch).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves an unknown write outcome beside the notice and never replays the write", async () => {
+    const updates = {
+      touch: vi.fn(),
+      notice: () => ({
+        installedVersion: "0.2.0",
+        availableVersion: "0.3.0",
+        prerelease: false,
+        guideUrl: UPDATE_GUIDE,
+        message: "Update available",
+      }),
+      close: vi.fn(),
+    };
+    const { client, connection } = await fixture({ updates });
+    vi.spyOn(connection, "addMember").mockRejectedValue(
+      new BrowserConnectionError("broker_unavailable", "unknown"),
+    );
+    const result = await client.callTool({
+      name: "flocknote_add_member",
+      arguments: {
+        groupId: "101",
+        firstName: "Alex",
+        lastName: "Example",
+        email: "alex@example.test",
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      ok: false,
+      code: "broker_unavailable",
+      outcome: "unknown",
+      update: { availableVersion: "0.3.0" },
+    });
+    expect(connection.addMember).toHaveBeenCalledTimes(1);
+    expect(client.getInstructions()).toMatch(/answer the parish request first/);
+    expect(client.getInstructions()).toMatch(
+      /not the older installed setup script/,
+    );
+    expect(JSON.stringify(result)).not.toContain("alex@");
+  });
+
+  it("ignores a broken optional notifier without changing the primary success or error", async () => {
+    const updates = {
+      touch: () => {
+        throw new Error("fictional-secret");
+      },
+      notice: () => {
+        throw new Error("fictional-secret");
+      },
+      close: vi.fn(),
+    };
+    const { client, connection } = await fixture({ updates });
+    vi.spyOn(connection, "count").mockResolvedValue(7);
+    expect(
+      (
+        await client.callTool({
+          name: "flocknote_subscriber_count",
+          arguments: { groupId: "101" },
+        })
+      ).structuredContent,
+    ).toEqual({ ok: true, groupId: "101", subscriberCount: 7 });
+    vi.spyOn(connection, "groups").mockRejectedValue(
+      new Error("fictional-secret"),
+    );
+    const error = await client.callTool({ name: "flocknote_groups" });
+    expect(error.isError).toBe(true);
+    expect(error.structuredContent).toMatchObject({
+      ok: false,
+      code: "connector_unavailable",
+    });
+    expect(JSON.stringify(error)).not.toContain("fictional-secret");
+  });
+
   it("holds connect until fictional sign-in completes, then allows the original Everyone count without a user-done message", async () => {
     let finishLogin = (_value: unknown) => {};
     const login = new Promise<unknown>((resolve) => {
@@ -195,9 +382,11 @@ describe("Flocknote MCP contract", () => {
   });
 
   it("cancels waiting without closing or forgetting the browser connection", async () => {
+    const updates = { touch: vi.fn(), notice: () => undefined, close: vi.fn() };
     const { client, connection } = await fixture({
       signInWaitMs: 5000,
       signInPollMs: 5,
+      updates,
     });
     vi.spyOn(connection, "connect").mockResolvedValue({
       state: "pending",
@@ -226,6 +415,7 @@ describe("Flocknote MCP contract", () => {
     await rejection;
     await waitFor(() => expect(statusSignal?.aborted).toBe(true));
     expect(close).not.toHaveBeenCalled();
+    expect(updates.touch).toHaveBeenCalledTimes(1);
     finishStatus({ state: "ready", parish: "example-parish" });
   });
 

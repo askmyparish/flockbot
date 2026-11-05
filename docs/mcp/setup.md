@@ -262,3 +262,38 @@ the release PR is merged.
 Use the plugins from that published tag, including their `runtime.version` and
 `runtime.sha256` files. CI previews are available for review before publication.
 Until a version is published, its default GitHub download URL is unavailable.
+
+## Update notices
+
+During tool use, the MCP process starts a bounded, asynchronous public GitHub
+release-metadata check at most once per 24 hours per OS user. A separate
+`updates-v1/checks.sqlite` cache under the Flockbot application-data directory
+stores only the attempt time and public release version; it never reads the
+browser profile or sends parish/session/contact data to GitHub. Failed checks
+also consume the daily budget. `FLOCKBOT_UPDATE_CHECKS=0` disables discovery
+entirely; the offline package and host-verification runners set it explicitly. An unavailable or unsafe cache disables checks
+quietly; it does not affect parish work. Checks are currently for the automated
+macOS Apple silicon setup route; Windows remains unverified.
+
+Tool responses can include `update` with installed/available versions, prerelease
+status, the fixed guide URL and a fixed message. The assistant answers the parish
+request first, then offers **Update Flockbot**. It must preserve errors and unknown
+write outcomes. The 5-second request/body deadline, 1 MiB body cap and rejected
+redirects bound metadata work; tool handlers never await that network work. A fast
+first response may precede discovery; a later response sees the cached result.
+No notification is sent while Codex is closed, and nothing installs automatically.
+
+Discovery chooses the highest semantic version among the first 20 published,
+non-draft `mcp-v` releases with exact matching uploaded setup ZIP/prompt assets
+from this repository. The guide scans the first 100 releases, a superset of that
+lookup, and never selects below the notice or installed version. Prereleases are included and labeled. Drafts, invalid
+versions, mismatched asset URLs and releases lacking either asset are ignored.
+An explicit update uses the current guide and fixed-digest release prompt, not the
+installed skill’s older pinned runtime. Preserve sign-in and restart/reload as
+instructed above. Actual host/model rendering of notices and published downloads
+need real-user verification; fixture tests do not establish them.
+
+The public-version cache is retained after Forget or plugin removal. It contains
+no sign-in state; those actions do not trigger another update lookup. Automated
+update notices and the guide’s installation/update route are Mac-only for now;
+the Windows skill stops explicit update requests without changing the connection.

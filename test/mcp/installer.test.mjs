@@ -1050,6 +1050,11 @@ it("generates the fixed release URL/version/digest outside the hashed payload; v
     `https://github.com/askmyparish/flockbot/releases/download/mcp-v0.2.0/${archive.filename}`,
   );
   expect(text).toContain("--route tui");
+  expect(text).toContain(
+    "An explicit update follows https://raw.githubusercontent.com/askmyparish/flockbot/main/guide.md",
+  );
+  expect(text).toContain("not this older pinned setup block");
+  expect(text).toContain("Never hide errors or unknown write outcomes");
   expect(text.indexOf("shasum -a 256 -c -")).toBeLessThan(
     text.indexOf("unzip -q"),
   );

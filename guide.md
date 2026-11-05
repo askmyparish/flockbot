@@ -32,10 +32,16 @@ Unofficial and independent. Not affiliated with, endorsed by or supported by Flo
    Proceed with automated setup only on macOS Apple silicon. Do not run the Mac
    payload on Windows, Linux or Intel Mac, or promise support there.
 2. Read the published releases at
-   `https://api.github.com/repos/askmyparish/flockbot/releases`. Use the newest
+   `https://api.github.com/repos/askmyparish/flockbot/releases?per_page=100`. Among
+   those first 100 entries, choose the highest semantic version (not creation date)
    published, non-draft `mcp-v<version>` release containing both
    `flockbot-setup-<version>-darwin-arm64.md` and
    `flockbot-setup-<version>-darwin-arm64.zip`. Tell the user if it is a prerelease.
+   Require both assets to be uploaded and their download URLs to match that exact
+   `https://github.com/askmyparish/flockbot/releases/download/mcp-v<version>/`
+   path. Include stable and prerelease versions; compare numeric components and
+   prerelease identifiers using semantic-version precedence. If updating from a
+   notice, never select a version below the notice or the installed version.
    If no matching release is available, stop. Never substitute repository source,
    a CI preview, a different publisher or an arbitrary executable URL.
 3. Fetch the versioned Markdown prompt from that exact release’s assets on
@@ -85,7 +91,13 @@ the original request without asking the user to type “done.” Only if it retu
 `flocknote_status` once before continuing. Never replay a write with unknown outcome.
 Saved readiness is a previous sign-in, not proof of a fresh live authentication check.
 
-To update, follow this guide using a newer matching published prompt. Preserve
+Flockbot checks public GitHub release metadata at most once per 24 hours while
+being used. When a newer matching release is known, the assistant can mention it
+after answering your request. The first response may finish before the check;
+a later response can show the notice. Offline checks fail quietly. There are no
+notifications while Codex is closed and no automatic installation.
+
+Say **Update Flockbot** to follow this guide using a newer matching published prompt. Preserve
 the shared browser connection, restart/reload the assistant, and check status.
 Never run Forget as a repair step. Uninstalling a client plugin and explicitly
 forgetting a connection are separate actions.

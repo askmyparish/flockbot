@@ -195,3 +195,9 @@ Login success is a prerequisite, not completion of the original task. Resume
 read-only work after `ready`; never automatically repeat a write whose outcome is
 unknown. Real desktop/TUI conversation continuation still needs manual host
 verification; fixture-backed MCP calls do not prove model behavior.
+
+Update notices appear in normal tool results when a cached public release check
+finds a newer matching version. Say **Update Flockbot** to use the same guide-based
+update flow while retaining sign-in. Checks run at most daily during use, tolerate
+network failures quietly and never delay the parish operation for the network.
+See [update notices](setup.md#update-notices) for timing and release selection.
