@@ -1,0 +1,18 @@
+{
+  "name": "flockbot-macos",
+  "version": "0.2.0",
+  "description": "Unofficial Flocknote tools using a dedicated local browser session. Apple silicon Mac candidate.",
+  "author": {
+    "name": "Flockbot contributors"
+  },
+  "license": "MIT",
+  "requires_local_executor": true,
+  "onboardingSkill": "./skills/setup/SKILL.md",
+  "interface": {
+    "displayName": "Flockbot for macos",
+    "shortDescription": "Flocknote parish tools with local browser sign-in",
+    "category": "Productivity"
+  },
+  "mcpServers": "./.mcp.json",
+  "skills": "./skills/"
+}

@@ -1,0 +1,177 @@
+# Codex MCP candidate
+
+Flockbot exposes defined Flocknote operations to local Codex through a dedicated
+persistent Chromium profile. Staff sign in on Flocknote's real website. The
+browser owns authentication and cookies; ordinary tools make internal API requests
+without screenshots, mouse/keyboard automation, password collection or cookie
+exports.
+
+**Private candidate, not a supported release.** Offline unit/MCP tests and the
+opt-in real-browser fixture checks pass. Authorized test-parish sign-in, session
+reuse, group discovery and subscriber counts passed with the installed macOS
+runtime. Explicitly requested live member additions also returned confirmed
+success. Locked/denied credential-store behavior, clean Codex desktop onboarding
+and Windows execution still need verification. No GitHub runtime release has been
+published by these changes.
+
+## Tools
+
+| Tool | Behavior |
+| --- | --- |
+| `flocknote_status` | Report saved readiness or pending/required setup without a live request |
+| `flocknote_connect` | Open real Flocknote sign-in for a parish subdomain |
+| `flocknote_groups` | Return group identifiers, names and Everyone status; optional `refresh` |
+| `flocknote_subscriber_count` | Fetch a current count without member records |
+| `flocknote_add_member` | Add once by `groupId` or case-insensitive unique `groupName`; return only success |
+
+The MCP server publishes input schemas and workflow instructions. It offers no raw
+HTTP, arbitrary URL, script evaluation, credential or browser-inspection tool.
+Membership writes are never automatically repeated. A failure after possible
+submission reports `outcome: unknown`; check Flocknote before deciding to
+resubmit.
+
+Ordinary operations trust the saved session and make no preliminary authentication
+request. Status reports saved readiness without opening a browser; `ready` means
+sign-in previously completed, rather than a fresh live check. When a group name is
+known, pass it directly to the addition tool; only missing or ambiguous names need
+a separate group-list request. Discovery is cached for 60 seconds per connection;
+`flocknote_groups({refresh: true})` bypasses that cache. Modern discovery overlaps
+its independent navigation/metadata reads and drains both before releasing
+coordination, including on failure. Counts are always fresh. A warm addition by
+known ID or cached group name makes only its membership POST; cached group
+discovery makes no HTTP request. Reconnect, browser replacement, forgetting and
+operation errors clear discovery. A cached group does not guarantee current
+permission; Flocknote still authorizes the membership POST.
+
+An actual HTTP 401/403, redirect, explicit `authorized: false`, or unexpected HTML
+where a domain response is required can indicate expired authentication. Only
+after such a failure does the connector make one `user/userData` request to
+distinguish confirmed expiry from permission or response errors. Confirmed expiry
+pauses the connection for manual sign-in. An inconclusive check preserves the
+original error and readiness. Business rejections, malformed JSON/domain values,
+network failures and timeouts do not trigger an authentication probe. No failed
+operation is automatically replayed, including a POST rejected for auth reasons;
+its write outcome remains unknown after possible submission.
+
+## Develop and verify
+
+Use Node.js 22.13+ and `bin/setup` for development.
+
+```sh
+npm run build:mcp
+npm run check
+npm run test:mcp:browser
+```
+
+The last command requires the pinned browser runtime. Install it explicitly once:
+
+```sh
+PLAYWRIGHT_BROWSERS_PATH="$PWD/adapters/mcp/.cache/browsers" node node_modules/playwright/cli.js install chromium --no-shell
+```
+
+That test intercepts every page/API request, uses fictional identities and session
+cookies, disables browser DNS, and never contacts Flocknote. Its temporary
+profiles use Playwright's test-only credential settings so tests don't access a
+real OS secret store. Ordinary `npm test` skips this opt-in check and downloads
+nothing.
+
+Build the prepared Codex runtime bundles and refresh the source plugins' integrity
+pins with:
+
+```sh
+npm run package:codex
+```
+
+This explicitly downloads checksum-pinned official Node runtimes and writes
+ignored ZIPs under `adapters/mcp/artifacts/codex`. It does not publish or register
+anything. The source plugins pin those exact archives; rerun packaging after
+runtime changes before publishing the matching version's release. Do not
+replace an existing release's immutable assets; bump the version and pins for
+later releases. The [release runbook](./releases.md) describes Changesets release
+PRs, CI preview artifacts, tagged releases and build provenance. Publication uses
+`npm run package:codex -- --verify-pins` to check reviewed pins without rewriting them.
+
+See [setup and distribution](./setup.md) and the [browser verification
+checklist](./browser-verification.md).
+
+## Browser and storage boundary
+
+The browser profile lives beneath this OS user's normal Flockbot application-data
+folder, outside plugin caches and immutable downloaded runtimes. On macOS the
+parent folders are owner-only; Windows uses the current user's local application
+data. The browser profile is sensitive, including cookies, local storage and
+history. Not every browser file is encrypted. Keep it on a local, user-owned disk,
+out of repositories, synced folders, backups shared with others, and diagnostic
+uploads. Browser-native credential protection is retained: production removes
+Playwright's basic-password-store/mock-keychain defaults and enables Chromium's
+sandbox. Normal macOS sign-in and session reuse passed with these production
+settings; locked/denied credential-store behavior and Windows still need testing.
+
+A detached local owner holds a SQLite OS lock for its browser's whole lifetime.
+MCP processes send defined operations to that owner through private local IPC; an
+internal queue serializes sign-in, requests and forgetting. Cancellation does not
+release a running browser callback early. Process death releases the OS lock. The
+owner closes Chromium after five idle minutes; the next request starts it again
+using the saved profile. Closing a chat leaves the owner available for other local
+chats. There is no background membership queue or automatic write replay.
+
+Interactive sign-in tolerates inconclusive poll failures until its setup deadline.
+A definite permission failure, a closed browser, or a closed sign-in tab ends
+setup; status preserves a fixed `setupError` code and, for browser failures, a
+fixed `setupStage` when available. Failed setup status includes instructions to
+reconnect. A different login remains open for correction and is reported as
+`connection_changed` if the setup deadline expires. Tools called during sign-in
+report `connection_busy` promptly. Queue-wait deadlines also report busy, while
+caller cancellation remains `operation_cancelled`. The connection uses the same
+reused-session lifecycle in production and its lifecycle tests.
+
+On macOS the Unix socket and descriptor are owner-only. On Windows the descriptor
+is protected with current-user DPAPI. Requests and replies use HMAC authentication
+with an owner-specific key that never travels over IPC. Nonces reject replay; the
+owner rotates before its bounded replay ledger fills. The descriptor contains the
+socket/pipe address, protocol/runtime identifiers and this IPC key, never a
+Flocknote credential. Windows execution remains unverified. Connection metadata
+contains only a parish, opaque generation, internal login identifier, readiness
+state and optional fixed setup diagnostic code/stage. Parish replacement requires explicitly forgetting the old connection. The
+original login is checked during sign-in and auth-failure diagnostics; the
+dedicated profile is trusted between those checks. Closing or expiring sign-in
+leaves `action_required`; abandoned pending metadata is detected on the next
+status check.
+
+The owner starts Chromium on demand and reuses it across operations and MCP
+processes. Each parish operation performs its bounded endpoint request(s) using
+the saved session. `user/userData` is used during sign-in and to diagnose
+auth-like failures. Interactive setup keeps the authenticated browser available
+and minimizes its request window where supported; later cold starts are headless.
+A session-only cookie is retained through Chromium's session-restore mechanism.
+Before clean shutdown, the request page is moved to `about:blank`, so restoration
+does not navigate to Flocknote before interception is attached. API requests use a
+locally fulfilled inert page at the selected parish origin. They reject redirects,
+bound response bodies, and return only validated domain results. Cookies rotate in
+the browser naturally; the shared HTTP client's staged-cookie persistence rules do
+not apply to this adapter. Group/count requests worked in the initial live check;
+actual session-expiry rules and notification/duplicate effects still need
+controlled checks. Authorized live membership POSTs succeeded with browser-native
+same-origin requests; no extra CSRF header or UI automation was used.
+
+No server-side session revocation or forensic deletion is promised by local
+forgetting. Code updates retain the separate profile. Browser-profile downgrade,
+synced disks, same-user malware isolation and signed-update continuity are not
+proven. Relevant tool results are sent to the assistant provider; local credential
+storage does not make parish data device-only.
+
+## Scope
+
+Shared resource modules live in `src/models`. The browser connection delegates
+network/group discovery, subscriber counts, contact validation, membership request
+construction and sign-in response parsing to those modules. It retains local
+profile/session lifecycle, coordination, authentication diagnostics and uncertain
+write handling. MCP tools retain their existing names, inputs and results.
+
+This MCP adapter uses the browser's authentication and session storage. The shared
+HTTP client and Zapier adapter retain their own authentication and storage contracts.
+Claude distribution is outside this Codex-first candidate.
+
+The [member-browsing discovery record](./discovery/member-browsing.md) documents
+sanitized observations for possible future tools; it does not expand the current
+connector's supported operations.

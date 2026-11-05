@@ -5,8 +5,10 @@ through its internal API.
 
 The TypeScript port supports password login, saved sessions, coordinated recovery,
 group discovery, subscriber counts, member additions, and HTTP requests. A private
-Zapier candidate is available for offline development; MCP support
-is still coming. The Ruby gem remains available during the move.
+Zapier candidate is available for offline development. A private
+[Codex MCP candidate](./docs/mcp/README.md) uses a dedicated local browser session
+with test-parish sign-in, read operations and explicitly requested membership
+additions verified on macOS. It remains a private candidate. The Ruby gem remains available during the move.
 
 ## TypeScript development
 
@@ -244,6 +246,12 @@ Provide first and last names and at least one contact method. The client checks
 the session before submitting and returns only confirmed success. A submitted
 write is never automatically repeated; preserve an error's `outcome` in adapters.
 
+Name-based selection in the browser connector requires a unique case-insensitive
+match after trimming surrounding whitespace. It never picks between groups whose
+names differ only by case. `group_not_found` means no match and `group_ambiguous`
+means multiple matches; select an explicit group ID to resolve ambiguity. Both
+fail before membership submission and report `outcome: "not_submitted"`.
+
 <details>
 <summary>Member inputs, failures, and retry limits</summary>
 
@@ -376,6 +384,20 @@ data, so adapters must protect access to their error reports. These diagnostics
 never change the write outcome, infer an email-validation rule, or permit replay.
 
 </details>
+
+### Private Codex MCP candidate
+
+The [Codex MCP candidate](./docs/mcp/README.md) exposes group discovery, subscriber
+counts and member additions through a dedicated local browser session. Staff sign
+in directly on Flocknote's website; credentials and cookies stay outside chat.
+`npm run check` builds/tests its stdio contract and packaging offline. The opt-in
+`npm run test:mcp:browser` uses real Chromium with intercepted fictional responses.
+Initial live sign-in, session reuse, group discovery and counts passed on macOS.
+Explicitly requested live member additions also returned confirmed success.
+The local browser owner is shared across MCP sessions, and additions can resolve
+a case-insensitive unique group name within one call. Locked/denied credential-store behavior,
+Windows execution and clean staff installation remain unverified.
+See [setup and distribution](./docs/mcp/setup.md).
 
 ### Private Zapier candidate
 

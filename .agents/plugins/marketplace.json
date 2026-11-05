@@ -1,0 +1,32 @@
+{
+  "name": "flockbot",
+  "interface": {
+    "displayName": "Flockbot"
+  },
+  "plugins": [
+    {
+      "name": "flockbot-macos",
+      "source": {
+        "source": "local",
+        "path": "./plugins/flockbot-macos"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "flockbot-windows",
+      "source": {
+        "source": "local",
+        "path": "./plugins/flockbot-windows"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
