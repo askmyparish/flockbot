@@ -27,6 +27,9 @@ export async function bundleBrowser(out = "adapters/mcp/dist/browser") {
     });
   }
   await cp("scripts/mcp/setup-browser.mjs", join(out, "setup-browser.mjs"));
+  for (const name of ["install-core.mjs", "install-lock.sh"]) {
+    await cp(join("scripts/mcp/installer", name), join(out, name));
+  }
   await writeFile(
     join(out, "package.json"),
     `${JSON.stringify({ name: "flockbot-local-runtime", version: CODEX_VERSION, private: true, type: "module" })}\n`,
