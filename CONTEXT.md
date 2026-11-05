@@ -25,8 +25,12 @@ _Avoid_: Password reset when referring to a one-time login code
 **Group**:
 A named collection of members within a parish network to which communications can be addressed.
 
+**User**:
+A person associated with, or intended to join, a Flocknote parish network, distinct from the Flocknote login used to authenticate an integration. Supplied contact details alone do not establish that an existing parish record has been identified or created.
+_Avoid_: Login or account when referring to the person represented in parish records
+
 **Group membership**:
-A member's inclusion in a particular Flocknote group.
+A relationship linking a user to a particular Flocknote group, with preferences and roles when established. A requested membership remains an intent until Flocknote confirms the addition.
 _Avoid_: Group participation when describing the domain concept
 
 **Test parish**:

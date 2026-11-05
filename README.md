@@ -35,6 +35,31 @@ bin/test -t "reuses cookies"
 
 </details>
 
+### Resource models
+
+The shared resource models live in `src/models`: `Network` owns group discovery
+and name resolution; `Group` owns group details and subscriber counts;
+`GroupMembership` owns validated additions; `User` snapshots contact input; and
+`FlocknoteLogin` classifies verified sign-in identity. Creating a model performs
+no network request. A contact snapshot does not establish an upstream user ID or
+prove that a contact was created or updated. A `GroupMembership` instance describes
+a prepared addition; confirmed upstream inclusion, roles and preferences require
+the corresponding API result. Neither constructor proves an existing record.
+
+Adapters supply requests within their own session, deadline and coordination
+boundary. The HTTP client retains staged cookie persistence and bounded password
+recovery; the browser adapter retains browser-owned cookies and failure-driven
+authentication checks. Model code imports neither adapter nor MCP/browser APIs.
+Notes, households and other resources will gain implementations as their contracts
+are established; no speculative resource classes are provided.
+
+`Network` and `GroupMembership` expose `ResourceRead`, `MembershipExecutor` and
+`MembershipRequest` through the package root for adapter authors. Obtain `Group`
+instances through `client.groups()`; its exported type describes those instances.
+Contact fields use explicit getters and stay out of object spreading, enumeration,
+default inspection and JSON output. Reading getters or constructing a membership
+request explicitly exposes contact data to the caller; keep those values private.
+
 ### Use a saved session
 
 The package is private and unpublished for now. After building, import it from
@@ -206,6 +231,9 @@ await client.addMember("101", {
   // Or mobilePhone: "+1 (202) 555-0123", or both.
 }); // { success: true }
 ```
+
+An obtained group also exposes `group.addMember(member, { signal })`, using the
+same coordinated addition and write-outcome rules as `client.addMember`.
 
 Provide first and last names and at least one contact method. The client checks
 the session before submitting and returns only confirmed success. A submitted

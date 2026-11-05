@@ -8,8 +8,8 @@ import {
   type Transport,
 } from "../../../src/index.js";
 import { failureSummary, type MembershipFailure } from "./failures.js";
-import { membershipRequest } from "../../../src/members.js";
-import { identifier } from "../../../src/groups.js";
+import { membershipRequest } from "../../../src/models/group-membership.js";
+import { identifier } from "../../../src/models/identifier.js";
 import {
   createReadExecution,
   mappedError,

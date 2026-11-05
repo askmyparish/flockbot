@@ -26,7 +26,8 @@
     "build": "tsc && npm run build:zapier",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build && npm run test:package",
     "test:package": "node scripts/check-package.mjs && node scripts/zapier/check-package.mjs",
-    "build:zapier": "node scripts/zapier/build.mjs"
+    "build:zapier": "node scripts/zapier/build.mjs",
+    "prebuild": "node scripts/clean-build.mjs"
   },
   "dependencies": {
     "parse5": "7.3.0",

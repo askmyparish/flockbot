@@ -1,23 +1,34 @@
+import { FlockbotError } from "./errors.js";
+export { FlockbotError, type ErrorCode } from "./errors.js";
+import { Group } from "./models/group.js";
+import { Network } from "./models/network.js";
+import { FlocknoteLogin } from "./models/flocknote-login.js";
 import {
-  Group,
-  dashboardGroups,
-  navigationGroups,
-  subscriberCount,
-} from "./groups.js";
-import {
-  membershipRequest,
-  confirmedMembership,
+  GroupMembership,
   type MemberInput,
   type AddMemberResult,
-} from "./members.js";
-export type { MemberInput, AddMemberResult } from "./members.js";
+} from "./models/group-membership.js";
+export { Network } from "./models/network.js";
+export { User, type UserInput } from "./models/user.js";
+export { GroupMembership } from "./models/group-membership.js";
+export { FlocknoteLogin } from "./models/flocknote-login.js";
+export type { Group } from "./models/group.js";
+export type { ResourceRead } from "./models/resource-read.js";
 export type {
-  Group,
+  MembershipExecutor,
+  MembershipRequest,
+} from "./models/group-membership.js";
+import { User } from "./models/user.js";
+export type {
+  MemberInput,
+  AddMemberResult,
+} from "./models/group-membership.js";
+export type {
   GroupAttributes,
   SubscriberCountOptions,
-} from "./groups.js";
+} from "./models/group.js";
 import { Cookie, CookieJar } from "tough-cookie";
-import { upstreamResponse, type UpstreamResponse } from "./rejections.js";
+import { upstreamResponse } from "./rejections.js";
 export { upstreamResponse } from "./rejections.js";
 export type { UpstreamResponse } from "./rejections.js";
 import {
@@ -101,67 +112,6 @@ export type Transport = (
   request: TransportRequest,
 ) => Promise<TransportResponse>;
 
-export type ErrorCode =
-  | "coordination_failed"
-  | "operation_failed"
-  | "stale_session_state"
-  | "operation_timeout"
-  | "operation_cancelled"
-  | "request_not_sent"
-  | "write_outcome_unknown"
-  | "permission_denied"
-  | "invalid_configuration"
-  | "invalid_path"
-  | "invalid_input"
-  | "session_load_failed"
-  | "invalid_session_state"
-  | "session_save_failed"
-  | "session_clear_failed"
-  | "transport_failed"
-  | "redirect_rejected"
-  | "invalid_response"
-  | "upstream_rejected"
-  | "credentials_unavailable"
-  | "credentials_rejected"
-  | "authentication_required"
-  | "action_required"
-  | "authentication_unavailable"
-  | "authentication_protocol_error";
-
-export class FlockbotError extends Error {
-  readonly code: ErrorCode;
-  readonly status?: number;
-  readonly outcome: "not_submitted" | "unknown" | undefined;
-  readonly response?: UpstreamResponse;
-
-  constructor(
-    code: ErrorCode,
-    status?: number,
-    outcome?: "not_submitted" | "unknown",
-    response?: UpstreamResponse,
-  ) {
-    super(`Flockbot request failed (${code}).`);
-    this.name = "FlockbotError";
-    this.code = code;
-    this.outcome =
-      outcome ??
-      (code === "write_outcome_unknown"
-        ? "unknown"
-        : code === "request_not_sent"
-          ? "not_submitted"
-          : undefined);
-    if (
-      typeof status === "number" &&
-      Number.isInteger(status) &&
-      status >= 100 &&
-      status <= 599
-    )
-      this.status = status;
-    const safeResponse = upstreamResponse(response);
-    if (safeResponse) this.response = safeResponse;
-  }
-}
-
 export interface ClientOptions {
   readonly subdomain: string;
   readonly sessionStore: SessionStore;
@@ -194,17 +144,6 @@ export const fetchTransport: Transport = async (request) => {
     body: await response.text(),
   };
 };
-
-function parishOrigin(subdomain: string): string {
-  if (
-    typeof subdomain !== "string" ||
-    subdomain.length > 63 ||
-    !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(subdomain)
-  ) {
-    throw new FlockbotError("invalid_configuration");
-  }
-  return `https://${subdomain.toLowerCase()}.flocknote.com`;
-}
 
 function endpoint(origin: string, path: string): string {
   // Endpoints are paths, never URLs, queries, fragments, or encoded separators.
@@ -304,7 +243,7 @@ export function sessionFromToken(
   subdomain: string,
   token: string,
 ): SessionState {
-  const origin = parishOrigin(subdomain);
+  const origin = new Network(subdomain).origin;
   if (
     typeof token !== "string" ||
     !/^[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]+$/.test(token)
@@ -322,8 +261,15 @@ interface Connection {
   revision: string;
 }
 
+/**
+ * HTTP client binding shared resource models to protected session persistence.
+ * Owns coordinated requests, staged cookie rotations, bounded password recovery
+ * and uncertain-write handling. Adapters supply storage, coordination and optional
+ * credentials/transport; resource models remain independent of those mechanisms.
+ */
 export class FlockbotClient {
   readonly #origin: string;
+  readonly #network: Network;
   readonly #store: SessionStore;
   readonly #transport: Transport;
   readonly #credentials: CredentialProvider | undefined;
@@ -334,7 +280,8 @@ export class FlockbotClient {
   #pending: { state: SessionState; baseRevision: string } | undefined;
 
   constructor(options: ClientOptions) {
-    this.#origin = parishOrigin(options.subdomain);
+    this.#network = new Network(options.subdomain);
+    this.#origin = this.#network.origin;
     this.#store = options.sessionStore;
     this.#transport = options.transport ?? fetchTransport;
     this.#credentials = options.credentialProvider;
@@ -687,25 +634,22 @@ export class FlockbotClient {
 
   /** Verify/recover once, then discover groups within one coordinated operation. */
   groups(options: OperationOptions = {}): Promise<readonly Group[]> {
-    return this.#readOperation(options, async (read, verify) => {
+    return this.#readOperation(options, async (read, verify, check) => {
       await verify();
-      let attributes = dashboardGroups(await read("dashboard"));
-      if (attributes === null) {
-        const navigation = await read("navigation/groups");
-        attributes = navigationGroups(
-          navigation,
-          await read("network/getMetadata"),
-        );
-      }
+      const attributes = await this.#network.discoverGroups({ read, check });
       return attributes.map(
         (attributes) =>
-          new Group(attributes, (options) =>
-            this.#readOperation(options, async (read, verify) => {
-              await verify();
-              return subscriberCount(
-                await read(`group/${attributes.id}/getSubscriberCount`),
-              );
-            }),
+          new Group(
+            attributes,
+            (options) =>
+              this.#readOperation(options, async (read, verify, check) => {
+                await verify();
+                return Group.readSubscriberCount(
+                  { read, check },
+                  attributes.id,
+                );
+              }),
+            (user, options) => this.addMember(attributes.id, user, options),
           ),
       );
     });
@@ -724,18 +668,9 @@ export class FlockbotClient {
     member: MemberInput,
     options: OperationOptions = {},
   ): Promise<AddMemberResult> {
-    let request: { path: string; body: string };
-    try {
-      request = membershipRequest(groupId, member);
-    } catch {
-      throw new FlockbotError("invalid_input", undefined, "not_submitted");
-    }
-    return this.#postOperation(
-      request.path,
-      request.body,
-      options,
-      confirmedMembership,
-      true,
+    const membership = new GroupMembership(groupId, new User(member));
+    return membership.add((request, parse) =>
+      this.#postOperation(request.path, request.body, options, parse, true),
     );
   }
 
@@ -744,6 +679,7 @@ export class FlockbotClient {
     work: (
       read: (path: string) => Promise<unknown>,
       verify: () => Promise<void>,
+      check: () => void,
     ) => Promise<T>,
   ): Promise<T> {
     return this.#exclusive(options, async (op) => {
@@ -791,7 +727,7 @@ export class FlockbotClient {
         // A later domain read must not discard an already-verified rotation.
         await this.#persist(connection, op);
       };
-      const result = await work(read, verify);
+      const result = await work(read, verify, () => op.check());
       await this.#persist(connection, op);
       return result;
     });
@@ -978,22 +914,7 @@ export class FlockbotClient {
       throw new FlockbotError("invalid_response");
     }
     if (path.replace(/^\//, "") === "user/userData") {
-      const record = authenticationRecord(data);
-      if (record.authorized === false && record.userID === null)
-        throw new FlockbotError("authentication_required");
-      if (
-        record.authorized === false &&
-        typeof record.userID === "number" &&
-        record.userID > 0
-      )
-        throw new FlockbotError("permission_denied");
-      if (
-        record.authorized === false ||
-        typeof record.userID !== "number" ||
-        !Number.isSafeInteger(record.userID) ||
-        record.userID <= 0
-      )
-        throw new FlockbotError("authentication_protocol_error");
+      FlocknoteLogin.fromResponse(data);
     }
     if (
       typeof data === "object" &&

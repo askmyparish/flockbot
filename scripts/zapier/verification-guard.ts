@@ -3,8 +3,8 @@ import {
   type AddMemberResult,
   type MemberInput,
 } from "../../src/index.js";
-import { identifier } from "../../src/groups.js";
-import { membershipRequest } from "../../src/members.js";
+import { identifier } from "../../src/models/identifier.js";
+import { membershipRequest } from "../../src/models/group-membership.js";
 
 export const LIVE_VERIFICATION_CONSENT = "authorize-isolated-test-parish-run";
 

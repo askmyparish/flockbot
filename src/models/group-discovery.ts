@@ -1,74 +1,9 @@
 import { parse, type DefaultTreeAdapterMap } from "parse5";
-import { FlockbotError, type OperationOptions } from "./index.js";
-
+import { invalidResponse as invalid, record, text } from "./parsing.js";
+import { identifier } from "./identifier.js";
+import type { GroupAttributes } from "./group.js";
 type Node = DefaultTreeAdapterMap["node"];
 type Element = DefaultTreeAdapterMap["element"];
-export interface GroupAttributes {
-  readonly id: string;
-  readonly name: string;
-  readonly shortName: string;
-  readonly isEveryone: boolean;
-}
-export interface SubscriberCountOptions extends OperationOptions {
-  readonly force?: boolean;
-}
-
-/** Obtained from client.groups(); its count cache lives only on this object. */
-export class Group implements GroupAttributes {
-  readonly id: string;
-  readonly name: string;
-  readonly shortName: string;
-  readonly isEveryone: boolean;
-  readonly #readCount: (options: OperationOptions) => Promise<number>;
-  #count: number | undefined;
-
-  constructor(
-    attributes: GroupAttributes,
-    readCount: (options: OperationOptions) => Promise<number>,
-  ) {
-    this.id = attributes.id;
-    this.name = attributes.name;
-    this.shortName = attributes.shortName;
-    this.isEveryone = attributes.isEveryone;
-    this.#readCount = readCount;
-    Object.freeze(this);
-  }
-
-  async subscriberCount(options: SubscriberCountOptions = {}): Promise<number> {
-    if (options.signal?.aborted) throw new FlockbotError("operation_cancelled");
-    if (this.#count !== undefined && !options.force) return this.#count;
-    const count = await this.#readCount(options);
-    this.#count = count;
-    return count;
-  }
-}
-
-function invalid(): never {
-  throw new FlockbotError("invalid_response");
-}
-function record(value: unknown): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value))
-    return invalid();
-  return value as Record<string, unknown>;
-}
-function text(value: unknown): string {
-  if (typeof value !== "string" || !value.trim()) return invalid();
-  return value.trim();
-}
-/** Decimal strings stay strings; never round an upstream identifier via Number. */
-export function identifier(value: unknown): string {
-  if (typeof value === "number") {
-    if (!Number.isSafeInteger(value) || value <= 0) return invalid();
-    return String(value);
-  }
-  const id = text(value);
-  if (!/^[a-zA-Z0-9_-]+$/.test(id)) return invalid();
-  if (/^\d+$/.test(id)) {
-    const normalized = id.replace(/^0+/, "");
-    return normalized || invalid();
-  }
-  return id;
-}
 function group(
   id: unknown,
   name: unknown,
@@ -163,17 +98,4 @@ function deduplicate(groups: GroupAttributes[]): GroupAttributes[] {
     if (item.isEveryone) hasEveryone = true;
     return true;
   });
-}
-
-export function subscriberCount(value: unknown): number {
-  const count = record(value).subscriberCount;
-  if (typeof count === "number") {
-    if (Number.isSafeInteger(count) && count >= 0) return count;
-    return invalid();
-  }
-  if (typeof count !== "string" || !/^\d+$/.test(count.trim()))
-    return invalid();
-  const parsed = Number(count.trim());
-  if (!Number.isSafeInteger(parsed)) return invalid();
-  return parsed;
 }
