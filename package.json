@@ -34,7 +34,8 @@
     "changeset": "changeset",
     "release:sync": "node scripts/mcp/sync-version.mjs",
     "release:check": "node scripts/mcp/sync-version.mjs --check",
-    "release:version": "changeset version && npm run release:sync && npm install --package-lock-only --ignore-scripts && npm run format && npm run package:codex"
+    "release:version": "changeset version && npm run release:sync && npm install --package-lock-only --ignore-scripts && npm run format && npm run package:codex",
+    "check:setup-package": "node scripts/mcp/check-setup-package.mjs"
   },
   "dependencies": {
     "parse5": "7.3.0",

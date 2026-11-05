@@ -48,11 +48,15 @@ jobs:
           else
             npm run package:codex
           fi
+      - name: Audit setup artifacts
+        run: npm run check:setup-package
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: codex-preview-${{ github.sha }}
           path: |
-            adapters/mcp/artifacts/codex/*.zip
+            adapters/mcp/artifacts/codex/flockbot-codex-*.zip
+            adapters/mcp/artifacts/codex/flockbot-setup-*.zip
+            adapters/mcp/artifacts/codex/flockbot-setup-*.md
             adapters/mcp/artifacts/codex/SHA256SUMS
             adapters/mcp/artifacts/codex/artifacts.json
           if-no-files-found: error

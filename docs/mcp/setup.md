@@ -1,80 +1,170 @@
-# Codex setup and GitHub distribution
+# Local setup and updates
 
-This candidate targets local Codex on macOS Apple silicon first. A separate
-Windows x64 plugin is packaged but has not been executed on Windows. It is
-unofficial and uses each OS user's own Flocknote login and dedicated browser
-profile.
+Start with [guide.md](../../guide.md): copy its short prompt into a local desktop
+Codex host with local plugin support (such as Codex in the ChatGPT desktop app)
+or Codex terminal session. Other desktop assistants are not supported; stop before
+preparing files if the host lacks local Codex plugins. The assistant follows the matching published
+release prompt and prepares Flockbot. No graphical Flockbot app is installed.
 
-## Staff workflow after a release is available
+Flockbot is an unofficial, independent connector by
+[AskMyParish](https://askmyparish.com). It is not affiliated with, endorsed by or
+supported by Flocknote. Automated guided setup targets macOS Apple silicon.
+Windows remains experimental and unverified. A web-only chat cannot execute this
+local connector. Sign-in happens on Flocknote’s website in a local browser.
 
-1. Add the Flockbot GitHub plugin source using the published setup prompt, or have
-   the workspace administrator configure it. The repository catalog contains a Mac
-   plugin and a Windows plugin. No public directory listing is needed.
-2. Install the plugin for this computer and run its setup skill in local Codex.
-3. Approve required host/OS permissions. The setup script downloads a prepared
-   Node/connector bundle, verifies its pinned SHA-256 digest, and installs that
-   bundle's pinned Chromium. Staff don't install Node, npm or Git separately.
-4. Restart the MCP connection or start a new Codex conversation when instructed.
-5. Ask to connect Flocknote and supply the parish subdomain. Sign in on Flocknote's
-   real website and finish any authentication code there. No login detail belongs
-   in chat, plugin configuration or setup-script arguments.
-6. Ask Codex to check the connection, then list groups or perform a requested task.
+## Published setup prompt
 
-GitHub distribution does not enable hosted web-only execution. The local connector
-and browser must run on the staff member's computer. Do not bypass macOS trust
-warnings, Windows execution policy or organization restrictions.
+Use `flockbot-setup-<version>-darwin-arm64.md` from the chosen `mcp-v<version>`
+GitHub release. The guide explains how an assistant finds that exact published
+asset. If no matching release is published, stop: a generated preview prompt does
+not make its download URL live. Never substitute `main`, another executable URL
+or an unverified archive after a failed download.
 
-The intended setup prompt is:
+The versioned prompt downloads a fixed setup ZIP into a fresh temporary directory,
+verifies its SHA-256, then extracts and runs it. It never pipes downloads into a
+shell. Downloads and initial browser preparation need internet access. Respect
+normal host/OS approvals and organization policy.
 
-> Set up Flockbot from askmyparish/flockbot using its published Codex setup instructions. Install the plugin for this computer, run its setup, and help me sign in to Flocknote. Keep passwords and authentication codes out of this conversation.
+- **Desktop:** `install.sh --route desktop` prepares the runtime and personal
+  plugin source without requiring or discovering a separate Codex CLI. The
+  bounded result includes `pluginPageUrl`, a
+  `codex://plugins/flockbot-macos?marketplacePath=<encoded-absolute-catalog-path>`
+  link. The assistant may open that URL under normal approvals or show an
+  **Install Flockbot** link; the user confirms **Install** in the app. If the page
+  or plugin is unavailable, quit and reopen the assistant and retry, or use
+  **Plugins → Personal plugins** (or the source’s existing name) → **Flockbot → Install**.
+  Restart after an update if already installed. Start a new chat and ask **Set up Flockbot**.
+- **Terminal:** the prompt’s permitted `--route tui` variant registers that same
+  source through the supported `codex` CLI on PATH. Start a new session/reload
+  the MCP connection, then run the installed Flockbot setup skill. Missing or
+  unsupported CLI is actionable failure; prepared files/connection are kept.
 
-This is a target workflow requiring clean-desktop verification, not a promise that
-any chat can install an arbitrary GitHub URL. A local setup task needs authorized
-file/command access, and the source must be registered before its plugin can be
-selected.
+Both routes use one source identity, immutable versioned runtime and separate
+per-user browser connection. Desktop preparation reports host installation as
+pending; the core does not open URLs, install a plugin or send a message.
+The guide directs the assistant to request the local plugin page afterward.
+First-time discovery may still need a restart; the link is not a silent install. This host
+handoff still needs real desktop/clean-machine verification.
 
-## Current local checkout checks
+Setup uses Mac system `/bin/bash`, `curl`, `shasum`, `unzip` and `/usr/bin/lockf`
+with descriptor support. Node is included in the pinned runtime, so users do not
+install global Node, npm or Git. Do not locate private app-bundled CLIs or edit
+TOML. Minimum macOS/system-tool compatibility remains unverified.
 
-The source catalog is `.agents/plugins/marketplace.json`. The plugins use the
-supported `.codex-plugin/plugin.json` and `.mcp.json` compatibility format, which
-was verified with Codex CLI 0.166.0. Relative launch paths resolve from the
-installed plugin root. The newer portable manifest format was not loaded by that
-host. Once these files are published to a chosen Git ref, Codex can register that
-GitHub source. While the changes are local, use a checkout path instead:
+The setup ZIP contains `install.sh`, the matching plugin/assets and the pinned
+runtime ZIP. Repeating a compatible prompt retains the saved connection. There
+is no separate application, updater, Flockbot account or public marketplace
+listing requirement.
 
-```sh
-codex plugin marketplace add /path/to/flockbot
-codex plugin add flockbot-macos@flockbot
-# Or on Windows: codex plugin add flockbot-windows@flockbot
-```
+## What the setup result means
 
-Native commands are operator checks, not proof of the staff UI. Codex's current
-CLI calls installation `plugin add`; other client versions may expose a different
-UI. Use the installed plugin's onboarding skill rather than editing MCP config.
+The last stdout line is bounded JSON with `schema: 1`, `ok` and `remaining`.
+Successful setup includes source `version`, `requestedVersion`, `installedVersion`,
+marketplace/plugin identity, `sourceIdentity` and source/runtime/host/connection
+state. Refusals include only state already established safely: the validated
+requested version, trusted installed version when known, runtime preparation and
+source/connection state. Omitted fields are unknown; `host: not_checked` does not
+mean an existing host installation was removed. `source: retained` means the prior
+verified catalog source remains usable; `connection: unrecognized` means metadata
+could not establish a compatible saved state. No failure establishes readiness.
+Errors use fixed codes; raw Codex output, local paths, parish/login identifiers,
+cookies and broker keys are not returned. Runtime preparation diagnostics appear
+on stderr. `ok: true` means source preparation and, for the CLI route, the requested host command
+completed; `host: manual_install_required` on the desktop route means desktop
+installation has not been attempted; **host reload and checking the saved connection remain explicit work**.
 
-Before a GitHub release exists, a developer can provide a locally built bundle to
-the same setup script:
+| State or error | Next step |
+| --- | --- |
+| `source: prepared` / `reused` | The immutable owned plugin source is present; reuse leaves its catalog bytes and mtime alone |
+| `runtime: prepared` | This release's completed pinned runtime exists; this is not a browser/sign-in check |
+| `runtime: preparation_required` | Run the release's `install.sh`; invoking the source core alone does not prepare a runtime |
+| `host: manual_install_required` | Open Plugins → your personal source → Flockbot → Install, then restart; no CLI is needed for desktop |
+| `host: reload_required` | Start a new Codex session/restart the MCP connection; desktop may need an application restart |
+| `connection: saved_ready` | Sign-in previously completed; run `flocknote_status` after reload, not a fresh authentication probe |
+| `sign_in_required` / `sign_in_pending` | Complete the installed setup skill and local browser sign-in as needed |
+| `codex_missing` / `codex_unsupported` | Install/update the supported official CLI on PATH, then rerun the same release |
+| `codex_failed` / `host_source_conflict` | Resolve host permissions/policy or an existing conflicting source using Codex's supported commands, then rerun |
+| `malformed_data` / `duplicate_entry` / `ownership_conflict` | `repair_malformed_data` / `reconcile_ownership_conflict`: preserve the conflicting files; have an administrator reconcile the catalog/source or malformed host response before retrying |
+| `concurrent_edit` / `source_changed` | `finish_other_writer_then_retry` / `restore_verified_source`: finish the other edit or restore the changed source from verified release bytes before retrying; preserve the lock |
+| `downgrade_rejected` | `use_current_or_newer_release`: use the installed or newer compatible release; repeating the old prompt cannot work |
+| `version_collision` / `connection_incompatible` | `obtain_matching_release` / `use_compatible_release`: obtain the matching verified or compatible release; do not downgrade or reset the browser profile |
+| `runtime_preparation_failed` / `coordination_failed` / `installation_failed` | Resolve tool, permission, disk or interrupted-setup failure and rerun; readiness was not established |
 
-```sh
-bash plugins/flockbot-macos/setup.sh /path/to/flockbot-codex-0.2.0-darwin-arm64.zip
-```
+The `remaining` action on a refusal names the repair required before another
+attempt. A recoverable failure says retry only after resolving that cause. Never
+interpret an old prompt's version refusal as permission to reinstall that release.
 
-On Windows, the equivalent is `setup.ps1 -Bundle <archive>`. The archive must
-match the integrity pin in that plugin. `FLOCKBOT_INSTALL_ROOT` may point to a
-disposable runtime directory during isolated packaging checks; it never changes
-the browser connection's OS-user profile location.
+Once the host has reloaded, run the installed Flockbot setup skill. If sign-in is
+needed, supply only the parish subdomain, then sign in on Flocknote's real website
+and finish any code challenge there. Passwords, codes and cookies never belong in
+chat, prompts, configuration or shell arguments. `flocknote_status` reports saved
+readiness; ordinary tasks trust it until an authentication-like operation failure
+requires diagnosis. Never repeat a write whose outcome is unknown.
 
-Normal tool startup never downloads software: it uses a completed immutable
-runtime or reports that setup is needed. Incomplete downloads are not activated. A
-prepared runtime is addressed by version, platform and checksum, so updates do not
-overwrite a running installation. Browser binaries have a separate cache. The
-browser profile is outside both caches and survives plugin removal/updates.
-Compatible MCP clients reuse an existing local browser owner, including across a
-runtime update. Updated owner code takes effect after its five-minute idle exit.
-For immediate activation, run `setup.sh --stop` or `setup.ps1 -Stop` once setup
-completes. This drains current work and closes the browser without forgetting the
-connection; the next tool call starts the installed runtime. Restart older MCP
-clients as well so they use the updated tool schemas and instructions.
+## One owned personal source
+
+The core merges `~/.agents/plugins/marketplace.json` and preserves its existing
+name, unrelated plugins, unknown fields and file mode. A missing catalog uses
+`flockbot-personal`; commands always use the resolved name, never assume that
+default for an existing catalog. The one Mac plugin identity is `flockbot-macos`.
+Its source lives under `~/.flockbot/sources/<version>-<content-identity>` with a
+schema/version/compatibility ownership receipt and a matching catalog marker.
+Only exact owned source content is reused. Foreign or ambiguous entries, duplicate
+JSON keys/names, unsupported schemas, links and unexpected edits are refused.
+
+Source stages carry a bounded ownership sidecar, published by atomic rename and
+synced before the stage directory is created. The sidecar stays outside the stage
+until recursive cleanup and directory removal are complete and synced. Thus a
+crash before/during marker writing or after marker removal can be retried under
+the same lock. A valid intent with no stage is safely retired. Complete legacy
+markers are adopted into this protocol before cleanup; unmarked stages without a
+valid sidecar and malformed/foreign intents are preserved and refused. Partial
+intent temporary files outside the stages directory are preserved, never used as
+authority to remove a directory. Administrator reconciliation must account for
+these source-stage conflicts too; do not delete active lock/stage files.
+
+A process OS lock coordinates all core calls through the persistent
+`~/.flockbot-install.lock` inode. Child host commands inherit it, including if the
+calling process dies. Never remove this lock file. Only marked abandoned source
+stages are reclaimed. A complete source is activated before atomically replacing
+the catalog; prior versions are retained, so a failed host install or interrupted
+catalog update does not leave a pointer to deleted payload. Source and catalog
+checks detect unexpected content edits before activation; other editors should
+finish before setup and must not bypass the shared lock during its commit.
+
+Host registration/install uses only documented local commands:
+`codex plugin marketplace add <home> --json` and
+`codex plugin add flockbot-macos@<resolved-name> --json`. Supported list commands
+check for host source collisions first. An owned receipt under `~/.flockbot/hosts`
+records successful installation per Codex configuration directory; matching host
+list presence allows unchanged repeat/cross-route setup to skip installation. It
+does not prove a client has reloaded or authenticated. Host configuration belongs to Codex; the
+core never edits TOML, removes another marketplace or silently installs a second
+Flockbot identity from another source. A pre-existing checkout/Git marketplace
+installation must be reconciled explicitly in Codex if it conflicts. No Git
+checkout is needed for the released personal-source route.
+
+Reinstall with the same release or update using the newer release's fixed prompt.
+Updates switch the catalog to a new owned immutable source and retain the old
+source/runtime. Semantic version comparison includes prerelease ordering and
+rejects downgrades and different bytes claiming the same version. The current
+receipt contract is browser-v1, broker protocol 1 and Node 22; unsupported ownership
+or connection-metadata schemas fail without migration. Setup preserves the exact
+browser connection metadata and profile; it never opens the broker descriptor or
+reads browser session files. The runtime override `FLOCKBOT_INSTALL_ROOT` is for
+isolated checks and never changes the OS-user connection location.
+
+Compatible clients reuse the current browser owner after an update; it exits after
+five idle minutes. To activate owner changes immediately, use only the installed
+plugin's existing `setup.sh --stop`, then restart older MCP clients. This drains
+current work without forgetting the connection. The next tool starts the new
+owner. Do not delete browser files or call Forget to repair an update.
+
+Official behavior references: [plugin packaging and personal marketplaces](https://developers.openai.com/plugins/build/plugins),
+[CLI registration/install commands and JSON results](https://learn.chatgpt.com/docs/developer-commands?surface=cli),
+and [TUI plugin onboarding](https://developers.openai.com/learn/developers-codex-plugin).
+These document supported commands, not evidence of this candidate working in a
+real desktop or a clean staff environment.
 
 ## Reconnect, replace and remove
 
@@ -124,6 +214,45 @@ forget the old connection. The setup skill can then run `setup.sh --forget` or
 from ordinary MCP tools. Forgetting removes this connector's dedicated browser
 profile and connection metadata; it does not revoke the session at Flocknote or
 erase backups. Uninstalling a plugin alone leaves the separate local profile.
+
+## Removing the client plugin and retained source
+
+Use Codex's plugin UI or `codex plugin remove flockbot-macos@<resolved-name>` to
+remove that client's installed cache/config entry. It leaves the personal source,
+immutable runtimes and shared browser connection available to other contexts.
+The retained `~/.flockbot` source is owned by the shared setup core; do not delete it while a personal catalog
+entry or another context references it. This core intentionally does not garbage
+collect retained source versions or remove the personal catalog. Any later source
+cleanup must verify receipts and remove references before payloads. Forget is a
+separate explicit connection operation, described above, never an uninstall or
+repair prerequisite.
+
+## Troubleshooting setup
+
+- **Missing or unsupported desktop app:** install/update a host that supports local
+  Codex plugins through its official distribution; rerun the same release prompt.
+  Being able to run commands or having a URL handler alone does not establish
+  local Codex plugin support. Confirm the host before preparing files.
+- **Download, integrity or preparation failure:** check network, free disk space
+  and normal file permissions. Obtain the same verified release again if damaged.
+  No readiness was established. Never skip a checksum or OS trust decision.
+- **Denied access or organization policy:** ask your administrator to permit normal
+  local setup. Do not change security settings to make the candidate run.
+- **Interrupted setup:** wait for active preparation to stop and rerun the same
+  release prompt. Owned partial work is recovered by the shared core; keep lock files.
+- **Files prepared, plugin missing/old:** restart the desktop app, select the personal
+  source in Plugins and Install/update Flockbot. A link can fall back to Plugins;
+  follow the plugin-page and Plugins fallback steps above. Installation, reload and sign-in remain pending
+  until performed in the host. A source version is not a loaded-host version.
+- **Conflicting or unfamiliar settings:** keep the files and connection and ask an
+  administrator to reconcile them. Setup refuses ambiguous ownership and unknown
+  connection schemas rather than replacing them.
+
+Update using a newer matching published prompt from [guide.md](../../guide.md).
+Switching routes reuses the same source and preserves a compatible browser session.
+For an expired session, rerun the installed setup skill and sign in on Flocknote’s
+website. Use the desktop plugin UI to uninstall; see the separate explicit Forget
+procedure above only when intentionally replacing/removing the shared connection.
 
 ## Releases
 

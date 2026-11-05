@@ -1,5 +1,5 @@
-import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmod,
@@ -8,6 +8,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -15,9 +16,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { unzipSync } from "fflate";
-import { bundleBrowser, CODEX_VERSION } from "./browser-build.mjs";
 import { zipDirectory } from "./archive.mjs";
+import { bundleBrowser, CODEX_VERSION } from "./browser-build.mjs";
 import { syncVersions } from "./release-version.mjs";
+import { buildSetupRelease } from "./setup-release.mjs";
 
 const NODE_VERSION = (
   await readFile(new URL("../../.node-version", import.meta.url), "utf8")
@@ -55,6 +57,14 @@ const scratch = await mkdtemp(join(tmpdir(), "flockbot-codex-package-"));
 try {
   const out = resolve(values.out);
   await mkdir(out, { recursive: true });
+  // Retire only this project's old graphical outputs in a reused build folder.
+  for (const name of await readdir(out)) {
+    if (
+      /^flockbot-installer-[0-9A-Za-z.+-]+-darwin-arm64-dev\.zip$/.test(name) ||
+      /^flockbot-setup-[0-9A-Za-z.+-]+\.html$/.test(name)
+    )
+      await rm(join(out, name));
+  }
   const bundle = join(scratch, "browser");
   await bundleBrowser(bundle);
   const artifacts = [];
@@ -117,6 +127,16 @@ try {
     else await writeFile(pin, `${sha256}\n`);
     artifacts.push({ filename, sha256, target: name });
     console.log(`${sha256}  ${filename}`);
+    if (name === "darwin-arm64") {
+      artifacts.push(
+        ...(await buildSetupRelease({
+          stage: join(scratch, "setup"),
+          out,
+          version: CODEX_VERSION,
+          runtime: join(out, filename),
+        })),
+      );
+    }
   }
   await writeFile(
     join(out, "artifacts.json"),

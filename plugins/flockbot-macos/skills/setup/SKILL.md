@@ -5,7 +5,10 @@ description: Set up or reconnect the local Flockbot Flocknote connector. Use whe
 
 Flockbot is an unofficial independent connector published by AskMyParish.
 It is not affiliated with, endorsed by or supported by Flocknote. It uses this OS
-user's dedicated local browser profile.
+user's dedicated local browser profile. The guide-based desktop and TUI setup paths share one personal source and this
+same connection. For a guided reinstall/update use the exact published release's versioned setup prompt; do not
+choose an arbitrary executable URL or reset the connection. A new Codex session or
+MCP restart is required after installing/updating host plugin files.
 
 1. Resolve this installed plugin's directory from this skill's location (two parent directories). Run its `setup.sh` with `/bin/bash`. It downloads a checksum-pinned prepared runtime and installs its pinned Chromium. No Node, npm, Git or separate application installer is required from the user. Respect execution policy, OS and host permission prompts; never bypass trust controls.
 2. If the runtime was newly installed, ask the user to restart the MCP connection or start a new Codex conversation so its tools become available. Do not repeatedly reinstall to fix a connection that only needs restarting.

@@ -78,6 +78,8 @@ jobs:
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/flockbot-browsers
       - name: Rebuild both platforms and verify committed checksums
         run: npm run package:codex -- --verify-pins
+      - name: Audit guide-based setup artifacts
+        run: npm run check:setup-package
       - name: Attest the archive bytes built from the reviewed merge commit
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -86,7 +88,9 @@ jobs:
         with:
           name: mcp-release
           path: |
-            adapters/mcp/artifacts/codex/*.zip
+            adapters/mcp/artifacts/codex/flockbot-codex-*.zip
+            adapters/mcp/artifacts/codex/flockbot-setup-*.zip
+            adapters/mcp/artifacts/codex/flockbot-setup-*.md
             adapters/mcp/artifacts/codex/SHA256SUMS
             adapters/mcp/artifacts/codex/artifacts.json
             adapters/mcp/artifacts/codex/release-notes.md
@@ -138,7 +142,7 @@ jobs:
           RELEASE_TAG: ${{ needs.source.outputs.tag }}
           PRERELEASE: ${{ needs.source.outputs.prerelease }}
         run: |
-          gh release create "$RELEASE_TAG" *.zip SHA256SUMS artifacts.json --verify-tag --draft --title "Flockbot MCP $RELEASE_TAG" --notes-file release-notes.md
+          gh release create "$RELEASE_TAG" flockbot-codex-*.zip flockbot-setup-*.zip flockbot-setup-*.md SHA256SUMS artifacts.json --verify-tag --draft --title "Flockbot MCP $RELEASE_TAG" --notes-file release-notes.md
           if [[ "$PRERELEASE" == true ]]; then
             gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false
           else
