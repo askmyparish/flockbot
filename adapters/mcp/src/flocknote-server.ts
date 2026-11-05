@@ -1,0 +1,263 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+import { FlockbotError } from "../../../src/index.js";
+import type { BrowserConnection, BrowserStatus } from "./browser-connection.js";
+import { BrowserConnectionError } from "./browser-runtime.js";
+import { MCP_VERSION } from "./version.js";
+
+const INSTRUCTIONS =
+  "Use these tools for the user's Flocknote parish requests. Trust the saved session and call the requested tool directly; no preliminary status or authentication check is needed. " +
+  "If sign-in is needed, ask for the parish subdomain and call flocknote_connect; the user signs in on Flocknote's real website. " +
+  "Never request passwords, codes, cookies, browser storage, arbitrary URLs or scripts. " +
+  "For additions use a known groupId, or supply the user's groupName for a case-insensitive unique match to resolve it in the same call. List groups only when the choice is unclear. " +
+  "Add members only when requested, after resolving the parish, group and contact details. " +
+  "Never repeat a write with outcome unknown: tell the user to check Flocknote before deciding what to do.";
+
+const MESSAGES: Readonly<Record<string, string>> = {
+  not_configured:
+    "Ask for the parish subdomain, then open Flocknote sign-in with flocknote_connect.",
+  pending:
+    "Finish sign-in in the Flocknote browser window on this computer. When reconnecting, use the original Flocknote login; switch logins on the website if needed. Keep credentials and codes out of chat, then check flocknote_status.",
+  ready:
+    "The saved local Flocknote session is ready for use. Authentication is checked only after a relevant operation fails.",
+  action_required:
+    "Sign in again using flocknote_connect. Enter passwords and codes only on Flocknote's website.",
+  authentication_required:
+    "The session needs sign-in. Use flocknote_connect to open Flocknote on this computer.",
+  connection_changed:
+    "The selected parish or Flocknote login differs from the saved connection. Restore the original login in the sign-in window, or explicitly forget the old connection through local setup before replacing it.",
+  connection_busy:
+    "Another local Flockbot operation or sign-in is using the browser. Wait for it to finish.",
+  browser_unavailable:
+    "The dedicated browser could not be used. Check for browser or OS prompts, then retry from this computer's desktop. Run plugin setup if the browser runtime is missing.",
+  profile_unavailable:
+    "The local browser profile could not be accessed. Check this OS user's profile permissions.",
+  broker_unavailable:
+    "The local browser owner is unavailable. A later request can reconnect; never repeat a write with outcome unknown.",
+  group_not_found:
+    "No group matches that name (matching ignores case). List groups and select the intended identifier.",
+  group_ambiguous:
+    "More than one group has that name. List groups and select the intended identifier.",
+  permission_denied: "Flocknote denied access to this parish or operation.",
+  invalid_input:
+    "Check the group identifier, member names and contact details.",
+  invalid_configuration:
+    "Supply only the parish subdomain, such as example-parish.",
+  invalid_response:
+    "Flocknote returned an unexpected response. The operation could not be confirmed.",
+  authentication_protocol_error:
+    "Flocknote sign-in could not be verified from its response.",
+  redirect_rejected:
+    "Flocknote redirected the request. The operation was stopped.",
+  upstream_rejected: "Flocknote did not accept the request.",
+  transport_failed: "The Flocknote request could not be completed.",
+  operation_timeout: "The operation timed out.",
+  operation_cancelled: "The operation was cancelled.",
+  write_outcome_unknown:
+    "The write may have completed. Check Flocknote before deciding whether to submit it again.",
+};
+
+function statusMessage(status: BrowserStatus): string | undefined {
+  const diagnostic = status.setupError
+    ? MESSAGES[status.setupError]
+    : undefined;
+  return diagnostic && status.state === "action_required"
+    ? `${diagnostic} ${MESSAGES.action_required}`
+    : MESSAGES[status.state];
+}
+
+function result(body: Record<string, unknown>, isError = false) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(body) }],
+    structuredContent: body,
+    ...(isError ? { isError: true } : {}),
+  };
+}
+
+export type FlocknoteConnection = Pick<
+  BrowserConnection,
+  | "status"
+  | "connect"
+  | "groups"
+  | "count"
+  | "addMember"
+  | "addMemberByName"
+  | "close"
+>;
+
+export function createFlocknoteServer(connection: FlocknoteConnection) {
+  const server = new McpServer(
+    { name: "flockbot", version: MCP_VERSION },
+    { instructions: INSTRUCTIONS },
+  );
+  const guarded = async (work: () => Promise<Record<string, unknown>>) => {
+    try {
+      return result(await work());
+    } catch (error) {
+      const known =
+        error instanceof FlockbotError ||
+        error instanceof BrowserConnectionError;
+      const code =
+        known && MESSAGES[error.code] ? error.code : "connector_unavailable";
+      return result(
+        {
+          ok: false,
+          code,
+          message:
+            MESSAGES[code] ??
+            "The local connector could not complete the operation.",
+          ...(error instanceof BrowserConnectionError && error.stage
+            ? { stage: error.stage }
+            : {}),
+          ...(known && error.outcome ? { outcome: error.outcome } : {}),
+        },
+        true,
+      );
+    }
+  };
+  const groupId = z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^[A-Za-z0-9_-]+$/);
+  server.registerTool(
+    "flocknote_status",
+    {
+      title: "Check local Flocknote connection",
+      description:
+        "Report saved local connection state without opening a browser or making an authentication request. Use for connection questions or after sign-in; ordinary work needs no preliminary status call. Ready means sign-in previously completed, not a fresh live check.",
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async (extra) =>
+      guarded(async () => {
+        const status = await connection.status({ signal: extra.signal });
+        return {
+          ok: true,
+          ...status,
+          message: statusMessage(status),
+        };
+      }),
+  );
+  server.registerTool(
+    "flocknote_connect",
+    {
+      title: "Open Flocknote sign-in",
+      description:
+        "Use when the user wants to connect or reconnect their parish. Opens Flocknote's real website in a dedicated local browser. Returns pending; the user signs in privately, then call flocknote_status. Takes no login credentials.",
+      inputSchema: {
+        subdomain: z
+          .string()
+          .min(1)
+          .max(63)
+          .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({ subdomain }) =>
+      guarded(async () => {
+        const status = await connection.connect(subdomain);
+        return {
+          ok: true,
+          ...status,
+          message: statusMessage(status),
+        };
+      }),
+  );
+  server.registerTool(
+    "flocknote_groups",
+    {
+      title: "List parish groups",
+      description:
+        "Use when the group choice is unclear or to list parish groups. Reuses discovery for up to 60 seconds; refresh forces discovery. Trusts the saved session without a preflight check. Returns only identifiers, names and Everyone status.",
+      inputSchema: { refresh: z.boolean().optional() },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ refresh }, extra) =>
+      guarded(async () => ({
+        ok: true,
+        groups: await connection.groups({
+          signal: extra.signal,
+          ...(refresh === undefined ? {} : { refresh }),
+        }),
+      })),
+  );
+  server.registerTool(
+    "flocknote_subscriber_count",
+    {
+      title: "Count subscribers in a group",
+      description:
+        "Use when the user asks how many subscribers a selected group has. Supply its identifier from flocknote_groups. Fetches a current count without member records.",
+      inputSchema: { groupId },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ groupId }, extra) =>
+      guarded(async () => ({
+        ok: true,
+        groupId,
+        subscriberCount: await connection.count(groupId, {
+          signal: extra.signal,
+        }),
+      })),
+  );
+  server.registerTool(
+    "flocknote_add_member",
+    {
+      title: "Add a member to a parish group",
+      description:
+        "Use only for an explicitly requested membership addition. Supply exactly one of a known groupId or the user's groupName for a case-insensitive unique match; a unique name is resolved in this call without a separate group/status lookup. Can change membership and cause Flocknote notifications. Returns only success. Never automatically retry an unknown write outcome.",
+      inputSchema: {
+        groupId: groupId.optional(),
+        groupName: z.string().min(1).max(256).optional(),
+        firstName: z.string().min(1).max(256),
+        lastName: z.string().min(1).max(256),
+        email: z.string().max(320).optional(),
+        mobilePhone: z.string().max(64).optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({ groupId, groupName, ...member }, extra) =>
+      guarded(async () => {
+        if (Boolean(groupId) === Boolean(groupName))
+          throw new FlockbotError("invalid_input", undefined, "not_submitted");
+        const added = groupId
+          ? await connection.addMember(groupId, member, {
+              signal: extra.signal,
+            })
+          : await connection.addMemberByName(groupName ?? "", member, {
+              signal: extra.signal,
+            });
+        return { ok: true, ...added };
+      }),
+  );
+  server.server.onclose = () => {
+    void connection.close();
+  };
+  return server;
+}
+
+export async function serveFlocknote(
+  connection: FlocknoteConnection,
+): Promise<void> {
+  const server = createFlocknoteServer(connection);
+  const close = async () => {
+    await connection.close();
+    await server.close();
+  };
+  process.once("SIGINT", () => {
+    void close();
+  });
+  process.once("SIGTERM", () => {
+    void close();
+  });
+  await server.connect(new StdioServerTransport());
+}

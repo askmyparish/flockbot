@@ -30,8 +30,13 @@ Use `npm run format` to format files, or run individual checks with
 and `npm run test:package` (after building). To run a focused test:
 
 ```sh
+bin/test test/mcp/browser-connection.test.ts
 bin/test -t "reuses cookies"
 ```
+
+Passing a file runs only that spec; add `-t` to narrow it to a test name. The full
+offline suite remains `bin/test`. Real Chromium fixtures run separately with
+`npm run test:mcp:browser`.
 
 </details>
 

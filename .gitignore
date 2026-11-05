@@ -12,7 +12,11 @@
 Gemfile.lock
 
 # TypeScript build and installed dependencies
-/node_modules/
+node_modules/
 /dist/
 
 /adapters/zapier/dist/
+
+/adapters/mcp/dist/
+/adapters/mcp/artifacts/
+/adapters/mcp/.cache/

@@ -1,0 +1,179 @@
+import { SerialCoordinator } from "../../adapters/mcp/src/serial-coordinator.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { BrowserConnection } from "../../adapters/mcp/src/browser-connection.js";
+import { createFlocknoteServer } from "../../adapters/mcp/src/flocknote-server.js";
+
+const cleanup: (() => Promise<void>)[] = [];
+afterEach(async () => {
+  for (const close of cleanup.splice(0)) await close();
+});
+
+async function fixture() {
+  const profile = mkdtempSync(join(tmpdir(), "flockbot-server-test-"));
+  const connection = new BrowserConnection({
+    coordinator: new SerialCoordinator(),
+    profile,
+    factory: async () => {
+      throw new Error("fictional-secret-never-returned");
+    },
+  });
+  const server = createFlocknoteServer(connection);
+  const client = new Client({ name: "fictional-codex", version: "1" });
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await server.connect(a);
+  await client.connect(b);
+  cleanup.push(async () => {
+    await client.close();
+    await connection.close();
+    rmSync(profile, { recursive: true, force: true });
+  });
+  return { client, connection };
+}
+
+describe("Flocknote MCP contract", () => {
+  it("routes a named addition directly and requires exactly one group selector", async () => {
+    const { client, connection } = await fixture();
+    const add = vi
+      .spyOn(connection, "addMemberByName")
+      .mockResolvedValue({ success: true });
+    const groups = vi.spyOn(connection, "groups");
+    const member = {
+      firstName: "Alex",
+      lastName: "Rivera",
+      email: "alex@example.test",
+    };
+    const result = await client.callTool({
+      name: "flocknote_add_member",
+      arguments: { groupName: "Volunteers", ...member },
+    });
+    expect(result.structuredContent).toEqual({ ok: true, success: true });
+    expect(add).toHaveBeenCalledWith(
+      "Volunteers",
+      member,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(groups).not.toHaveBeenCalled();
+    for (const selector of [{}, { groupId: "102", groupName: "Volunteers" }]) {
+      const invalid = await client.callTool({
+        name: "flocknote_add_member",
+        arguments: { ...selector, ...member },
+      });
+      expect(invalid.structuredContent).toMatchObject({
+        ok: false,
+        code: "invalid_input",
+        outcome: "not_submitted",
+      });
+    }
+    expect(add).toHaveBeenCalledTimes(1);
+  });
+
+  it("advertises only defined parish operations with safe schemas and write annotations", async () => {
+    const { client } = await fixture();
+    const { tools } = await client.listTools();
+    expect(tools.map(({ name }) => name).sort()).toEqual([
+      "flocknote_add_member",
+      "flocknote_connect",
+      "flocknote_groups",
+      "flocknote_status",
+      "flocknote_subscriber_count",
+    ]);
+    for (const tool of tools)
+      expect(JSON.stringify(tool.inputSchema)).not.toMatch(
+        /password|cookie|token|script|url|code/i,
+      );
+    expect(
+      tools.find(({ name }) => name === "flocknote_add_member")?.annotations,
+    ).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+    });
+    expect(client.getInstructions()).toMatch(
+      /Never repeat a write with outcome unknown/,
+    );
+  });
+
+  it("returns nonsecret status and fixed setup errors through real MCP messages", async () => {
+    const { client, connection } = await fixture();
+    const status = await client.callTool({ name: "flocknote_status" });
+    expect(status.structuredContent).toMatchObject({
+      ok: true,
+      state: "not_configured",
+    });
+    const failed = await client.callTool({
+      name: "flocknote_connect",
+      arguments: { subdomain: "example-parish" },
+    });
+    expect(failed.isError).toBe(true);
+    expect(JSON.stringify(failed)).not.toContain("fictional-secret");
+    expect(JSON.stringify(failed)).not.toContain("flockbot-server-test-");
+    expect(await connection.status()).toMatchObject({
+      state: "action_required",
+      parish: "example-parish",
+      setupError: "browser_unavailable",
+    });
+    const afterFailure = await client.callTool({ name: "flocknote_status" });
+    expect(afterFailure.structuredContent).toMatchObject({
+      setupError: "browser_unavailable",
+      message: expect.stringContaining("Sign in again using flocknote_connect"),
+    });
+  });
+
+  it.each([
+    ["operation_timeout", "The operation timed out."],
+    ["redirect_rejected", "Flocknote redirected the request."],
+    ["invalid_response", "Flocknote returned an unexpected response."],
+    [
+      "connection_changed",
+      "Flocknote login differs from the saved connection.",
+    ],
+  ] as const)(
+    "keeps recovery guidance alongside the setup diagnostic (%s)",
+    async (setupError, diagnostic) => {
+      const { client, connection } = await fixture();
+      vi.spyOn(connection, "status").mockResolvedValue({
+        state: "action_required",
+        parish: "example-parish",
+        setupError,
+      });
+      vi.spyOn(connection, "connect").mockResolvedValue({
+        state: "action_required",
+        parish: "example-parish",
+        setupError,
+      });
+      for (const name of ["flocknote_status", "flocknote_connect"]) {
+        const response = await client.callTool({
+          name,
+          ...(name === "flocknote_connect"
+            ? { arguments: { subdomain: "example-parish" } }
+            : {}),
+        });
+        expect(response.structuredContent).toMatchObject({
+          state: "action_required",
+          setupError,
+          message: expect.stringContaining(diagnostic),
+        });
+        expect(response.structuredContent).toMatchObject({
+          message: expect.stringContaining(
+            "Sign in again using flocknote_connect",
+          ),
+        });
+      }
+    },
+  );
+
+  it("never includes contact-bearing exception details in a tool failure", async () => {
+    const { client, connection } = await fixture();
+    vi.spyOn(connection, "groups").mockRejectedValue(
+      new Error("alex@example.test; fictional-password"),
+    );
+    const result = await client.callTool({ name: "flocknote_groups" });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).not.toMatch(/alex@|fictional-password/);
+  });
+});
