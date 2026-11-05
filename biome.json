@@ -13,7 +13,8 @@
       "plugins/**/.codex-plugin/*.json",
       "plugins/**/.mcp.json",
       "vitest.config.ts",
-      "!package-lock.json"
+      "!package-lock.json",
+      ".changeset/*.json"
     ]
   },
   "formatter": {

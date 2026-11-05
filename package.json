@@ -23,14 +23,18 @@
     "lint": "biome lint .",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p adapters/zapier/tsconfig.json && tsc --noEmit -p adapters/mcp/tsconfig.json",
     "test": "vitest run",
+    "prebuild": "node scripts/clean-build.mjs",
     "build": "tsc && npm run build:zapier && npm run build:mcp",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build && npm run test:package",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run release:check && npm test && npm run build && npm run test:package",
     "test:package": "node scripts/check-package.mjs && node scripts/zapier/check-package.mjs && node scripts/mcp/check-browser-package.mjs",
     "build:zapier": "node scripts/zapier/build.mjs",
-    "prebuild": "node scripts/clean-build.mjs",
     "build:mcp": "node scripts/mcp/build.mjs",
+    "package:codex": "node scripts/mcp/codex-package.mjs",
     "test:mcp:browser": "node scripts/mcp/test-browser.mjs",
-    "package:codex": "node scripts/mcp/codex-package.mjs"
+    "changeset": "changeset",
+    "release:sync": "node scripts/mcp/sync-version.mjs",
+    "release:check": "node scripts/mcp/sync-version.mjs --check",
+    "release:version": "changeset version && npm run release:sync && npm install --package-lock-only --ignore-scripts && npm run format && npm run package:codex"
   },
   "dependencies": {
     "parse5": "7.3.0",

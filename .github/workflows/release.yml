@@ -1,0 +1,146 @@
+name: Publish MCP release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-release-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  source:
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'changeset-release/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ github.event.pull_request.merge_commit_sha }}
+      tag: ${{ steps.release.outputs.tag }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require the reviewed merge commit in main
+        run: git merge-base --is-ancestor HEAD origin/main
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .node-version
+      - name: Validate the reviewed version and changelog
+        id: release
+        run: node scripts/mcp/release-info.mjs
+
+  native:
+    needs: source
+    uses: ./.github/workflows/mcp-platforms.yml
+    with:
+      ref: ${{ needs.source.outputs.sha }}
+
+  build:
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Validate tag, version and reviewed changelog
+        id: release
+        env:
+          RELEASE_TAG: ${{ needs.source.outputs.tag }}
+        run: node scripts/mcp/release-info.mjs --tag "$RELEASE_TAG"
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - name: Install Chromium for intercepted offline fixtures
+        run: npx --no-install playwright install --with-deps chromium
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/flockbot-browsers
+      - run: npm run test:mcp:browser
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/flockbot-browsers
+      - name: Rebuild both platforms and verify committed checksums
+        run: npm run package:codex -- --verify-pins
+      - name: Attest the archive bytes built from the reviewed merge commit
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: adapters/mcp/artifacts/codex/*.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mcp-release
+          path: |
+            adapters/mcp/artifacts/codex/*.zip
+            adapters/mcp/artifacts/codex/SHA256SUMS
+            adapters/mcp/artifacts/codex/artifacts.json
+            adapters/mcp/artifacts/codex/release-notes.md
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  publish:
+    needs: [source, build, native]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: source
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mcp-release
+          path: release
+      - name: Verify archives after transfer
+        working-directory: release
+        run: sha256sum --check SHA256SUMS
+      - name: Create the release tag or verify its existing target
+        working-directory: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.source.outputs.tag }}
+          RELEASE_SHA: ${{ needs.source.outputs.sha }}
+        run: |
+          if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
+            if [[ "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" != "$RELEASE_SHA" ]]; then
+              echo 'Existing release tag targets another commit.' >&2
+              exit 1
+            fi
+          else
+            gh api --method POST "repos/$GH_REPO/git/refs" -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$RELEASE_SHA" --silent
+          fi
+      - name: Upload to a draft, then publish the complete release
+        working-directory: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.source.outputs.tag }}
+          PRERELEASE: ${{ needs.source.outputs.prerelease }}
+        run: |
+          gh release create "$RELEASE_TAG" *.zip SHA256SUMS artifacts.json --verify-tag --draft --title "Flockbot MCP $RELEASE_TAG" --notes-file release-notes.md
+          if [[ "$PRERELEASE" == true ]]; then
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false
+          else
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest
+          fi

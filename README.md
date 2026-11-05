@@ -398,6 +398,8 @@ The local browser owner is shared across MCP sessions, and additions can resolve
 a case-insensitive unique group name within one call. Locked/denied credential-store behavior,
 Windows execution and clean staff installation remain unverified.
 See [setup and distribution](./docs/mcp/setup.md).
+The [release runbook](./docs/mcp/releases.md) covers versioned CI artifacts,
+changelogs, reviewed release PRs and publishing GitHub release downloads.
 
 ### Private Zapier candidate
 
