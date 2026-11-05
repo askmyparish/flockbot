@@ -26,7 +26,8 @@ export async function zipDirectory(root, file, prefix = "", level = 6) {
       {
         level,
         os: 3,
-        attrs: (item.mode & 0o111 ? 0o755 : 0o644) << 16,
+        // Include the regular-file type: Apple's extractor otherwise drops +x.
+        attrs: (item.mode & 0o111 ? 0o100755 : 0o100644) << 16,
         mtime: new Date(2026, 0, 1, 0, 0, 0),
       },
     ];

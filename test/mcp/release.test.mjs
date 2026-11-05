@@ -5,6 +5,7 @@ import {
   rm,
   writeFile,
   chmod,
+  stat,
   utimes,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -181,3 +182,28 @@ it("emits identical ZIP bytes in UTC and western/eastern timezones", async () =>
   expect(archives[1]).toEqual(archives[0]);
   expect(archives[2]).toEqual(archives[0]);
 });
+
+it.skipIf(process.platform !== "darwin")(
+  "preserves executable permissions through Apple's ZIP extractor",
+  async () => {
+    const root = await fixture();
+    const payload = join(root, "payload");
+    await mkdir(payload);
+    await writeFile(
+      join(payload, "fictional-executable"),
+      "inert fixture; never executed\n",
+    );
+    await chmod(join(payload, "fictional-executable"), 0o755);
+    await writeFile(join(payload, "readme.txt"), "fictional fixture\n");
+    const archive = join(root, "extract.zip");
+    await zipDirectory(payload, archive);
+    const extracted = join(root, "extracted");
+    execFileSync("/usr/bin/ditto", ["-x", "-k", archive, extracted]);
+    expect(
+      (await stat(join(extracted, "fictional-executable"))).mode & 0o777,
+    ).toBe(0o755);
+    expect((await stat(join(extracted, "readme.txt"))).mode & 0o777).toBe(
+      0o644,
+    );
+  },
+);
