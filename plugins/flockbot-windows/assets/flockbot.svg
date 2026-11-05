@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Flockbot</title>
+  <desc id="desc">A friendly blue robot sheep with a wool crest, short floppy ears, a navy face and a white smile.</desc>
+  <g fill="#1B82D0">
+    <path d="M108 160C67 149 25 176 24 225c-1 40 17 72 44 67 24-4 43-34 59-80z"/>
+    <path d="M404 160c41-11 83 16 84 65 1 40-17 72-44 67-24-4-43-34-59-80z"/>
+    <rect x="64" y="110" width="384" height="372" rx="142"/>
+    <circle cx="164" cy="112" r="70"/>
+    <circle cx="256" cy="94" r="80"/>
+    <circle cx="348" cy="112" r="70"/>
+  </g>
+  <rect x="88" y="166" width="336" height="232" rx="72" fill="#08294F"/>
+  <g fill="#FFFFFF">
+    <circle cx="85" cy="184" r="12"/>
+    <circle cx="427" cy="184" r="12"/>
+    <rect x="172" y="223" width="28" height="64" rx="14"/>
+    <rect x="312" y="223" width="28" height="64" rx="14"/>
+    <rect x="168" y="422" width="176" height="40" rx="20"/>
+  </g>
+  <path d="M220 329q36 32 72 0" fill="none" stroke="#FFFFFF" stroke-width="16" stroke-linecap="round"/>
+  <rect x="292" y="434" width="28" height="14" rx="7" fill="#1B82D0"/>
+</svg>
