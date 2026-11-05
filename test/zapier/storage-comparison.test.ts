@@ -86,7 +86,16 @@ it.each([
     if (method === "DELETE") values.delete(key);
     return json(values.has(key) ? { [key]: values.get(key) } : {});
   });
-  const r = await compareStorage(config, secret, transport);
+  // Exercise the real timeout path without spending two wall-clock seconds.
+  if (fault === "stalled") vi.useFakeTimers();
+  let r: Awaited<ReturnType<typeof compareStorage>>;
+  try {
+    const pending = compareStorage(config, secret, transport);
+    if (fault === "stalled") await vi.advanceTimersByTimeAsync(2000);
+    r = await pending;
+  } finally {
+    if (fault === "stalled") vi.useRealTimers();
+  }
   expect(r.requests).toBeLessThanOrEqual(10);
   expect(methods.filter((x) => x === "POST")).toHaveLength(
     fault === "collision" ? 0 : 1,

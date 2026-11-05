@@ -12,6 +12,20 @@ _Avoid_: Account when referring to the parish's space
 The identity and credentials a person uses to authenticate with Flocknote. Its permissions determine which parish information and actions are available.
 _Avoid_: Parish account when referring to a person's identity
 
+**Flockbot connection**:
+A saved association between a parish network and the Flocknote login an integration uses. Its Flocknote session can be renewed without changing the configured parish or login.
+_Avoid_: Account when referring to an integration's saved connection
+
+**Local Flockbot connection**:
+A Flockbot connection belonging to one operating-system user on one computer. That user's assistant applications share the connection; another operating-system user has a separate connection.
+_Avoid_: Computer-wide account when referring to a local user's connection
+
+**Local Flocknote browser profile**:
+A dedicated browser profile belonging to one local Flockbot connection. The browser
+retains authentication state and performs the connector's internal API requests.
+It is separate from the user's everyday browser and from an assistant's plugin
+installation. Sign-in happens on Flocknote's own website.
+
 **Flocknote session**:
 An established authenticated interaction with Flocknote that can be reused until Flocknote no longer accepts it. Reusing a session is distinct from logging in again.
 
@@ -25,8 +39,12 @@ _Avoid_: Password reset when referring to a one-time login code
 **Group**:
 A named collection of members within a parish network to which communications can be addressed.
 
+**User**:
+A person associated with, or intended to join, a Flocknote parish network, distinct from the Flocknote login used to authenticate an integration. Supplied contact details alone do not establish that an existing parish record has been identified or created.
+_Avoid_: Login or account when referring to the person represented in parish records
+
 **Group membership**:
-A member's inclusion in a particular Flocknote group.
+A relationship linking a user to a particular Flocknote group, with preferences and roles when established. A requested membership remains an intent until Flocknote confirms the addition.
 _Avoid_: Group participation when describing the domain concept
 
 **Test parish**:

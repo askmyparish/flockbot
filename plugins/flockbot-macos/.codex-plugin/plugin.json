@@ -1,0 +1,24 @@
+{
+  "name": "flockbot-macos",
+  "version": "0.2.1-dev.8",
+  "description": "Unofficial Flocknote tools using a dedicated local browser session. Apple silicon Mac candidate.",
+  "author": {
+    "name": "AskMyParish",
+    "url": "https://askmyparish.com"
+  },
+  "license": "MIT",
+  "requires_local_executor": true,
+  "onboardingSkill": "./skills/setup/SKILL.md",
+  "interface": {
+    "displayName": "Flockbot",
+    "shortDescription": "Flocknote parish tools with local browser sign-in",
+    "category": "Productivity",
+    "developerName": "AskMyParish",
+    "longDescription": "Unofficial independent Flocknote connector. Not affiliated with, endorsed by or supported by Flocknote. Local execution and browser sign-in required.",
+    "logo": "./assets/flockbot.svg",
+    "composerIcon": "./assets/flockbot.svg",
+    "websiteURL": "https://askmyparish.com"
+  },
+  "mcpServers": "./.mcp.json",
+  "skills": "./skills/"
+}

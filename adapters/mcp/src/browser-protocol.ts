@@ -1,0 +1,184 @@
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import net from "node:net";
+import { z } from "zod";
+import { FlockbotError } from "../../../src/index.js";
+import { BrowserConnectionError } from "./browser-runtime.js";
+
+export const MAX_REQUEST = 16 * 1024;
+export const MAX_RESPONSE = 2 * 1024 * 1024;
+export const brokerRequestSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("ping") }).strict(),
+  z.object({ action: z.literal("shutdown") }).strict(),
+  z.object({ action: z.literal("status") }).strict(),
+  z
+    .object({
+      action: z.literal("connect"),
+      subdomain: z.string().min(1).max(63),
+    })
+    .strict(),
+  z
+    .object({ action: z.literal("groups"), refresh: z.boolean().optional() })
+    .strict(),
+  z
+    .object({ action: z.literal("count"), groupId: z.string().min(1).max(128) })
+    .strict(),
+  z
+    .object({
+      action: z.literal("add"),
+      groupId: z.string().max(128).optional(),
+      groupName: z.string().max(256).optional(),
+      member: z
+        .object({
+          firstName: z.string().max(256),
+          lastName: z.string().max(256),
+          email: z.string().max(320).optional(),
+          mobilePhone: z.string().max(64).optional(),
+        })
+        .strict(),
+    })
+    .strict(),
+  z.object({ action: z.literal("forget") }).strict(),
+]);
+export type BrokerRequest = z.infer<typeof brokerRequestSchema>;
+export interface BrokerDescriptor {
+  version: 1;
+  runtime: string;
+  address: string;
+  key: string;
+}
+export interface BrokerReply {
+  nonce: string;
+  value?: unknown;
+  error?: {
+    kind: "flockbot" | "browser";
+    code: string;
+    outcome?: "not_submitted" | "unknown";
+    stage?: BrowserConnectionError["stage"];
+  };
+}
+
+function tag(payload: string, key: string): string {
+  return createHmac("sha256", Buffer.from(key, "hex"))
+    .update(payload)
+    .digest("hex");
+}
+export function encodeFrame(value: unknown, key: string): string {
+  const payload = JSON.stringify(value);
+  return `${JSON.stringify({ payload, mac: tag(payload, key) })}\n`;
+}
+export function decodeFrame(input: string, key: string): unknown {
+  const envelope = JSON.parse(input) as { payload: string; mac: string };
+  if (
+    typeof envelope.payload !== "string" ||
+    typeof envelope.mac !== "string" ||
+    !/^[a-f0-9]{64}$/.test(envelope.mac) ||
+    !timingSafeEqual(
+      Buffer.from(envelope.mac, "hex"),
+      Buffer.from(tag(envelope.payload, key), "hex"),
+    )
+  )
+    throw new Error();
+  return JSON.parse(envelope.payload) as unknown;
+}
+
+/** Same-user IPC only. Never sends the key itself, cookies, scripts or URLs. */
+export async function requestBroker(
+  descriptor: BrokerDescriptor,
+  request: BrokerRequest,
+  signal?: AbortSignal,
+  timeoutMs = 35_000,
+): Promise<unknown> {
+  const nonce = randomBytes(32).toString("hex");
+  return new Promise((resolve, reject) => {
+    let sent = false;
+    let complete = false;
+    let buffer = "";
+    const socket = new net.Socket();
+    socket.setEncoding("utf8");
+    const fail = (cancelled = false) => {
+      if (complete) return;
+      complete = true;
+      socket.destroy();
+      const outcome =
+        request.action === "add"
+          ? sent
+            ? "unknown"
+            : "not_submitted"
+          : undefined;
+      reject(
+        cancelled
+          ? new FlockbotError("operation_cancelled", undefined, outcome)
+          : new BrowserConnectionError("broker_unavailable", outcome),
+      );
+    };
+    const onFailure = () => fail();
+    const onAbort = () => fail(true);
+    const finish = () => {
+      signal?.removeEventListener("abort", onAbort);
+    };
+    socket.on("error", onFailure);
+    socket.on("close", () => {
+      finish();
+      if (!complete) fail();
+    });
+    socket.setTimeout(timeoutMs, onFailure);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) {
+      onAbort();
+      finish();
+      return;
+    }
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      if (Buffer.byteLength(buffer) > MAX_RESPONSE) {
+        fail();
+        return;
+      }
+      const end = buffer.indexOf("\n");
+      if (end < 0) return;
+      try {
+        const reply = decodeFrame(
+          buffer.slice(0, end),
+          descriptor.key,
+        ) as BrokerReply;
+        if (reply.nonce !== nonce) throw new Error();
+        let error: Error | undefined;
+        if (reply.error) {
+          if (
+            !["flockbot", "browser"].includes(reply.error.kind) ||
+            typeof reply.error.code !== "string"
+          )
+            throw new Error();
+          error =
+            reply.error.kind === "flockbot"
+              ? new FlockbotError(
+                  reply.error.code as FlockbotError["code"],
+                  undefined,
+                  reply.error.outcome,
+                )
+              : new BrowserConnectionError(
+                  reply.error.code as BrowserConnectionError["code"],
+                  reply.error.outcome,
+                  reply.error.stage,
+                );
+        }
+        complete = true;
+        finish();
+        socket.destroy();
+        if (error) reject(error);
+        else resolve(reply.value);
+      } catch {
+        fail();
+      }
+    });
+    try {
+      socket.connect({ path: descriptor.address }, () => {
+        if (complete) return;
+        sent = true;
+        socket.write(encodeFrame({ nonce, request }, descriptor.key));
+      });
+    } catch {
+      fail();
+    }
+  });
+}

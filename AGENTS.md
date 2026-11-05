@@ -14,7 +14,6 @@ credentials, and session state belong in deployment configuration, not source co
 Use the setup and test commands documented in `README.md`. The TypeScript
 setup uses `bin/setup`, and the suite runs with `bin/test` (or `npm test`).
 `npm run check` runs all TypeScript checks and the built-package import.
-The existing Ruby suite runs with `bundle exec rspec`.
 
 Routine tests must use sanitized fixtures and run without live Flocknote access.
 Do not automatically record missing fixtures against the live service. Live

@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "flocknote": {
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        "./setup.ps1",
+        "-Launch"
+      ],
+      "cwd": "."
+    }
+  }
+}

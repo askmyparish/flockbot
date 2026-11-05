@@ -1,0 +1,60 @@
+name: Prepare MCP release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-release-pr
+  cancel-in-progress: false
+
+jobs:
+  version:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - uses: changesets/action/select-mode@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        id: mode
+      - name: Create a repository-scoped release App token
+        if: steps.mode.outputs.mode == 'version'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: app
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: changesets/action/version@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        if: steps.mode.outputs.mode == 'version'
+        id: version
+        with:
+          script: npm run release:version
+          pr-title: Prepare MCP release
+          commit-message: Prepare MCP release
+          pr-base-branch: main
+          github-token: ${{ steps.app.outputs.token }}
+      - name: Describe publication on merge in the release PR
+        if: steps.version.outputs.pr-number != ''
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_PR: ${{ steps.version.outputs.pr-number }}
+        run: |
+          gh pr view "$RELEASE_PR" --json body --jq .body > "$RUNNER_TEMP/release-pr.md"
+          node scripts/mcp/release-pr-body.mjs "$RUNNER_TEMP/release-pr.md"
+          gh pr edit "$RELEASE_PR" --body-file "$RUNNER_TEMP/release-pr.md"

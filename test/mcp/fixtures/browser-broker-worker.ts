@@ -1,0 +1,78 @@
+import { spawn } from "node:child_process";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import {
+  BrowserService,
+  runBrowserBroker,
+} from "../../../adapters/mcp/src/browser-broker.js";
+
+const entry = process.argv[1] ?? "";
+const profile = process.argv[2] ?? "";
+const role = process.argv[3];
+if (role === "broker") {
+  writeFileSync(join(profile, "owner.pid"), String(process.pid));
+  await runBrowserBroker({
+    entry,
+    profile,
+    idleMs: 1500,
+    factory: async () => {
+      appendFileSync(join(profile, "events"), "launch\n");
+      return {
+        signIn: async () => undefined,
+        close: async () => {
+          appendFileSync(join(profile, "events"), "close\n");
+        },
+        request: async (path, method = "GET") => {
+          appendFileSync(join(profile, "events"), `${method} ${path}\n`);
+          switch (path) {
+            case "user/userData":
+              if (existsSync(join(profile, "signed-out")))
+                return { success: true, userID: null, authorized: false };
+              return { success: true, userID: 201 };
+            case "dashboard":
+              return '<div id="fnReactHolder"></div>';
+            case "navigation/groups":
+              return {
+                groups: [
+                  { ID: 102, name: "Volunteers", shortname: "volunteers" },
+                ],
+              };
+            case "network/getMetadata":
+              return { everyoneGroupID: 101 };
+            case "group/101/getSubscriberCount":
+              while (existsSync(join(profile, "hold-count"))) await delay(10);
+              return { subscriberCount: 7 };
+            case "group/102/addToGroupByAdmin":
+              while (existsSync(join(profile, "hold"))) await delay(10);
+              return { success: true };
+            default:
+              throw new Error("Missing fictional fixture");
+          }
+        },
+      };
+    },
+  });
+} else {
+  const connection = new BrowserService({
+    entry,
+    profile,
+    launch: () => {
+      const child = spawn(
+        process.execPath,
+        ["--disable-warning=ExperimentalWarning", entry, profile, "broker"],
+        { detached: true, stdio: "ignore" },
+      );
+      child.unref();
+    },
+  });
+  const result =
+    role === "add"
+      ? await connection.addMemberByName("Volunteers", {
+          firstName: "Alex",
+          lastName: "Rivera",
+          email: "alex@example.test",
+        })
+      : await connection.count("101");
+  process.stdout.write(JSON.stringify(result));
+}

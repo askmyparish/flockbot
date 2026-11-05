@@ -1,16 +1,22 @@
+<p align="center">
+  <img src="assets/flockbot.svg" alt="Flockbot robot sheep logo" width="240">
+</p>
+
 # Flockbot
 
 Flockbot connects parish workflows to [Flocknote](https://www.flocknote.com/)
 through its internal API.
 
-The TypeScript port supports password login, saved sessions, coordinated recovery,
+The TypeScript client supports password login, saved sessions, coordinated recovery,
 group discovery, subscriber counts, member additions, and HTTP requests. A private
-Zapier candidate is available for offline development; MCP support
-is still coming. The Ruby gem remains available during the move.
+Zapier candidate is available for offline development. A private
+[Codex MCP candidate](./docs/mcp/README.md) uses a dedicated local browser session
+with test-parish sign-in, read operations and explicitly requested membership
+additions verified on macOS. It remains a private candidate.
 
 ## TypeScript development
 
-You'll need Node.js 22.12+ and npm. Ruby isn't needed for the TypeScript package.
+You'll need Node.js 22.13+ and npm.
 
 ```sh
 bin/setup       # Install locked npm dependencies
@@ -30,10 +36,40 @@ Use `npm run format` to format files, or run individual checks with
 and `npm run test:package` (after building). To run a focused test:
 
 ```sh
+bin/test test/mcp/browser-connection.test.ts
 bin/test -t "reuses cookies"
 ```
 
+Passing a file runs only that spec; add `-t` to narrow it to a test name. The full
+offline suite remains `bin/test`. Real Chromium fixtures run separately with
+`npm run test:mcp:browser`.
+
 </details>
+
+### Resource models
+
+The shared resource models live in `src/models`: `Network` owns group discovery
+and name resolution; `Group` owns group details and subscriber counts;
+`GroupMembership` owns validated additions; `User` snapshots contact input; and
+`FlocknoteLogin` classifies verified sign-in identity. Creating a model performs
+no network request. A contact snapshot does not establish an upstream user ID or
+prove that a contact was created or updated. A `GroupMembership` instance describes
+a prepared addition; confirmed upstream inclusion, roles and preferences require
+the corresponding API result. Neither constructor proves an existing record.
+
+Adapters supply requests within their own session, deadline and coordination
+boundary. The HTTP client retains staged cookie persistence and bounded password
+recovery; the browser adapter retains browser-owned cookies and failure-driven
+authentication checks. Model code imports neither adapter nor MCP/browser APIs.
+Notes, households and other resources will gain implementations as their contracts
+are established; no speculative resource classes are provided.
+
+`Network` and `GroupMembership` expose `ResourceRead`, `MembershipExecutor` and
+`MembershipRequest` through the package root for adapter authors. Obtain `Group`
+instances through `client.groups()`; its exported type describes those instances.
+Contact fields use explicit getters and stay out of object spreading, enumeration,
+default inspection and JSON output. Reading getters or constructing a membership
+request explicitly exposes contact data to the caller; keep those values private.
 
 ### Use a saved session
 
@@ -207,9 +243,18 @@ await client.addMember("101", {
 }); // { success: true }
 ```
 
+An obtained group also exposes `group.addMember(member, { signal })`, using the
+same coordinated addition and write-outcome rules as `client.addMember`.
+
 Provide first and last names and at least one contact method. The client checks
 the session before submitting and returns only confirmed success. A submitted
 write is never automatically repeated; preserve an error's `outcome` in adapters.
+
+Name-based selection in the browser connector requires a unique case-insensitive
+match after trimming surrounding whitespace. It never picks between groups whose
+names differ only by case. `group_not_found` means no match and `group_ambiguous`
+means multiple matches; select an explicit group ID to resolve ambiguity. Both
+fail before membership submission and report `outcome: "not_submitted"`.
 
 <details>
 <summary>Member inputs, failures, and retry limits</summary>
@@ -344,6 +389,23 @@ never change the write outcome, infer an email-validation rule, or permit replay
 
 </details>
 
+### Private Codex MCP candidate
+
+The [Codex MCP candidate](./docs/mcp/README.md) exposes group discovery, subscriber
+counts and member additions through a dedicated local browser session. Staff sign
+in directly on Flocknote's website; credentials and cookies stay outside chat.
+`npm run check` builds/tests its stdio contract and packaging offline. The opt-in
+`npm run test:mcp:browser` uses real Chromium with intercepted fictional responses.
+Initial live sign-in, session reuse, group discovery and counts passed on macOS.
+Explicitly requested live member additions also returned confirmed success.
+The local browser owner is shared across MCP sessions, and additions can resolve
+a case-insensitive unique group name within one call. Locked/denied credential-store behavior,
+Windows execution and clean staff installation remain unverified.
+Start with the [Flockbot setup guide](./guide.md).
+See [setup details and recovery](./docs/mcp/setup.md) for contributor instructions.
+The [release runbook](./docs/mcp/releases.md) covers versioned CI artifacts,
+changelogs, reviewed release PRs and publishing GitHub release downloads.
+
 ### Private Zapier candidate
 
 `npm run check` also builds, packages, and tests the private [Zapier adapter](./docs/zapier/README.md).
@@ -355,64 +417,6 @@ and the checks required before replacing a running integration.
 Tests use fictional data and block unexpected network access. They don't need
 credentials, environment files, or live Flocknote access, and never record missing
 fixtures. CI runs checks without live credentials, deployment, or publishing.
-
-## Ruby gem
-
-<details>
-<summary>Legacy Ruby installation, usage, and development</summary>
-
-Requires Ruby 3.3. Add this to your `Gemfile`:
-
-```ruby
-gem "flockbot", git: "https://github.com/askmyparish/flockbot"
-```
-
-### Connect
-
-Create a session, choose a login method, then create the client. The subdomain
-is the first part of your Flocknote URL.
-
-```ruby
-session = Flockbot::Session.new(subdomain: "example-parish", email: "user@example.com")
-
-# Choose one:
-session.login!(password: "example-password")
-
-# Or request a code:
-session.send_one_time_code
-session.login!(code: "1234")
-
-# Or reuse a saved session:
-session.login!(token: saved_token)
-
-client = Flockbot::Client.new(session: session)
-```
-
-### Groups and members
-
-```ruby
-client.groups
-client.everyone_group
-client.groups.first.subscriber_count
-```
-
-Adding a member requires first and last names, plus an email, mobile number,
-or both. New members also join Everyone. Existing members are matched by email
-or phone; the supplied name doesn't rename them.
-
-```ruby
-group = client.groups.last
-
-group.add_user(first_name: "Alex", last_name: "Rivera", email: "alex@example.com")
-group.add_user(first_name: "Sam", last_name: "Lee", mobile_phone: "555-555-5555")
-```
-
-### Ruby development
-
-Use `bundle install` and `bundle exec rspec`. `bin/console` still opens a Ruby/Pry
-prompt; `bin/setup` and `bin/test` now serve TypeScript.
-
-</details>
 
 ## Contributing
 

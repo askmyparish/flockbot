@@ -1,0 +1,15 @@
+{
+  "changelog": "@changesets/cli/changelog",
+  "commit": false,
+  "fixed": [],
+  "linked": [],
+  "access": "restricted",
+  "baseBranch": "main",
+  "updateInternalDependencies": "patch",
+  "ignore": ["@askmyparish/flockbot", "@askmyparish/flockbot-zapier"],
+  "privatePackages": {
+    "version": true,
+    "tag": false
+  },
+  "format": false
+}

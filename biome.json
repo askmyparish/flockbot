@@ -5,13 +5,24 @@
       "src/**",
       "adapters/zapier/src/**",
       "adapters/zapier/*.json",
+      "adapters/mcp/src/**",
+      "adapters/mcp/*.json",
       "test/**",
       "scripts/**",
       "*.json",
+      "plugins/**/.codex-plugin/*.json",
+      "plugins/**/.mcp.json",
       "vitest.config.ts",
-      "!package-lock.json"
+      "!package-lock.json",
+      ".changeset/*.json"
     ]
   },
-  "formatter": { "indentStyle": "space" },
-  "linter": { "rules": { "preset": "recommended" } }
+  "formatter": {
+    "indentStyle": "space"
+  },
+  "linter": {
+    "rules": {
+      "preset": "recommended"
+    }
+  }
 }

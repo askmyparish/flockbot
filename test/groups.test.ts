@@ -320,7 +320,7 @@ describe("group discovery", () => {
     [new Error("fictional private upstream detail"), "transport_failed"],
     [{ ...json({}), body: "{bad-json" }, "invalid_response"],
   ])(
-    "preserves typed navigation failure %# that Ruby rescued into []",
+    "preserves typed navigation failure %# instead of returning an empty list",
     async (response, code) => {
       const f = fixture({
         dashboard: html(shell),

@@ -5,7 +5,8 @@ group dropdown, and an Add Member to Group action. **Packaged membership writes
 remain blocked** pending the host guarantees below. Nothing here deploys or
 replaces an existing private integration.
 
-From the repository root, use Node.js 22.12+ and npm:
+Repository development requires Node.js 22.13+ and npm. The generated Zapier
+runtime package retains its separate Node.js 22.12+ minimum. From the repository root:
 
 ```sh
 bin/setup               # Locked workspace dependencies, no install scripts
@@ -26,7 +27,7 @@ checks, later CLI/host proof, test-parish runs and production rollback.
 The hidden `group_choices` trigger fills the action's group dropdown. It returns
 name-sorted `{ id, name, short_name, is_everyone }` objects, including Everyone.
 IDs are stable strings. Unfetched subscriber counts are omitted; `is_everyone`
-replaces the Rails serializer's `everyone?` key. These are candidate integration
+identifies the Everyone group. These are candidate integration
 keys, not a claim about any existing Zap's field mappings.
 
 | Action input | Required |
@@ -41,8 +42,8 @@ Names and contact fields use the core validation and trimming rules. The modeled
 action verifies the selected group still exists, then calls shared `addMember`
 with the same client and jar. Only a confirmed response returns `{ success: true }`.
 A missing selection fails before member submission. A group deleted after lookup
-can still fail upstream. Legacy opaque IDs are retained for Ruby compatibility;
-their membership endpoints need controlled verification.
+can still fail upstream. Opaque group IDs are accepted, but their membership
+endpoints need controlled verification.
 
 The npm entry always rejects membership with `feasibility_blocked` before making
 a request. Source tests and a disposable bundle exercise that same action factory

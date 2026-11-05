@@ -4,7 +4,7 @@ This experiment checks Storage by Zapier's conditional updates using random,
 nonsecret markers. It makes no Flocknote requests and does not enable member
 additions. It is separate from the SDK's `z.cache`.
 
-Use Node.js 22.12+ and run `bin/setup`. The default command is inert:
+Use Node.js 22.13+ and run `bin/setup`. The default command is inert:
 
 ```sh
 node scripts/zapier/probe-storage.mjs

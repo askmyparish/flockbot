@@ -18,6 +18,43 @@ const member = {
   lastName: "Rivera",
   email: "alex@example.test",
 };
+
+async function discoveredGroup(f: ReturnType<typeof fixture>) {
+  const group = (await f.client.groups()).find((item) => item.id === "102");
+  if (!group) throw new Error("Missing fictional group");
+  f.transport.mockClear();
+  f.sessionStore.load.mockClear();
+  return group;
+}
+it("adds through a discovered Group using the client's coordinated membership lifecycle", async () => {
+  const f = fixture();
+  const group = await discoveredGroup(f);
+  expect(await group.addMember(member)).toEqual({ success: true });
+  expect(f.paths()).toEqual(["/user/userData", "/group/102/addToGroupByAdmin"]);
+  expect(f.writes()).toHaveLength(1);
+});
+it("validates group.addMember before storage or HTTP requests", async () => {
+  const f = fixture();
+  const group = await discoveredGroup(f);
+  await expect(
+    group.addMember({ firstName: "Alex", lastName: "Rivera" }),
+  ).rejects.toMatchObject({ code: "invalid_input", outcome: "not_submitted" });
+  expect(f.transport).not.toHaveBeenCalled();
+  expect(f.sessionStore.load).not.toHaveBeenCalled();
+});
+it("preserves an uncertain group.addMember outcome without replaying", async () => {
+  const f = fixture();
+  const group = await discoveredGroup(f);
+  f.transport
+    .mockResolvedValueOnce(response(accepted))
+    .mockRejectedValueOnce(new Error("fictional disconnect"));
+  await expect(group.addMember(member)).rejects.toMatchObject({
+    code: "transport_failed",
+    outcome: "unknown",
+  });
+  expect(f.paths()).toEqual(["/user/userData", "/group/102/addToGroupByAdmin"]);
+  expect(f.writes()).toHaveLength(1);
+});
 const accepted = { success: true, userID: 201 };
 const expired = { success: true, authorized: false, userID: null };
 const firstFactor = {
@@ -62,6 +99,18 @@ function fixture(options: Partial<ClientOptions> = {}) {
   };
   const transport = vi.fn<Transport>(async (request) => {
     const path = new URL(request.url).pathname;
+    if (path === "/dashboard")
+      return {
+        status: 200,
+        headers: new Headers({ "content-type": "text/html" }),
+        body: '<div id="fnReactHolder"></div>',
+      };
+    if (path === "/navigation/groups")
+      return response({
+        groups: [{ ID: 102, name: "Volunteers", shortname: "volunteers" }],
+      });
+    if (path === "/network/getMetadata")
+      return response({ everyoneGroupID: 101 });
     if (path === "/user/userData") return response(accepted);
     if (path === "/login/twoFactorAuth") {
       return new URLSearchParams(request.body).has("password")

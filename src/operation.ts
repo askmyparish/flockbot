@@ -1,4 +1,4 @@
-import { FlockbotError } from "./index.js";
+import { FlockbotError } from "./errors.js";
 
 export interface OperationOptions {
   readonly signal?: AbortSignal;
@@ -25,6 +25,11 @@ const defaultClock: OperationClock = {
   },
 };
 
+/**
+ * One deadline, cancellation signal and read-retry budget for a logical operation.
+ * Can return promptly when a dependency ignores cancellation. The coordinator
+ * must separately retain its lock until that dependency and callback settle.
+ */
 export class Operation {
   readonly signal: AbortSignal;
   readonly policy: OperationPolicy;

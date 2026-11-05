@@ -1,18 +1,16 @@
-*.gem
 /tmp/
 .DS_Store
-.rspec_status
 .cookie
 
-# Used by dotenv library to load environment variables.
+# Local environment overrides
 .env.*.local
 
-## Environment normalization:
-/.bundle/
-Gemfile.lock
-
-# TypeScript build and installed dependencies
-/node_modules/
+# Build output and installed dependencies
+node_modules/
 /dist/
 
 /adapters/zapier/dist/
+
+/adapters/mcp/dist/
+/adapters/mcp/artifacts/
+/adapters/mcp/.cache/
