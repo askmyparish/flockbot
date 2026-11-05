@@ -10,7 +10,7 @@ is still coming. The Ruby gem remains available during the move.
 
 ## TypeScript development
 
-You'll need Node.js 22.12+ and npm. Ruby isn't needed for the TypeScript package.
+You'll need Node.js 22.13+ and npm. Ruby isn't needed for the TypeScript package.
 
 ```sh
 bin/setup       # Install locked npm dependencies

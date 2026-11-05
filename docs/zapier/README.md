@@ -5,7 +5,8 @@ group dropdown, and an Add Member to Group action. **Packaged membership writes
 remain blocked** pending the host guarantees below. Nothing here deploys or
 replaces an existing private integration.
 
-From the repository root, use Node.js 22.12+ and npm:
+Repository development requires Node.js 22.13+ and npm. The generated Zapier
+runtime package retains its separate Node.js 22.12+ minimum. From the repository root:
 
 ```sh
 bin/setup               # Locked workspace dependencies, no install scripts

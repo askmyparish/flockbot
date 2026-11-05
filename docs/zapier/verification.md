@@ -13,7 +13,7 @@ a later authorized run; it doesn't deploy an integration or contact Flocknote.
 
 ## Build the private candidate
 
-From the repository root on Node.js 22.12+:
+From the repository root on Node.js 22.13+:
 
 ```sh
 bin/setup
