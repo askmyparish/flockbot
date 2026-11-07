@@ -99,10 +99,40 @@ try {
       }).status,
       0,
     );
-    execFileSync(setupCommand, setupArgs(archive), {
-      env: environment,
-      stdio: "pipe",
-    });
+    const windowsProbeArgs = (bundle) => [
+      "-NoProfile",
+      "-NonInteractive",
+      "-File",
+      resolve("test/mcp/fixtures/windows-setup-file-locks.ps1"),
+      "-Plugin",
+      plugin,
+      "-Bundle",
+      bundle,
+    ];
+    if (process.platform === "win32") {
+      execFileSync(
+        setupCommand,
+        [...windowsProbeArgs(corrupt), "-PreserveFailure"],
+        {
+          env: {
+            ...environment,
+            FLOCKBOT_INSTALL_ROOT: join(scratch, "failed runtime with spaces"),
+          },
+          stdio: "pipe",
+          timeout: 30_000,
+        },
+      );
+    }
+    execFileSync(
+      setupCommand,
+      process.platform === "win32"
+        ? windowsProbeArgs(archive)
+        : setupArgs(archive),
+      {
+        env: environment,
+        stdio: "pipe",
+      },
+    );
     const root = join(
       environment.FLOCKBOT_INSTALL_ROOT,
       "runtimes",

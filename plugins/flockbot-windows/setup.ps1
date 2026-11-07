@@ -1,5 +1,18 @@
 param([switch]$Launch, [switch]$Forget, [switch]$Stop, [string]$Bundle)
 $ErrorActionPreference = 'Stop'
+
+function Invoke-FlockbotFileOperation([scriptblock]$Operation) {
+  # Windows can retain executable handles briefly after the process exits.
+  # Retry filesystem work only; never rerun browser setup or an MCP operation.
+  for ($flockbotAttempt = 0; $flockbotAttempt -lt 20; $flockbotAttempt++) {
+    try { & $Operation; return }
+    catch [IO.IOException], [UnauthorizedAccessException] {
+      if ($flockbotAttempt -eq 19) { throw }
+      Start-Sleep -Milliseconds 250
+    }
+  }
+}
+
 $flockbotVersion = (Get-Content -Raw (Join-Path $PSScriptRoot 'runtime.version')).Trim()
 if ($flockbotVersion -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$') { throw 'Invalid Flockbot release version.' }
 $flockbotTarget = 'win32-x64'
@@ -22,6 +35,7 @@ if ((Get-Item $flockbotBase).Attributes -band [IO.FileAttributes]::ReparsePoint)
 if (-not (Test-Path (Join-Path $flockbotRuntime '.complete'))) {
   $flockbotStage = Join-Path $flockbotBase ('runtimes\stage-' + [Guid]::NewGuid().ToString())
   New-Item -ItemType Directory $flockbotStage | Out-Null
+  $flockbotInstallError = $null
   try {
     $flockbotArchive = Join-Path $flockbotStage 'runtime.zip'
     if ($Bundle) { Copy-Item -LiteralPath $Bundle -Destination $flockbotArchive }
@@ -35,8 +49,22 @@ if (-not (Test-Path (Join-Path $flockbotRuntime '.complete'))) {
     & (Join-Path $flockbotPayload 'node.exe') (Join-Path $flockbotPayload 'setup-browser.mjs')
     if ($LASTEXITCODE -ne 0) { throw 'Flockbot browser setup failed.' }
     New-Item -ItemType File (Join-Path $flockbotPayload '.complete') | Out-Null
-    if (-not (Test-Path $flockbotRuntime)) { Move-Item -LiteralPath $flockbotPayload -Destination $flockbotRuntime }
-  } finally { Remove-Item -LiteralPath $flockbotStage -Recurse -Force }
+    if (-not (Test-Path $flockbotRuntime)) {
+      Invoke-FlockbotFileOperation { Move-Item -LiteralPath $flockbotPayload -Destination $flockbotRuntime }
+    }
+  } catch {
+    $flockbotInstallError = $_
+  } finally {
+    try {
+      Invoke-FlockbotFileOperation {
+        if (Test-Path -LiteralPath $flockbotStage) { Remove-Item -LiteralPath $flockbotStage -Recurse -Force }
+      }
+    } catch {
+      # A cleanup failure must not replace the original setup error.
+      if ($null -eq $flockbotInstallError) { throw }
+    }
+  }
+  if ($null -ne $flockbotInstallError) { throw $flockbotInstallError }
 }
 if (-not (Test-Path (Join-Path $flockbotRuntime '.complete'))) { throw 'Flockbot runtime is incomplete. Remove the incomplete runtime directory and rerun setup.' }
 Write-Output 'Flockbot runtime is ready. Restart the MCP connection or start a new Codex conversation, then use connect.'
