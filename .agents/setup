@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+
+echo "Preparing the pinned Node.js toolchain"
+node_version="$(cat .node-version)"
+if [[ "$(node --version 2>/dev/null || true)" != "v${node_version}" ]]; then
+  case "$(uname -m)" in
+    x86_64) node_arch=x64 ;;
+    aarch64) node_arch=arm64 ;;
+    *) echo "Unsupported Node.js architecture" >&2; exit 1 ;;
+  esac
+  download="$(mktemp -d)"
+  trap 'rm -rf -- "$download"' EXIT
+  archive="node-v${node_version}-linux-${node_arch}.tar.xz"
+  base_url="https://nodejs.org/dist/v${node_version}"
+  curl --fail --silent --show-error --location "$base_url/$archive" -o "$download/$archive"
+  curl --fail --silent --show-error --location "$base_url/SHASUMS256.txt" -o "$download/SHASUMS256.txt"
+  (cd "$download"; grep "  ${archive}$" SHASUMS256.txt | sha256sum --check -)
+  sudo tar --extract --xz --file "$download/$archive" --directory /usr/local --strip-components=1 --no-same-owner
+  hash -r
+fi
+node --version
+npm --version
+
+echo "Installing locked workspace dependencies"
+time bin/setup
+
+echo "Preparing Chromium for offline MCP browser tests"
+if ! node node_modules/playwright/cli.js install-deps --dry-run chromium; then
+  time node node_modules/playwright/cli.js install-deps chromium
+fi
+# Match scripts/mcp/test-browser.mjs; never use an authenticated browser profile.
+export PLAYWRIGHT_BROWSERS_PATH="$PWD/adapters/mcp/.cache/browsers"
+time node node_modules/playwright/cli.js install chromium --no-shell

@@ -46,6 +46,16 @@ offline suite remains `bin/test`. Real Chromium fixtures run separately with
 
 </details>
 
+### Amp orbs
+
+`.agents/setup` installs the Node.js version from `.node-version`, locked npm
+workspace dependencies, and Playwright's Chromium with its Debian system
+dependencies. It can be rerun safely and uses the browser cache expected by
+`npm run test:mcp:browser`. Run `npm run check` and `npm run test:mcp:browser`
+to verify the environment; neither requires live Flocknote access or credentials.
+No background services or resume hook are needed for offline development.
+Native macOS and Windows installation checks still require those platforms.
+
 ### Resource models
 
 The shared resource models live in `src/models`: `Network` owns group discovery
