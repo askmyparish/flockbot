@@ -113,15 +113,15 @@ try {
   assert.ok(flocknote, "Codex did not load the Flocknote plugin.");
   assert.equal(flocknote.toolsError, null);
   assert.deepEqual(Object.keys(flocknote.tools).sort(), [
-    "flocknote_add_member",
-    "flocknote_connect",
-    "flocknote_find_members",
-    "flocknote_groups",
-    "flocknote_member",
-    "flocknote_status",
-    "flocknote_subscriber_count",
+    "add_member",
+    "connect",
+    "find_members",
+    "groups",
     "is_member",
+    "member",
     "member_groups",
+    "status",
+    "subscriber_count",
   ]);
   console.log(
     JSON.stringify({

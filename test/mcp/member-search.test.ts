@@ -108,7 +108,7 @@ describe("membership MCP/connection boundary", () => {
   it("performs search, selected contact lookup, subscriptions and one-group check through real MCP", async () => {
     const f = await fixture();
     const found = await f.client.callTool({
-      name: "flocknote_find_members",
+      name: "find_members",
       arguments: { searchTerm: "Alex Rivera", groupId: "101" },
     });
     expect(found.structuredContent).toMatchObject({
@@ -120,7 +120,7 @@ describe("membership MCP/connection boundary", () => {
     const foundBody = found.structuredContent as Record<string, unknown>;
     const userId = String(foundBody.exactMatchUserId);
     const person = await f.client.callTool({
-      name: "flocknote_member",
+      name: "member",
       arguments: { userId, fields: ["email"] },
     });
     expect(person.structuredContent).toMatchObject({
@@ -309,7 +309,7 @@ describe("identified profile MCP/connection boundary", () => {
   it("returns identity by default and only explicitly selected contact details", async () => {
     const f = await fixture();
     const identity = await f.client.callTool({
-      name: "flocknote_member",
+      name: "member",
       arguments: { userId: "301" },
     });
     expect(identity.structuredContent).toMatchObject({
@@ -318,7 +318,7 @@ describe("identified profile MCP/connection boundary", () => {
     });
     expect(JSON.stringify(identity)).not.toMatch(/alex@|555|canEdit|pending/);
     const selected = await f.client.callTool({
-      name: "flocknote_member",
+      name: "member",
       arguments: { userId: "301", fields: ["email"] },
     });
     expect(selected.structuredContent).toMatchObject({
@@ -348,8 +348,7 @@ describe("identified profile MCP/connection boundary", () => {
     );
     const tools = await f.client.listTools();
     expect(
-      tools.tools.find((t) => t.name === "flocknote_member")?.annotations
-        ?.readOnlyHint,
+      tools.tools.find((t) => t.name === "member")?.annotations?.readOnlyHint,
     ).toBe(true);
   });
 
@@ -381,7 +380,7 @@ describe("identified profile MCP/connection boundary", () => {
     const f = await fixture();
     f.state.profile = { ...profileResponse(), canViewProfile: false };
     const result = await f.client.callTool({
-      name: "flocknote_member",
+      name: "member",
       arguments: { userId: "301", fields: ["email"] },
     });
     expect(result.structuredContent).toMatchObject({
@@ -401,7 +400,7 @@ describe("identified profile MCP/connection boundary", () => {
     ]) {
       f.state.profile = failure;
       const result = await f.client.callTool({
-        name: "flocknote_member",
+        name: "member",
         arguments: { userId: "301", fields: ["email"] },
       });
       expect(result.isError).toBe(true);
@@ -458,7 +457,7 @@ describe("member search MCP/connection boundary", () => {
     const f = await fixture();
     f.state.everyoneGroupID = null;
     const result = await f.client.callTool({
-      name: "flocknote_find_members",
+      name: "find_members",
       arguments: { searchTerm: "Alex Rivera" },
     });
     expect(result.isError).toBe(true);
@@ -476,7 +475,7 @@ describe("member search MCP/connection boundary", () => {
   it("dispatches real MCP search with selected fields, scoped identity and optional updates", async () => {
     const f = await fixture();
     const result = await f.client.callTool({
-      name: "flocknote_find_members",
+      name: "find_members",
       arguments: {
         searchTerm: "Alex Rivera",
         groupId: "101",
@@ -511,7 +510,7 @@ describe("member search MCP/connection boundary", () => {
     expect(f.client.getInstructions()).toContain("exactMatchUserId");
     const tools = await f.client.listTools();
     expect(
-      tools.tools.find((t) => t.name === "flocknote_find_members")?.annotations
+      tools.tools.find((t) => t.name === "find_members")?.annotations
         ?.readOnlyHint,
     ).toBe(true);
   });
@@ -547,7 +546,7 @@ describe("member search MCP/connection boundary", () => {
     const f = await fixture();
     f.state.response = { success: false, error: "private@example.test" };
     const result = await f.client.callTool({
-      name: "flocknote_find_members",
+      name: "find_members",
       arguments: { searchTerm: "Alex", groupId: "101" },
     });
     expect(result.isError).toBe(true);

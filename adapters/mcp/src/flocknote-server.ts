@@ -11,13 +11,13 @@ import { UpdateChecker, type UpdateNotifications } from "./update-check.js";
 
 const INSTRUCTIONS =
   "Use these tools for the user's Flocknote parish requests. Trust the saved session and call the requested tool directly; no preliminary status or authentication check is needed. " +
-  "If sign-in is needed, ask for the parish subdomain and call flocknote_connect; the user signs in on Flocknote's real website. " +
+  "If sign-in is needed, ask for the parish subdomain and call connect; the user signs in on Flocknote's real website. " +
   "The connect call waits briefly for sign-in. When it returns ready, continue the user's original request without asking them to say they are signed in. Sign-in alone does not finish their parish task. " +
-  "Only if connect still returns pending should you ask the user to finish sign-in and let you know, then check flocknote_status once. " +
+  "Only if connect still returns pending should you ask the user to finish sign-in and let you know, then check status once. " +
   "Never request passwords, codes, cookies, browser storage, arbitrary URLs or scripts. " +
   "For additions use a known groupId, or supply the user's groupName for a case-insensitive unique match to resolve it in the same call. List groups only when the choice is unclear. " +
-  "For an existing person, use flocknote_find_members first unless their user ID is already known. Continue directly only when exactMatchUserId identifies one exact full-name match in complete results; duplicate, similar or incomplete matches require clarification. Completeness covers only the selected group's active-member search, not inactive or inaccessible users. Request contact fields only when needed for the user's task. " +
-  "Use flocknote_member with the chosen userId and selected fields for contact questions. Without fields it returns identity only. Report stored unverified or bad email status accurately; unavailable or null values are not a new address, and pending contacts never replace stored ones. " +
+  "For an existing person, use find_members first unless their user ID is already known. Continue directly only when exactMatchUserId identifies one exact full-name match in complete results; duplicate, similar or incomplete matches require clarification. Completeness covers only the selected group's active-member search, not inactive or inaccessible users. Request contact fields only when needed for the user's task. " +
+  "Use member with the chosen userId and selected fields for contact questions. Without fields it returns identity only. Report stored unverified or bad email status accurately; unavailable or null values are not a new address, and pending contacts never replace stored ones. " +
   "Use member_groups to list a selected person's explicitly confirmed subscriptions, and is_member for one selected group. Missing groups mean unknown, not nonmembership. Proxy-only relationships with isSubscribed false are not subscriptions. Membership-read failures never mean no membership. " +
   "When a tool includes update metadata, answer the parish request first, then briefly mention the available Flockbot version (label prereleases) and say ‘Update Flockbot’ to install it. Mention it once per conversation unless asked again. Do not interrupt sign-in, hide an error or unknown write outcome, or install automatically. For an explicit update request, follow the canonical Flockbot guide, not the older installed setup script. " +
   "Add members only when requested, after resolving the parish, group and contact details. " +
@@ -25,15 +25,15 @@ const INSTRUCTIONS =
 
 const MESSAGES: Readonly<Record<string, string>> = {
   not_configured:
-    "Ask for the parish subdomain, then open Flocknote sign-in with flocknote_connect.",
+    "Ask for the parish subdomain, then open Flocknote sign-in with connect.",
   pending:
-    "Finish sign-in in the Flocknote browser window on this computer. When reconnecting, use the original Flocknote login; switch logins on the website if needed. Keep credentials and codes out of chat, then check flocknote_status.",
+    "Finish sign-in in the Flocknote browser window on this computer. When reconnecting, use the original Flocknote login; switch logins on the website if needed. Keep credentials and codes out of chat, then check status.",
   ready:
     "The saved local Flocknote session is ready for use. Authentication is checked only after a relevant operation fails.",
   action_required:
-    "Sign in again using flocknote_connect. Enter passwords and codes only on Flocknote's website.",
+    "Sign in again using connect. Enter passwords and codes only on Flocknote's website.",
   authentication_required:
-    "The session needs sign-in. Use flocknote_connect to open Flocknote on this computer.",
+    "The session needs sign-in. Use connect to open Flocknote on this computer.",
   connection_changed:
     "The selected parish or Flocknote login differs from the saved connection. Restore the original login in the sign-in window, or explicitly forget the old connection through local setup before replacing it.",
   connection_busy:
@@ -220,7 +220,7 @@ export function createFlocknoteServer(
     .max(128)
     .regex(/^[A-Za-z0-9_-]+$/);
   server.registerTool(
-    "flocknote_status",
+    "status",
     {
       title: "Check local Flocknote connection",
       description:
@@ -238,11 +238,11 @@ export function createFlocknoteServer(
       }),
   );
   server.registerTool(
-    "flocknote_connect",
+    "connect",
     {
       title: "Sign in to Flocknote",
       description:
-        "Use when sign-in is needed for the user's request, or to connect/reconnect. Opens Flocknote's real website in a dedicated local browser and waits briefly for sign-in. On ready, continue the original task without asking for a done message. If still pending, finish sign-in and check flocknote_status later. Takes no credentials. Never repeat a write with unknown outcome.",
+        "Use when sign-in is needed for the user's request, or to connect/reconnect. Opens Flocknote's real website in a dedicated local browser and waits briefly for sign-in. On ready, continue the original task without asking for a done message. If still pending, finish sign-in and check status later. Takes no credentials. Never repeat a write with unknown outcome.",
       inputSchema: {
         subdomain: z
           .string()
@@ -276,7 +276,7 @@ export function createFlocknoteServer(
       }),
   );
   server.registerTool(
-    "flocknote_groups",
+    "groups",
     {
       title: "List parish groups",
       description:
@@ -294,11 +294,11 @@ export function createFlocknoteServer(
       })),
   );
   server.registerTool(
-    "flocknote_subscriber_count",
+    "subscriber_count",
     {
       title: "Count subscribers in a group",
       description:
-        "Use when the user asks how many subscribers a selected group has. Supply its identifier from flocknote_groups. Fetches a current count without member records.",
+        "Use when the user asks how many subscribers a selected group has. Supply its identifier from groups. Fetches a current count without member records.",
       inputSchema: { groupId },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -312,7 +312,7 @@ export function createFlocknoteServer(
       })),
   );
   server.registerTool(
-    "flocknote_find_members",
+    "find_members",
     {
       title: "Find parish members",
       description:
@@ -336,7 +336,7 @@ export function createFlocknoteServer(
       })),
   );
   server.registerTool(
-    "flocknote_member",
+    "member",
     {
       title: "Read selected member details",
       description:
@@ -395,7 +395,7 @@ export function createFlocknoteServer(
       })),
   );
   server.registerTool(
-    "flocknote_add_member",
+    "add_member",
     {
       title: "Add a member to a parish group",
       description:

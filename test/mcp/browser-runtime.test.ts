@@ -213,7 +213,7 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
       await client.connect(b);
       cleanup.unshift(() => client.close());
       const found = await client.callTool({
-        name: "flocknote_find_members",
+        name: "find_members",
         arguments: { searchTerm: "Alex Rivera" },
       });
       expect(found.structuredContent).toMatchObject({
@@ -227,7 +227,7 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
         (found.structuredContent as Record<string, unknown>).exactMatchUserId,
       );
       const person = await client.callTool({
-        name: "flocknote_member",
+        name: "member",
         arguments: { userId, fields: ["email"] },
       });
       expect(person.structuredContent).toMatchObject({
@@ -374,14 +374,14 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
       await server.connect(a);
       await client.connect(b);
       cleanup.unshift(() => client.close());
-      const groups = await client.callTool({ name: "flocknote_groups" });
+      const groups = await client.callTool({ name: "groups" });
       expect(groups.structuredContent).toMatchObject({
         ok: true,
         groups: [{ id: "101" }, { id: "102" }],
       });
       await f.connection.close();
       const count = await client.callTool({
-        name: "flocknote_subscriber_count",
+        name: "subscriber_count",
         arguments: { groupId: "101" },
       });
       expect(count.structuredContent).toEqual({
@@ -391,7 +391,7 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
       });
       await f.connection.close();
       const member = await client.callTool({
-        name: "flocknote_add_member",
+        name: "add_member",
         arguments: {
           groupId: "102",
           firstName: "Alex",

@@ -60,10 +60,10 @@ operations around locating and inspecting existing members.
 
 | Candidate | Observed internal requests | Evidence and limits |
 | --- | --- | --- |
-| `flocknote_find_members` | `POST /group/{groupId}/filter` | Three successful searches return structured member results and `resultCount`. Strong first candidate. General text search is observed; other filter combinations and pagination are unverified. |
+| `find_members` | `POST /group/{groupId}/filter` | Three successful searches return structured member results and `resultCount`. Strong first candidate. General text search is observed; other filter combinations and pagination are unverified. |
 | `flocknote_group_members` | `POST /group/{groupId}/people?ajax`; follow-up: `POST /group/{groupId}/people/{offset}?ajax&more` | Structured subscriber lists include pending members, permissions, filter metadata, and `moreSubscribersExist`. The follow-up captures two distinct 100-member pages with offset `100`; final-page behavior remains unverified. |
-| `flocknote_member` | `POST /user/{userId}/profile` | Two profiles returned names, contact fields, verification flags, and capability flags. Return selected domain fields, excluding UI assets and administrative/session capabilities. |
-| `flocknote_member_groups` | `POST /user/{userId}/groups` | Returns subscribed and available groups, membership flags, and channel preferences. Preference meanings and changing membership/preferences are not established. |
+| `member` | `POST /user/{userId}/profile` | Two profiles returned names, contact fields, verification flags, and capability flags. Return selected domain fields, excluding UI assets and administrative/session capabilities. |
+| `member_groups` | `POST /user/{userId}/groups` | Returns subscribed and available groups, membership flags, and channel preferences. Preference meanings and changing membership/preferences are not established. |
 | `flocknote_member_household` | `GET /user/{userId}/householdDetail` | Three structured household responses, each with one member. Multi-member relationships, addresses, and possible household materialization need further evidence. |
 | `flocknote_member_contact_history` | `GET /history/contact/{userId}` | One populated edit-history response with actor metadata, timestamps, and email/phone record types. Paging, ordering guarantees, and full value semantics are unverified. |
 | `flocknote_member_delivery_status` | Profile fields plus `GET /user/suppressions?userID={userId}` | Profile responses include bad-email, verification, and stop-reply fields. Both suppression responses have empty `groups`, so a populated suppression contract is missing. This is a possible combined tool, not an established delivery diagnostic. |

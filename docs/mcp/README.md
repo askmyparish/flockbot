@@ -18,15 +18,15 @@ published by these changes.
 
 | Tool | Behavior |
 | --- | --- |
-| `flocknote_status` | Report saved readiness or pending/required setup without a live request |
-| `flocknote_connect` | Open real Flocknote sign-in for a parish subdomain |
-| `flocknote_groups` | Return group identifiers, names and Everyone status; optional `refresh` |
-| `flocknote_subscriber_count` | Fetch a current count without member records |
-| `flocknote_find_members` | Search active members in a selected group or Everyone; return bounded identities and explicitly selected contact fields |
-| `flocknote_member` | Read one identified member's identity and explicitly selected stored email/mobile phone with status |
+| `status` | Report saved readiness or pending/required setup without a live request |
+| `connect` | Open real Flocknote sign-in for a parish subdomain |
+| `groups` | Return group identifiers, names and Everyone status; optional `refresh` |
+| `subscriber_count` | Fetch a current count without member records |
+| `find_members` | Search active members in a selected group or Everyone; return bounded identities and explicitly selected contact fields |
+| `member` | Read one identified member's identity and explicitly selected stored email/mobile phone with status |
 | `member_groups` | List a chosen member's explicit group subscriptions with bounded output and visibility limits |
 | `is_member` | Check one chosen member/group relationship as `member`, `not_member`, or `unknown` |
-| `flocknote_add_member` | Add once by `groupId` or case-insensitive unique `groupName`; return only success |
+| `add_member` | Add once by `groupId` or case-insensitive unique `groupName`; return only success |
 
 The MCP server publishes input schemas and workflow instructions. It offers no raw
 HTTP, arbitrary URL, script evaluation, credential or browser-inspection tool.
@@ -39,7 +39,7 @@ request. Status reports saved readiness without opening a browser; `ready` means
 sign-in previously completed, rather than a fresh live check. When a group name is
 known, pass it directly to the addition tool; only missing or ambiguous names need
 a separate group-list request. Discovery is cached for 60 seconds per connection;
-`flocknote_groups({refresh: true})` bypasses that cache. Modern discovery overlaps
+`groups({refresh: true})` bypasses that cache. Modern discovery overlaps
 its independent navigation/metadata reads and drains both before releasing
 coordination, including on failure. Counts are always fresh. A warm addition by
 known ID or cached group name makes only its membership POST; cached group
@@ -81,7 +81,7 @@ verification is not a delivery guarantee. Other contact, role and UI fields are
 discarded. These read operations use the observed POST contracts without being
 automatically replayed. No member-search live verification is claimed here.
 
-`flocknote_member` takes a chosen `userId` and optional `fields` (`email`,
+`member` takes a chosen `userId` and optional `fields` (`email`,
 `mobilePhone`). Without fields it returns only the member's ID and names, under
 `member`. A selected email includes `value`, `verified`, and `isBadEmail`; a
 selected mobile phone includes `value` and `verified`. These are Flocknote's
@@ -243,7 +243,7 @@ connector's supported operations.
 
 ## Continue after browser sign-in
 
-The MCP `flocknote_connect` call stays active for up to 45 seconds, including
+The MCP `connect` call stays active for up to 45 seconds, including
 browser startup, while checking only saved local connection status. When login
 finishes in that window, it returns `ready` and tells the assistant to continue
 the original parish request without another user confirmation. The browser’s

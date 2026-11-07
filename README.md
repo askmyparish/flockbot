@@ -399,7 +399,7 @@ Member search can locate active members in a selected group or Everyone, returni
 bounded identities and only explicitly requested contact fields. It distinguishes
 complete scoped results from truncated matches; see the
 [MCP tool contract](./docs/mcp/README.md#tools).
-For a chosen member ID, `flocknote_member` reads identity and explicitly selected
+For a chosen member ID, `member` reads identity and explicitly selected
 stored email/mobile phone details, preserving verification and bad-email status.
 Contact editing remains separate from these read operations.
 `member_groups` lists explicit subscriptions, while `is_member` checks one chosen

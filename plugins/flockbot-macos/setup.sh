@@ -170,4 +170,4 @@ if ! ready; then
   "$flockbot_stage/payload/node" --input-type=module -e 'import { renameSync } from "node:fs"; renameSync(process.argv[1], process.argv[2]);' "$flockbot_stage/payload" "$flockbot_runtime" 2>/dev/null || fail 'Flockbot activation failed. Check disk space and permissions, then rerun setup.'
 fi
 ready || fail 'Flockbot setup did not complete. Rerun the plugin setup skill.'
-echo 'Flockbot runtime is ready. Restart the MCP connection or start a new Codex conversation, then use flocknote_connect.'
+echo 'Flockbot runtime is ready. Restart the MCP connection or start a new Codex conversation, then use connect.'

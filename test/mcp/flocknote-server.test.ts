@@ -82,7 +82,7 @@ describe("Flocknote MCP contract", () => {
     });
     vi.spyOn(connection, "count").mockResolvedValue(7);
     const result = await client.callTool({
-      name: "flocknote_subscriber_count",
+      name: "subscriber_count",
       arguments: { groupId: "101" },
     });
     expect(result.structuredContent).toEqual({
@@ -110,7 +110,7 @@ describe("Flocknote MCP contract", () => {
     );
     await updates.refresh();
     const after = await client.callTool({
-      name: "flocknote_subscriber_count",
+      name: "subscriber_count",
       arguments: { groupId: "101" },
     });
     expect(after.structuredContent).toMatchObject({
@@ -154,7 +154,7 @@ describe("Flocknote MCP contract", () => {
         }),
     );
     const pending = client.callTool({
-      name: "flocknote_subscriber_count",
+      name: "subscriber_count",
       arguments: { groupId: "101" },
     });
     await waitFor(() => expect(connection.count).toHaveBeenCalledTimes(1));
@@ -184,7 +184,7 @@ describe("Flocknote MCP contract", () => {
       new BrowserConnectionError("broker_unavailable", "unknown"),
     );
     const result = await client.callTool({
-      name: "flocknote_add_member",
+      name: "add_member",
       arguments: {
         groupId: "101",
         firstName: "Alex",
@@ -222,7 +222,7 @@ describe("Flocknote MCP contract", () => {
     expect(
       (
         await client.callTool({
-          name: "flocknote_subscriber_count",
+          name: "subscriber_count",
           arguments: { groupId: "101" },
         })
       ).structuredContent,
@@ -230,7 +230,7 @@ describe("Flocknote MCP contract", () => {
     vi.spyOn(connection, "groups").mockRejectedValue(
       new Error("fictional-secret"),
     );
-    const error = await client.callTool({ name: "flocknote_groups" });
+    const error = await client.callTool({ name: "groups" });
     expect(error.isError).toBe(true);
     expect(error.structuredContent).toMatchObject({
       ok: false,
@@ -270,7 +270,7 @@ describe("Flocknote MCP contract", () => {
       signInPollMs: 5,
     });
     try {
-      const first = await client.callTool({ name: "flocknote_groups" });
+      const first = await client.callTool({ name: "groups" });
       expect(first.structuredContent).toMatchObject({
         ok: false,
         code: "not_configured",
@@ -279,7 +279,7 @@ describe("Flocknote MCP contract", () => {
       let returned = false;
       const connecting = client
         .callTool({
-          name: "flocknote_connect",
+          name: "connect",
           arguments: { subdomain: "example-parish" },
         })
         .then((result) => {
@@ -307,12 +307,12 @@ describe("Flocknote MCP contract", () => {
         "window_hidden",
         "connect_returned",
       ]);
-      const groups = await client.callTool({ name: "flocknote_groups" });
+      const groups = await client.callTool({ name: "groups" });
       expect(groups.structuredContent).toMatchObject({
         groups: [expect.objectContaining({ id: "101", isEveryone: true })],
       });
       const count = await client.callTool({
-        name: "flocknote_subscriber_count",
+        name: "subscriber_count",
         arguments: { groupId: "101" },
       });
       expect(count.structuredContent).toMatchObject({
@@ -341,7 +341,7 @@ describe("Flocknote MCP contract", () => {
     });
     const status = vi.spyOn(connection, "status");
     const result = await client.callTool({
-      name: "flocknote_connect",
+      name: "connect",
       arguments: { subdomain: "example-parish" },
     });
     expect(result.structuredContent).toMatchObject({
@@ -370,7 +370,7 @@ describe("Flocknote MCP contract", () => {
         }),
     );
     const result = await client.callTool({
-      name: "flocknote_connect",
+      name: "connect",
       arguments: { subdomain: "example-parish" },
     });
     expect(result.structuredContent).toMatchObject({
@@ -405,7 +405,7 @@ describe("Flocknote MCP contract", () => {
     const close = vi.spyOn(connection, "close");
     const controller = new AbortController();
     const pending = client.callTool(
-      { name: "flocknote_connect", arguments: { subdomain: "example-parish" } },
+      { name: "connect", arguments: { subdomain: "example-parish" } },
       undefined,
       { signal: controller.signal },
     );
@@ -434,7 +434,7 @@ describe("Flocknote MCP contract", () => {
     });
     const close = vi.spyOn(connection, "close");
     const result = await client.callTool({
-      name: "flocknote_connect",
+      name: "connect",
       arguments: { subdomain: "example-parish" },
     });
     expect(result.structuredContent).toMatchObject({
@@ -465,7 +465,7 @@ describe("Flocknote MCP contract", () => {
       });
       vi.spyOn(connection, "status").mockResolvedValue(saved);
       const result = await client.callTool({
-        name: "flocknote_connect",
+        name: "connect",
         arguments: { subdomain: "example-parish" },
       });
       expect(result.structuredContent).toMatchObject({ state: saved.state });
@@ -487,7 +487,7 @@ describe("Flocknote MCP contract", () => {
       parish: "another-example",
     });
     const result = await client.callTool({
-      name: "flocknote_connect",
+      name: "connect",
       arguments: { subdomain: "example-parish" },
     });
     expect(result.structuredContent).toMatchObject({
@@ -509,7 +509,7 @@ describe("Flocknote MCP contract", () => {
         }),
     );
     const timedOut = await first.client.callTool({
-      name: "flocknote_connect",
+      name: "connect",
       arguments: { subdomain: "example-parish" },
     });
     expect(timedOut.structuredContent).toMatchObject({
@@ -526,7 +526,7 @@ describe("Flocknote MCP contract", () => {
       new BrowserConnectionError("profile_unavailable"),
     );
     const failed = await next.client.callTool({
-      name: "flocknote_connect",
+      name: "connect",
       arguments: { subdomain: "example-parish" },
     });
     expect(failed.structuredContent).toMatchObject({
@@ -547,7 +547,7 @@ describe("Flocknote MCP contract", () => {
       email: "alex@example.test",
     };
     const result = await client.callTool({
-      name: "flocknote_add_member",
+      name: "add_member",
       arguments: { groupName: "Volunteers", ...member },
     });
     expect(result.structuredContent).toEqual({ ok: true, success: true });
@@ -559,7 +559,7 @@ describe("Flocknote MCP contract", () => {
     expect(groups).not.toHaveBeenCalled();
     for (const selector of [{}, { groupId: "102", groupName: "Volunteers" }]) {
       const invalid = await client.callTool({
-        name: "flocknote_add_member",
+        name: "add_member",
         arguments: { ...selector, ...member },
       });
       expect(invalid.structuredContent).toMatchObject({
@@ -575,22 +575,22 @@ describe("Flocknote MCP contract", () => {
     const { client } = await fixture();
     const { tools } = await client.listTools();
     expect(tools.map(({ name }) => name).sort()).toEqual([
-      "flocknote_add_member",
-      "flocknote_connect",
-      "flocknote_find_members",
-      "flocknote_groups",
-      "flocknote_member",
-      "flocknote_status",
-      "flocknote_subscriber_count",
+      "add_member",
+      "connect",
+      "find_members",
+      "groups",
       "is_member",
+      "member",
       "member_groups",
+      "status",
+      "subscriber_count",
     ]);
     for (const tool of tools)
       expect(JSON.stringify(tool.inputSchema)).not.toMatch(
         /password|cookie|token|script|url|code/i,
       );
     expect(
-      tools.find(({ name }) => name === "flocknote_add_member")?.annotations,
+      tools.find(({ name }) => name === "add_member")?.annotations,
     ).toMatchObject({
       readOnlyHint: false,
       destructiveHint: true,
@@ -601,15 +601,38 @@ describe("Flocknote MCP contract", () => {
     );
   });
 
+  it.each([
+    "flocknote_status",
+    "flocknote_connect",
+    "flocknote_groups",
+    "flocknote_subscriber_count",
+    "flocknote_add_member",
+    "flocknote_find_members",
+    "flocknote_member",
+    "flocknote_member_groups",
+    "flocknote_is_member",
+  ])("does not expose the removed prefixed tool %s", async (name) => {
+    const { client } = await fixture();
+    expect(await client.callTool({ name })).toMatchObject({
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: expect.stringContaining(`Tool ${name} not found`),
+        },
+      ],
+    });
+  });
+
   it("returns nonsecret status and fixed setup errors through real MCP messages", async () => {
     const { client, connection } = await fixture();
-    const status = await client.callTool({ name: "flocknote_status" });
+    const status = await client.callTool({ name: "status" });
     expect(status.structuredContent).toMatchObject({
       ok: true,
       state: "not_configured",
     });
     const failed = await client.callTool({
-      name: "flocknote_connect",
+      name: "connect",
       arguments: { subdomain: "example-parish" },
     });
     expect(failed.isError).toBe(true);
@@ -620,10 +643,10 @@ describe("Flocknote MCP contract", () => {
       parish: "example-parish",
       setupError: "browser_unavailable",
     });
-    const afterFailure = await client.callTool({ name: "flocknote_status" });
+    const afterFailure = await client.callTool({ name: "status" });
     expect(afterFailure.structuredContent).toMatchObject({
       setupError: "browser_unavailable",
-      message: expect.stringContaining("Sign in again using flocknote_connect"),
+      message: expect.stringContaining("Sign in again using connect"),
     });
   });
 
@@ -649,10 +672,10 @@ describe("Flocknote MCP contract", () => {
         parish: "example-parish",
         setupError,
       });
-      for (const name of ["flocknote_status", "flocknote_connect"]) {
+      for (const name of ["status", "connect"]) {
         const response = await client.callTool({
           name,
-          ...(name === "flocknote_connect"
+          ...(name === "connect"
             ? { arguments: { subdomain: "example-parish" } }
             : {}),
         });
@@ -662,9 +685,7 @@ describe("Flocknote MCP contract", () => {
           message: expect.stringContaining(diagnostic),
         });
         expect(response.structuredContent).toMatchObject({
-          message: expect.stringContaining(
-            "Sign in again using flocknote_connect",
-          ),
+          message: expect.stringContaining("Sign in again using connect"),
         });
       }
     },
@@ -675,7 +696,7 @@ describe("Flocknote MCP contract", () => {
     vi.spyOn(connection, "groups").mockRejectedValue(
       new Error("alex@example.test; fictional-password"),
     );
-    const result = await client.callTool({ name: "flocknote_groups" });
+    const result = await client.callTool({ name: "groups" });
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result)).not.toMatch(/alex@|fictional-password/);
   });

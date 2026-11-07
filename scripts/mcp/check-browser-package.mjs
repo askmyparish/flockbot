@@ -19,15 +19,15 @@ import { zipDirectory } from "./archive.mjs";
 import { CODEX_VERSION } from "./browser-build.mjs";
 
 export const FLOCKNOTE_TOOLS = [
-  "flocknote_add_member",
-  "flocknote_connect",
-  "flocknote_find_members",
-  "flocknote_groups",
-  "flocknote_member",
-  "flocknote_status",
-  "flocknote_subscriber_count",
+  "add_member",
+  "connect",
+  "find_members",
+  "groups",
   "is_member",
+  "member",
   "member_groups",
+  "status",
+  "subscriber_count",
 ];
 const scratch = await mkdtemp(
   join(await realpath(tmpdir()), "flockbot-browser-package-"),
@@ -168,7 +168,7 @@ try {
       (await client.listTools()).tools.map(({ name }) => name).sort(),
       FLOCKNOTE_TOOLS,
     );
-    const status = await client.callTool({ name: "flocknote_status" });
+    const status = await client.callTool({ name: "status" });
     assert.equal(
       status.structuredContent.state,
       "not_configured",

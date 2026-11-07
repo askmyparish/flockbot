@@ -39,4 +39,4 @@ if (-not (Test-Path (Join-Path $flockbotRuntime '.complete'))) {
   } finally { Remove-Item -LiteralPath $flockbotStage -Recurse -Force }
 }
 if (-not (Test-Path (Join-Path $flockbotRuntime '.complete'))) { throw 'Flockbot runtime is incomplete. Remove the incomplete runtime directory and rerun setup.' }
-Write-Output 'Flockbot runtime is ready. Restart the MCP connection or start a new Codex conversation, then use flocknote_connect.'
+Write-Output 'Flockbot runtime is ready. Restart the MCP connection or start a new Codex conversation, then use connect.'

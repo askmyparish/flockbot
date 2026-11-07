@@ -80,7 +80,7 @@ installation has not been attempted; **host reload and checking the saved connec
 | `runtime: preparation_required` | Run the release's `install.sh`; invoking the source core alone does not prepare a runtime |
 | `host: manual_install_required` | Open Plugins → your personal source → Flockbot → Install, then restart; no CLI is needed for desktop |
 | `host: reload_required` | Start a new Codex session/restart the MCP connection; desktop may need an application restart |
-| `connection: saved_ready` | Sign-in previously completed; run `flocknote_status` after reload, not a fresh authentication probe |
+| `connection: saved_ready` | Sign-in previously completed; run `status` after reload, not a fresh authentication probe |
 | `sign_in_required` / `sign_in_pending` | Complete the installed setup skill and local browser sign-in as needed |
 | `codex_missing` / `codex_unsupported` | Install/update the supported official CLI on PATH, then rerun the same release |
 | `codex_failed` / `host_source_conflict` | Resolve host permissions/policy or an existing conflicting source using Codex's supported commands, then rerun |
@@ -97,7 +97,7 @@ interpret an old prompt's version refusal as permission to reinstall that releas
 Once the host has reloaded, run the installed Flockbot setup skill. If sign-in is
 needed, supply only the parish subdomain, then sign in on Flocknote's real website
 and finish any code challenge there. Passwords, codes and cookies never belong in
-chat, prompts, configuration or shell arguments. `flocknote_status` reports saved
+chat, prompts, configuration or shell arguments. `status` reports saved
 readiness; ordinary tasks trust it until an authentication-like operation failure
 requires diagnosis. Never repeat a write whose outcome is unknown.
 
