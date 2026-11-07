@@ -14,7 +14,10 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import {
+  getDefaultEnvironment,
+  StdioClientTransport,
+} from "@modelcontextprotocol/sdk/client/stdio.js";
 import { zipDirectory } from "./archive.mjs";
 import { CODEX_VERSION } from "./browser-build.mjs";
 
@@ -33,6 +36,9 @@ export const FLOCKNOTE_TOOLS = [
 const scratch = await mkdtemp(
   join(await realpath(tmpdir()), "flockbot-browser-package-"),
 );
+const failures = [];
+const cleanup = [];
+let phase = "preparing the offline runtime";
 try {
   const payload = join(scratch, "runtime payload");
   await cp(resolve("adapters/mcp/dist/browser"), payload, { recursive: true });
@@ -52,6 +58,8 @@ try {
   const home = join(scratch, "home");
   await mkdir(home);
   const environment = {
+    // Use the same host prerequisites for SDK launches and direct stop calls.
+    ...getDefaultEnvironment(),
     PATH: process.env.PATH ?? "",
     HOME: home,
     FLOCKBOT_UPDATE_CHECKS: "0",
@@ -76,6 +84,7 @@ try {
         ? "flockbot-windows"
         : undefined;
   if (hostPlugin) {
+    phase = "checking native installation";
     const plugin = join(scratch, "plugin folder with spaces");
     await cp(resolve("plugins", hostPlugin), plugin, { recursive: true });
     await writeFile(join(plugin, "runtime.sha256"), `${sha256}\n`);
@@ -214,6 +223,41 @@ try {
     );
   }
   const client = new Client({ name: "offline-package-check", version: "1" });
+  // Register both operations before initialization: a failed handshake can
+  // still leave a proxy or detached browser owner running.
+  cleanup.push(
+    ["closing the MCP client", () => client.close()],
+    [
+      "stopping the browser owner",
+      () => {
+        execFileSync(
+          runtimeNode,
+          ["--disable-warning=ExperimentalWarning", runtimeEntry, "stop"],
+          { env: environment, stdio: "pipe", timeout: 45_000 },
+        );
+      },
+    ],
+  );
+  if (process.platform === "win32") {
+    cleanup.push([
+      "waiting for Windows runtime processes",
+      () => {
+        execFileSync(
+          "powershell.exe",
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-File",
+            resolve("scripts/mcp/wait-package-runtime.ps1"),
+            "-RuntimeNode",
+            runtimeNode,
+          ],
+          { env: environment, stdio: "pipe", timeout: 30_000 },
+        );
+      },
+    ]);
+  }
+  phase = "initializing MCP through the plugin launcher";
   await client.connect(
     new StdioClientTransport({
       command,
@@ -222,28 +266,20 @@ try {
       stderr: "pipe",
     }),
   );
-  try {
-    assert.deepEqual(
-      (await client.listTools()).tools.map(({ name }) => name).sort(),
-      FLOCKNOTE_TOOLS,
-    );
-    const status = await client.callTool({ name: "status" });
-    assert.equal(
-      status.structuredContent.state,
-      "not_configured",
-      `Offline status failed with code: ${status.structuredContent.code ?? "unknown"}`,
-    );
-    assert.equal(JSON.stringify(status).includes(scratch), false);
-  } finally {
-    await client.close();
-    // The browser owner deliberately outlives an MCP client; clean up the
-    // disposable owner's socket before deleting its test home.
-    execFileSync(
-      runtimeNode,
-      ["--disable-warning=ExperimentalWarning", runtimeEntry, "stop"],
-      { env: environment, stdio: "pipe" },
-    );
-  }
+  phase = "listing MCP tools";
+  assert.deepEqual(
+    (await client.listTools()).tools.map(({ name }) => name).sort(),
+    FLOCKNOTE_TOOLS,
+  );
+  phase = "reading offline status";
+  const status = await client.callTool({ name: "status" });
+  assert.equal(
+    status.structuredContent.state,
+    "not_configured",
+    `Offline status failed with code: ${status.structuredContent.code ?? "unknown"}`,
+  );
+  assert.equal(JSON.stringify(status).includes(scratch), false);
+  phase = "checking plugin manifests";
   for (const name of ["flockbot-macos", "flockbot-windows"]) {
     const root = resolve("plugins", name);
     const plugin = JSON.parse(
@@ -258,9 +294,42 @@ try {
     );
     assert.ok(await readFile(join(root, plugin.onboardingSkill), "utf8"));
   }
-  console.log(
-    "Codex browser package exposes the expected stdio tools; offline bootstrap verifies integrity and handles spaces.",
+} catch (error) {
+  failures.push(
+    new Error(`Browser package check failed while ${phase}.`, { cause: error }),
   );
 } finally {
-  await rm(scratch, { recursive: true, force: true });
+  // Attempt every cleanup step and retain the original failure, even if stopping
+  // a child or removing its executable also fails.
+  for (const [operation, close] of cleanup) {
+    try {
+      await close();
+    } catch (error) {
+      failures.push(
+        new Error(`Browser package cleanup failed while ${operation}.`, {
+          cause: error,
+        }),
+      );
+    }
+  }
+  try {
+    await rm(scratch, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    });
+  } catch (error) {
+    failures.push(
+      new Error(
+        "Browser package cleanup could not remove its disposable runtime.",
+        { cause: error },
+      ),
+    );
+  }
 }
+if (failures.length)
+  throw new AggregateError(failures, "Browser package verification failed.");
+console.log(
+  "Codex browser package exposes the expected stdio tools; offline bootstrap verifies integrity and handles spaces.",
+);
