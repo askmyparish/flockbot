@@ -215,6 +215,35 @@ try {
       env: environment,
       stdio: "pipe",
     });
+    if (process.platform === "win32") {
+      phase = "checking Windows launcher output and exit status";
+      // This SDK-style environment omits PATHEXT. The launcher must still wait
+      // for Node and preserve the caller's pipes instead of opening a console.
+      const stopped = spawnSync(setupCommand, [...setupArgs(), "-Stop"], {
+        env: environment,
+        encoding: "utf8",
+        timeout: 45_000,
+      });
+      assert.equal(stopped.status, 0, stopped.stderr || stopped.error?.message);
+      assert.match(stopped.stdout, /The local browser owner was stopped/);
+      const originalEntry = await readFile(runtimeEntry);
+      try {
+        await writeFile(
+          runtimeEntry,
+          'process.stdout.write("fictional-runtime-stdout\\n"); process.stderr.write("fictional-runtime-stderr\\n"); process.exit(17);\n',
+        );
+        const failed = spawnSync(setupCommand, [...setupArgs(), "-Launch"], {
+          env: environment,
+          encoding: "utf8",
+          timeout: 45_000,
+        });
+        assert.equal(failed.status, 17, failed.stderr || failed.error?.message);
+        assert.equal(failed.stdout.trim(), "fictional-runtime-stdout");
+        assert.equal(failed.stderr.trim(), "fictional-runtime-stderr");
+      } finally {
+        await writeFile(runtimeEntry, originalEntry);
+      }
+    }
     const config = JSON.parse(await readFile(join(plugin, ".mcp.json"), "utf8"))
       .mcpServers.flocknote;
     command = config.command;

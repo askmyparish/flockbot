@@ -24,11 +24,23 @@ $flockbotRuntime = Join-Path $flockbotBase ('runtimes\' + $flockbotVersion + '-'
 $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $flockbotBase 'browser-engines'
 if ($Launch -or $Forget -or $Stop) {
   if (-not (Test-Path (Join-Path $flockbotRuntime '.complete'))) { throw 'Flockbot setup is required. Run the plugin setup skill.' }
-  $flockbotArguments = @('--disable-warning=ExperimentalWarning', (Join-Path $flockbotRuntime 'server\index.mjs'))
-  if ($Forget) { $flockbotArguments += 'forget' }
-  elseif ($Stop) { $flockbotArguments += 'stop' }
-  & (Join-Path $flockbotRuntime 'node.exe') @flockbotArguments
-  exit $LASTEXITCODE
+  $flockbotArguments = '--disable-warning=ExperimentalWarning "' + (Join-Path $flockbotRuntime 'server\index.mjs') + '"'
+  if ($Forget) { $flockbotArguments += ' forget' }
+  elseif ($Stop) { $flockbotArguments += ' stop' }
+  # Start directly so PowerShell cannot choose shell execution. Inherit the
+  # MCP host's stdio, wait for the runtime, and return its actual exit status.
+  $flockbotProcess = New-Object Diagnostics.Process
+  try {
+    $flockbotProcess.StartInfo.FileName = Join-Path $flockbotRuntime 'node.exe'
+    $flockbotProcess.StartInfo.Arguments = $flockbotArguments
+    $flockbotProcess.StartInfo.UseShellExecute = $false
+    if (-not $flockbotProcess.Start()) { throw 'Flockbot could not start its local runtime.' }
+    $flockbotProcess.WaitForExit()
+    $flockbotExitCode = $flockbotProcess.ExitCode
+  } finally {
+    $flockbotProcess.Dispose()
+  }
+  exit $flockbotExitCode
 }
 New-Item -ItemType Directory -Force (Join-Path $flockbotBase 'runtimes') | Out-Null
 if ((Get-Item $flockbotBase).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Flockbot install directory must not be a reparse point.' }
