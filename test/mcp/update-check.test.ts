@@ -410,6 +410,7 @@ describe("public update discovery", () => {
     const f = fixture();
     const entry = join(f.root, "checker.mjs"),
       events = join(f.root, "events.txt");
+    writeFileSync(events, "");
     await build({
       stdin: {
         contents: `import {UpdateChecker} from ${JSON.stringify(resolve("adapters/mcp/src/update-check.ts"))}; import {appendFileSync} from 'node:fs';
@@ -423,20 +424,24 @@ await checker.refresh(); checker.close();`,
       format: "esm",
       logLevel: "silent",
     });
-    const results = await Promise.all(
-      Array.from(
-        { length: 4 },
-        () =>
-          new Promise<number | null>((resolve, reject) => {
-            const child = spawn(process.execPath, [entry, f.file, events], {
-              stdio: "ignore",
-            });
-            child.on("error", reject);
-            child.on("close", resolve);
-          }),
-      ),
-    );
+    const run = () =>
+      new Promise<number | null>((resolve, reject) => {
+        const child = spawn(process.execPath, [entry, f.file, events], {
+          stdio: "ignore",
+        });
+        child.on("error", reject);
+        child.on("close", resolve);
+      });
+    const results = await Promise.all(Array.from({ length: 4 }, run));
     expect(results).toEqual([0, 0, 0, 0]);
+    // Cold-cache schema contention may quietly skip every attempt. It must
+    // never duplicate a request, and a later uncontended call must check once.
+    expect(["", "request\n"]).toContain(readFileSync(events, "utf8"));
+    expect(await run()).toBe(0);
+    expect(readFileSync(events, "utf8")).toBe("request\n");
+    expect(await Promise.all(Array.from({ length: 4 }, run))).toEqual([
+      0, 0, 0, 0,
+    ]);
     expect(readFileSync(events, "utf8")).toBe("request\n");
   });
 });
