@@ -46,8 +46,21 @@ if (-not (Test-Path (Join-Path $flockbotRuntime '.complete'))) {
     if ((Get-FileHash -Algorithm SHA256 $flockbotArchive).Hash.ToLowerInvariant() -cne $flockbotDigest) { throw 'Flockbot download failed its integrity check.' }
     $flockbotPayload = Join-Path $flockbotStage 'payload'
     Expand-Archive -LiteralPath $flockbotArchive -DestinationPath $flockbotPayload
-    & (Join-Path $flockbotPayload 'node.exe') (Join-Path $flockbotPayload 'setup-browser.mjs')
-    if ($LASTEXITCODE -ne 0) { throw 'Flockbot browser setup failed.' }
+    # Own the process lifetime and status instead of PowerShell's ambient
+    # LASTEXITCODE. Release its handle before moving the staged executable.
+    $flockbotSetupProcess = New-Object Diagnostics.Process
+    try {
+      $flockbotSetupProcess.StartInfo.FileName = Join-Path $flockbotPayload 'node.exe'
+      $flockbotSetupProcess.StartInfo.Arguments = '"' + (Join-Path $flockbotPayload 'setup-browser.mjs') + '"'
+      $flockbotSetupProcess.StartInfo.UseShellExecute = $false
+      $flockbotSetupProcess.StartInfo.CreateNoWindow = $true
+      if (-not $flockbotSetupProcess.Start()) { throw 'Flockbot browser setup could not start.' }
+      $flockbotSetupProcess.WaitForExit()
+      $flockbotSetupExitCode = $flockbotSetupProcess.ExitCode
+    } finally {
+      $flockbotSetupProcess.Dispose()
+    }
+    if ($flockbotSetupExitCode -ne 0) { throw ('Flockbot browser setup failed (exit code ' + $flockbotSetupExitCode + ').') }
     New-Item -ItemType File (Join-Path $flockbotPayload '.complete') | Out-Null
     if (-not (Test-Path $flockbotRuntime)) {
       Invoke-FlockbotFileOperation { Move-Item -LiteralPath $flockbotPayload -Destination $flockbotRuntime }

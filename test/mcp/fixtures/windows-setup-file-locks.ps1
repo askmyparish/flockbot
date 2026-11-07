@@ -7,6 +7,9 @@ $global:flockbotProbePreserveFailure = $PreserveFailure.IsPresent
 # Inject filesystem failures in the real installer while keeping archive
 # verification, browser setup, activation and all later stdio checks intact.
 function Move-Item([string]$LiteralPath, [string]$Destination) {
+  if (-not (Test-Path -LiteralPath (Join-Path $LiteralPath 'browser-setup-ran'))) {
+    throw 'Activation started before browser setup completed.'
+  }
   $global:flockbotProbeMoveAttempts++
   if ($global:flockbotProbeMoveAttempts -le 2) {
     throw [IO.IOException]::new('Fictional transient runtime lock.')

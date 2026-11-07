@@ -42,7 +42,7 @@ try {
   // opt-in integration check; this fixture verifies the bootstrap/stdio path.
   await writeFile(
     join(payload, "setup-browser.mjs"),
-    'import {writeFileSync} from "node:fs"; writeFileSync(new URL("./browser-setup-ran", import.meta.url), "fictional-check");\n',
+    'import {writeFileSync} from "node:fs"; await new Promise(resolve => setTimeout(resolve, 250)); if (process.env.FLOCKBOT_TEST_SETUP_EXIT) process.exit(Number(process.env.FLOCKBOT_TEST_SETUP_EXIT)); writeFileSync(new URL("./browser-setup-ran", import.meta.url), "fictional-check");\n',
   );
   const archive = join(scratch, "runtime.zip");
   await zipDirectory(payload, archive);
@@ -121,6 +121,34 @@ try {
           stdio: "pipe",
           timeout: 30_000,
         },
+      );
+      const failedRoot = join(scratch, "browser failure with spaces");
+      const failedBrowser = spawnSync(setupCommand, setupArgs(archive), {
+        env: {
+          ...environment,
+          FLOCKBOT_INSTALL_ROOT: failedRoot,
+          FLOCKBOT_TEST_SETUP_EXIT: "17",
+        },
+        encoding: "utf8",
+      });
+      assert.notEqual(failedBrowser.status, 0);
+      assert.match(
+        failedBrowser.stderr,
+        /browser setup failed \(exit code 17\)/,
+      );
+      assert.doesNotMatch(
+        `${failedBrowser.stdout}${failedBrowser.stderr}`,
+        /runtime is ready/,
+      );
+      await assert.rejects(
+        readFile(
+          join(
+            failedRoot,
+            "runtimes",
+            `${CODEX_VERSION}-win32-x64-${sha256.slice(0, 12)}`,
+            ".complete",
+          ),
+        ),
       );
     }
     execFileSync(
