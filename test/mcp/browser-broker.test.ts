@@ -116,6 +116,31 @@ describe.skipIf(process.platform === "win32")(
   "shared local browser owner over private IPC",
   { concurrent: true },
   () => {
+    it("reads selected member contacts over actual private IPC with no preflight", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
+      await expect(
+        f.service.member("301", ["email", "email"]),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      expect(f.launches()).toBe(0);
+      expect(await f.service.member("301", ["email"])).toEqual({
+        id: "301",
+        firstName: "Alex",
+        lastName: "Rivera",
+        email: {
+          value: "alex@example.test",
+          verified: false,
+          isBadEmail: true,
+        },
+      });
+      expect(f.events()).toEqual(["launch", "POST user/301/profile"]);
+      expect(await f.service.member("301")).toEqual({
+        id: "301",
+        firstName: "Alex",
+        lastName: "Rivera",
+      });
+    });
+
     it("rejects invalid member search before starting a browser owner", async (context) => {
       const { expect } = context;
       const f = await fixture(context);

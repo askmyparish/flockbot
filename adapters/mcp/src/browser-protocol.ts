@@ -37,6 +37,16 @@ export const brokerRequestSchema = z.discriminatedUnion("action", [
     .strict(),
   z
     .object({
+      action: z.literal("member"),
+      userId: z.string().min(1).max(128),
+      fields: z
+        .array(z.enum(["email", "mobilePhone"]))
+        .max(2)
+        .optional(),
+    })
+    .strict(),
+  z
+    .object({
       action: z.literal("add"),
       groupId: z.string().max(128).optional(),
       groupName: z.string().max(256).optional(),

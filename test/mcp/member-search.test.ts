@@ -11,6 +11,8 @@ import { brokerRequestSchema } from "../../adapters/mcp/src/browser-protocol.js"
 import { SerialCoordinator } from "../../adapters/mcp/src/serial-coordinator.js";
 import type { BrowserSession } from "../../adapters/mcp/src/browser-runtime.js";
 import { searchMetadata, searchRow } from "../fixtures/member-search.js";
+import { profileResponse } from "../fixtures/member-profile.js";
+import { waitFor } from "./support.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -34,10 +36,12 @@ async function fixture() {
     response: unknown;
     verification: unknown;
     everyoneGroupID: number | null;
+    profile: unknown;
   } = {
     response: { success: true, results: [searchRow()], resultCount: 1 },
     verification: { success: true, userID: 201 },
     everyoneGroupID: 101,
+    profile: profileResponse(),
   };
   const session: BrowserSession = {
     signIn: vi.fn(async () => undefined),
@@ -52,6 +56,10 @@ async function fixture() {
       if (path === "group/101/filter") {
         if (state.response instanceof Error) throw state.response;
         return state.response;
+      }
+      if (path === "user/301/profile") {
+        if (state.profile instanceof Error) throw state.profile;
+        return state.profile;
       }
       throw new Error("Unexpected fictional request");
     }),
@@ -86,6 +94,154 @@ async function fixture() {
   });
   return { connection, client, factory, session, state };
 }
+
+describe("identified profile MCP/connection boundary", () => {
+  it("returns identity by default and only explicitly selected contact details", async () => {
+    const f = await fixture();
+    const identity = await f.client.callTool({
+      name: "flocknote_member",
+      arguments: { userId: "301" },
+    });
+    expect(identity.structuredContent).toMatchObject({
+      ok: true,
+      member: { id: "301", firstName: "Alex", lastName: "Rivera" },
+    });
+    expect(JSON.stringify(identity)).not.toMatch(/alex@|555|canEdit|pending/);
+    const selected = await f.client.callTool({
+      name: "flocknote_member",
+      arguments: { userId: "301", fields: ["email"] },
+    });
+    expect(selected.structuredContent).toMatchObject({
+      ok: true,
+      member: {
+        email: {
+          value: "alex@example.test",
+          verified: false,
+          isBadEmail: true,
+        },
+      },
+      update: { availableVersion: "0.3.0" },
+    });
+    expect(JSON.stringify(selected)).not.toMatch(/555|canEdit|pending/);
+    expect(f.session.request).toHaveBeenCalledTimes(2);
+    expect(f.session.request).toHaveBeenNthCalledWith(
+      1,
+      "user/301/profile",
+      "POST",
+      undefined,
+    );
+    expect(f.session.request).toHaveBeenNthCalledWith(
+      2,
+      "user/301/profile",
+      "POST",
+      undefined,
+    );
+    const tools = await f.client.listTools();
+    expect(
+      tools.tools.find((t) => t.name === "flocknote_member")?.annotations
+        ?.readOnlyHint,
+    ).toBe(true);
+  });
+
+  it("rejects malformed direct arguments before browser access and validates typed IPC", async () => {
+    const f = await fixture();
+    await expect(
+      f.connection.member("../301", ["email"]),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    await expect(
+      f.connection.member("301", ["email", "email"]),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(f.factory).not.toHaveBeenCalled();
+    expect(
+      brokerRequestSchema.safeParse({
+        action: "member",
+        userId: "301",
+        fields: ["email"],
+      }).success,
+    ).toBe(true);
+    for (const input of [
+      { action: "member", userId: "301", fields: ["medical"] },
+      { action: "member", userId: "301", path: "arbitrary" },
+      { action: "member", userId: "301", fields: ["email", "email", "email"] },
+    ])
+      expect(brokerRequestSchema.safeParse(input).success).toBe(false);
+  });
+
+  it("does not probe authentication or replay a restricted member read", async () => {
+    const f = await fixture();
+    f.state.profile = { ...profileResponse(), canViewProfile: false };
+    const result = await f.client.callTool({
+      name: "flocknote_member",
+      arguments: { userId: "301", fields: ["email"] },
+    });
+    expect(result.structuredContent).toMatchObject({
+      ok: false,
+      code: "permission_denied",
+    });
+    expect(JSON.stringify(result)).not.toContain("alex@");
+    expect(f.session.request).toHaveBeenCalledTimes(1);
+    expect(await f.connection.status()).toMatchObject({ state: "ready" });
+  });
+
+  it("keeps business rejection and unexpected errors sanitized without replay", async () => {
+    const f = await fixture();
+    for (const failure of [
+      { success: false, error: "private@example.test" },
+      new Error("private@example.test"),
+    ]) {
+      f.state.profile = failure;
+      const result = await f.client.callTool({
+        name: "flocknote_member",
+        arguments: { userId: "301", fields: ["email"] },
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("private@");
+    }
+    expect(f.session.request).toHaveBeenCalledTimes(2);
+    expect(await f.connection.status()).toMatchObject({ state: "ready" });
+  });
+
+  it("diagnoses explicit expiry once without repeating the failed profile read", async () => {
+    const f = await fixture();
+    f.state.profile = { success: false, authorized: false };
+    f.state.verification = { success: true, userID: null, authorized: false };
+    await expect(f.connection.member("301", ["email"])).rejects.toMatchObject({
+      code: "authentication_required",
+    });
+    expect(f.session.request).toHaveBeenCalledTimes(2);
+    expect(f.session.request).toHaveBeenLastCalledWith("user/userData");
+    expect(await f.connection.status()).toMatchObject({
+      state: "action_required",
+    });
+  });
+
+  it("cancels queued and in-flight reads without starting a second profile request", async () => {
+    const f = await fixture();
+    await expect(
+      f.connection.member("301", [], { signal: AbortSignal.abort() }),
+    ).rejects.toMatchObject({ code: "operation_cancelled" });
+    expect(f.factory).not.toHaveBeenCalled();
+    let finish = (_value: unknown) => {};
+    f.state.profile = new Promise((resolve) => {
+      finish = resolve;
+    });
+    const controller = new AbortController();
+    const pending = f.connection.member("301", ["email"], {
+      signal: controller.signal,
+    });
+    const rejected = expect(pending).rejects.toMatchObject({
+      code: "operation_cancelled",
+    });
+    try {
+      await waitFor(() => expect(f.session.request).toHaveBeenCalledTimes(1));
+      controller.abort();
+      await rejected;
+      expect(f.session.request).toHaveBeenCalledTimes(1);
+    } finally {
+      finish(profileResponse());
+    }
+  });
+});
 
 describe("member search MCP/connection boundary", () => {
   it("asks for an explicit group when Everyone is unavailable", async () => {

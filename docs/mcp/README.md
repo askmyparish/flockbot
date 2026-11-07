@@ -23,6 +23,7 @@ published by these changes.
 | `flocknote_groups` | Return group identifiers, names and Everyone status; optional `refresh` |
 | `flocknote_subscriber_count` | Fetch a current count without member records |
 | `flocknote_find_members` | Search active members in a selected group or Everyone; return bounded identities and explicitly selected contact fields |
+| `flocknote_member` | Read one identified member's identity and explicitly selected stored email/mobile phone with status |
 | `flocknote_add_member` | Add once by `groupId` or case-insensitive unique `groupName`; return only success |
 
 The MCP server publishes input schemas and workflow instructions. It offers no raw
@@ -77,6 +78,24 @@ their stored value and verification flag; a blank/null value remains null, and
 verification is not a delivery guarantee. Other contact, role and UI fields are
 discarded. These read operations use the observed POST contracts without being
 automatically replayed. No member-search live verification is claimed here.
+
+`flocknote_member` takes a chosen `userId` and optional `fields` (`email`,
+`mobilePhone`). Without fields it returns only the member's ID and names, under
+`member`. A selected email includes `value`, `verified`, and `isBadEmail`; a
+selected mobile phone includes `value` and `verified`. These are Flocknote's
+stored values and flags, not a promise that a message will arrive. The profile
+must belong to the requested person in the current parish and permit profile
+viewing. Permission to edit contacts is separate and is not required to read
+contact values that Flocknote returns in an authorized profile.
+
+An explicit null or blank stored contact is returned as `value: null`. If a
+selected key is missing from the profile, that field is omitted and named in
+`unavailableFields`; it is not treated as proof that the person has no contact
+value. Pending contact values are never substituted for stored contacts. Missing
+keys and non-null pending contacts are simulated offline cases; the captured
+profiles establish string email, string/null mobile and null pending values.
+Each call fetches a fresh profile with one POST attempt and no authentication
+preflight. No live verification of this tool is claimed.
 
 ## Develop and verify
 

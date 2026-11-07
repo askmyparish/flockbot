@@ -23,6 +23,7 @@ export const FLOCKNOTE_TOOLS = [
   "flocknote_connect",
   "flocknote_find_members",
   "flocknote_groups",
+  "flocknote_member",
   "flocknote_status",
   "flocknote_subscriber_count",
 ];

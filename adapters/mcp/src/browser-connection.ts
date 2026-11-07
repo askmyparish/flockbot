@@ -26,6 +26,8 @@ import {
 } from "../../../src/models/network.js";
 import { GroupMembership } from "../../../src/models/group-membership.js";
 import { User } from "../../../src/models/user.js";
+import { MemberProfile } from "../../../src/models/member-profile.js";
+import type { MemberField } from "../../../src/models/member-fields.js";
 import {
   MemberSearch,
   type MemberSearchInput,
@@ -600,6 +602,17 @@ export class BrowserConnection {
     const search = new MemberSearch(input);
     return this.#operate(options, (session, op, network) =>
       search.find(this.#resources(session, op), network),
+    );
+  }
+
+  async member(
+    userId: string,
+    fields: readonly MemberField[] = [],
+    options: OperationOptions = {},
+  ) {
+    const profile = new MemberProfile(userId, fields);
+    return this.#operate(options, (session, op) =>
+      profile.read(this.#resources(session, op)),
     );
   }
 

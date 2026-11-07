@@ -399,6 +399,9 @@ Member search can locate active members in a selected group or Everyone, returni
 bounded identities and only explicitly requested contact fields. It distinguishes
 complete scoped results from truncated matches; see the
 [MCP tool contract](./docs/mcp/README.md#tools).
+For a chosen member ID, `flocknote_member` reads identity and explicitly selected
+stored email/mobile phone details, preserving verification and bad-email status.
+Contact editing remains separate from these read operations.
 
 `npm run check` builds/tests its stdio contract and packaging offline. The opt-in
 `npm run test:mcp:browser` uses real Chromium with intercepted fictional responses.

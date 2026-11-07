@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { searchMetadata, searchRow } from "../../fixtures/member-search.js";
+import { profileResponse } from "../../fixtures/member-profile.js";
 import {
   BrowserService,
   runBrowserBroker,
@@ -48,6 +49,8 @@ if (role === "broker") {
               return searchMetadata();
             case "group/101/filter":
               return { success: true, results: [searchRow()], resultCount: 1 };
+            case "user/301/profile":
+              return profileResponse();
             case "group/102/addToGroupByAdmin":
               while (existsSync(join(profile, "hold"))) await delay(10);
               return { success: true };

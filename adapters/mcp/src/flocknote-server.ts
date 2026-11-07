@@ -17,6 +17,7 @@ const INSTRUCTIONS =
   "Never request passwords, codes, cookies, browser storage, arbitrary URLs or scripts. " +
   "For additions use a known groupId, or supply the user's groupName for a case-insensitive unique match to resolve it in the same call. List groups only when the choice is unclear. " +
   "For an existing person, use flocknote_find_members first unless their user ID is already known. Continue directly only when exactMatchUserId identifies one exact full-name match in complete results; duplicate, similar or incomplete matches require clarification. Completeness covers only the selected group's active-member search, not inactive or inaccessible users. Request contact fields only when needed for the user's task. " +
+  "Use flocknote_member with the chosen userId and selected fields for contact questions. Without fields it returns identity only. Report stored unverified or bad email status accurately; unavailable or null values are not a new address, and pending contacts never replace stored ones. " +
   "When a tool includes update metadata, answer the parish request first, then briefly mention the available Flockbot version (label prereleases) and say ‘Update Flockbot’ to install it. Mention it once per conversation unless asked again. Do not interrupt sign-in, hide an error or unknown write outcome, or install automatically. For an explicit update request, follow the canonical Flockbot guide, not the older installed setup script. " +
   "Add members only when requested, after resolving the parish, group and contact details. " +
   "Never repeat a write with outcome unknown: tell the user to check Flocknote before deciding what to do.";
@@ -91,6 +92,7 @@ export type FlocknoteConnection = Pick<
   | "groups"
   | "count"
   | "findMembers"
+  | "member"
   | "addMember"
   | "addMemberByName"
   | "close"
@@ -328,6 +330,29 @@ export function createFlocknoteServer(
       guarded(async () => ({
         ok: true,
         ...(await connection.findMembers(input, { signal: extra.signal })),
+      })),
+  );
+  server.registerTool(
+    "flocknote_member",
+    {
+      title: "Read selected member details",
+      description:
+        "Read one identified parish member by userId from a resolved search or known record. Returns only identity by default; fields optionally selects email and/or mobilePhone with stored-value status. Missing fields are unavailable; pending contacts never replace stored ones. A stored unverified or bad address does not establish delivery. Uses the saved session with no preliminary status check or automatic retry.",
+      inputSchema: {
+        userId: groupId,
+        fields: z
+          .array(z.enum(["email", "mobilePhone"]))
+          .max(2)
+          .optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ userId, fields }, extra) =>
+      guarded(async () => ({
+        ok: true,
+        member: await connection.member(userId, fields, {
+          signal: extra.signal,
+        }),
       })),
   );
   server.registerTool(

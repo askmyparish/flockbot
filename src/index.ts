@@ -20,6 +20,11 @@ export {
   type MemberSearchResult,
 } from "./models/member-search.js";
 export type { MemberField, ContactValue } from "./models/member-fields.js";
+export {
+  MemberProfile,
+  type MemberProfileResult,
+  type MemberEmail,
+} from "./models/member-profile.js";
 export type {
   MembershipExecutor,
   MembershipRequest,

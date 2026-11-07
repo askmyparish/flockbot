@@ -156,6 +156,10 @@ not establish verification or deliverability. Non-null pending contacts and
 missing email values still require separate fixture/contract evidence.
 
 Both profiles have `canViewProfile: true` at the top level and in `userInfo`.
+Both also have top-level boolean `isInCurrentNet: true` (66, 255), the observed
+signal that the selected person belongs to the current parish network. A false
+or missing value is not observed; those denial/malformed cases are simulated
+in offline tests.
 `canEditContactInfo` governs editing, so its false value alone must not be
 interpreted as denial of a contact read. `userInfo.userID` matches the requested
 person; the top-level `userID` does not in either response. Do not validate the
