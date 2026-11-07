@@ -39,6 +39,7 @@ const scratch = await mkdtemp(
 const failures = [];
 const cleanup = [];
 let phase = "preparing the offline runtime";
+let launcherStderr = Buffer.alloc(0);
 try {
   const payload = join(scratch, "runtime payload");
   await cp(resolve("adapters/mcp/dist/browser"), payload, { recursive: true });
@@ -287,14 +288,20 @@ try {
     ]);
   }
   phase = "initializing MCP through the plugin launcher";
-  await client.connect(
-    new StdioClientTransport({
-      command,
-      args,
-      env: environment,
-      stderr: "pipe",
-    }),
-  );
+  const transport = new StdioClientTransport({
+    command,
+    args,
+    env: environment,
+    stderr: "pipe",
+  });
+  transport.stderr.on("data", (chunk) => {
+    // This check only launches its disposable, unconfigured fixture profile.
+    launcherStderr = Buffer.concat([
+      launcherStderr,
+      Buffer.from(chunk),
+    ]).subarray(-8192);
+  });
+  await client.connect(transport);
   phase = "listing MCP tools";
   assert.deepEqual(
     (await client.listTools()).tools.map(({ name }) => name).sort(),
@@ -325,7 +332,10 @@ try {
   }
 } catch (error) {
   failures.push(
-    new Error(`Browser package check failed while ${phase}.`, { cause: error }),
+    new Error(
+      `Browser package check failed while ${phase}.${launcherStderr.length ? `\nLauncher stderr (last 8192 bytes):\n${launcherStderr.toString("utf8")}` : ""}`,
+      { cause: error },
+    ),
   );
 } finally {
   // Attempt every cleanup step and retain the original failure, even if stopping

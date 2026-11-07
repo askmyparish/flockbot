@@ -15,7 +15,7 @@ foreach ($flockbotProcessInfo in $flockbotProcesses) {
     if ($flockbotProcess.HasExited) { continue }
     if ($flockbotProcess.MainModule.FileName -ne $flockbotRuntimePath) { continue }
     if (-not $flockbotProcess.WaitForExit(5000)) {
-      $flockbotRemaining += $flockbotProcessInfo.ProcessId
+      $flockbotRemaining += ('PID {0}, parent {1}, command {2}' -f $flockbotProcessInfo.ProcessId, $flockbotProcessInfo.ParentProcessId, $flockbotProcessInfo.CommandLine)
       # Release failed fixture processes before deleting the disposable runtime.
       # Forced termination is a test failure, never a substitute for shutdown.
       $flockbotProcess.Kill()
