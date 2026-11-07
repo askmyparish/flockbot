@@ -117,14 +117,27 @@ async function fixture() {
         } else if (path === "network/getMetadata") {
           await json({ everyoneGroupID: 101 });
         } else if (
-          path === "group/101/people" &&
+          (path === "group/101/people" || path === "group/102/people") &&
           url.search === "?ajax" &&
           request.method() === "POST"
         ) {
           await json(searchMetadata());
-        } else if (path === "group/101/filter" && request.method() === "POST") {
+        } else if (
+          (path === "group/101/filter" || path === "group/102/filter") &&
+          request.method() === "POST"
+        ) {
           state.searchForms.push(request.postData() ?? "");
-          await json({ success: true, results: [searchRow()], resultCount: 1 });
+          await json({
+            success: true,
+            results: [
+              {
+                ...searchRow(),
+                date:
+                  path === "group/102/filter" ? "Apr 6, 2026" : "Mar 5, 2026",
+              },
+            ],
+            resultCount: 1,
+          });
         } else if (path === "user/301/profile" && request.method() === "POST") {
           await json(profileResponse());
         } else if (path === "user/301/groups" && request.method() === "POST") {
@@ -223,6 +236,20 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
         members: [{ id: "301", firstName: "Alex", lastName: "Rivera" }],
       });
       expect(JSON.stringify(found)).not.toMatch(/alex@|555/);
+      const joined = await client.callTool({
+        name: "find_members",
+        arguments: {
+          searchTerm: "alex@example.test",
+          groupName: "Volunteers",
+          fields: ["email", "joinedOn"],
+        },
+      });
+      expect(joined.structuredContent).toMatchObject({
+        ok: true,
+        groupId: "102",
+        exactMatchUserId: "301",
+        members: [{ id: "301", joinedOn: "2026-04-06" }],
+      });
       const userId = String(
         (found.structuredContent as Record<string, unknown>).exactMatchUserId,
       );
@@ -284,6 +311,8 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
       expect(f.visits).toEqual([
         { path: "group/101/people", method: "POST" },
         { path: "group/101/filter", method: "POST" },
+        { path: "group/102/people", method: "POST" },
+        { path: "group/102/filter", method: "POST" },
         { path: "user/301/profile", method: "POST" },
         ...Array.from({ length: 4 }, () => ({
           path: "user/301/groups",

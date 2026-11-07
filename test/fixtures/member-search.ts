@@ -24,4 +24,5 @@ export const searchRow = (userID = 301, fn = "Alex", ln = "Rivera") => ({
   mailVer: false,
   phn: "+1 (202) 555-0123",
   phnVer: true,
+  date: "Mar 5, 2026",
 });

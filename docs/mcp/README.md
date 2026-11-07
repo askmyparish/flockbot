@@ -22,7 +22,7 @@ published by these changes.
 | `connect` | Open real Flocknote sign-in for a parish subdomain |
 | `groups` | Return group identifiers, names and Everyone status; optional `refresh` |
 | `subscriber_count` | Fetch a current count without member records |
-| `find_members` | Search active members in a selected group or Everyone; return bounded identities and explicitly selected contact fields |
+| `find_members` | Search active members in a selected group or Everyone; return bounded identities and selected contacts or group subscription dates |
 | `member` | Read one identified member's identity and explicitly selected stored email/mobile phone with status |
 | `member_groups` | List a chosen member's explicit group subscriptions with bounded output and visibility limits |
 | `is_member` | Check one chosen member/group relationship as `member`, `not_member`, or `unknown` |
@@ -58,7 +58,7 @@ operation is automatically replayed, including a POST rejected for auth reasons;
 its write outcome remains unknown after possible submission.
 
 Member search accepts `searchTerm`, optional `groupId` or `groupName`, optional
-`fields` (`email`, `mobilePhone`), and `limit` (1–50; default 50). Omitting a group
+`fields` (`email`, `mobilePhone`, `joinedOn`), and `limit` (1–50; default 50). Omitting a group
 uses the dynamically discovered Everyone group; a parish without Everyone needs
 an explicit group. A known ID skips discovery, and a group name requires a unique
 case-insensitive match. The connector reads the group's general-search filter
@@ -70,7 +70,9 @@ and the selected `groupId`. Completeness covers that group's active-member query
 it does not establish coverage of inactive members or records the login cannot
 see. Server omissions or the requested limit make the result incomplete. Only
 complete results with one exact full-name match (ignoring case and repeated
-whitespace) include `exactMatchUserId`. Assistants may continue the requested
+whitespace), or one exact stored email match when `email` is selected (ignoring
+case), include `exactMatchUserId`. Email queries must select `email` to establish
+that match. Assistants may continue the requested
 lookup with that identifier; duplicate, similar or incomplete matches require
 clarification. Empty results are scoped to the query, not proof that a person
 has no parish record.
@@ -82,6 +84,17 @@ the same group with `fields: ["email"]`. If email is absent or identical, reques
 their corresponding IDs internal, and continue the original task once the user
 chooses. If the contacts do not distinguish the records, explain that limitation
 and ask for a known email or phone rather than guessing or presenting numeric IDs.
+
+For “when was alex@example.test added to Volunteers?”, use `find_members` with
+that `groupName`, `searchTerm: "alex@example.test"`, and
+`fields: ["email", "joinedOn"]`. Resolve the person before reporting the date.
+`joinedOn` is the selected group's reported subscription calendar date as
+`YYYY-MM-DD`, converted from the observed English display format. A missing,
+null, invalid or unrecognized date is `null` (unavailable). It is opt-in and is
+not a profile field. Do not use Everyone's date for another group, infer a time
+or timezone, or claim who added the person or whether this was their first-ever
+subscription rather than a later rejoin. Those historical semantics are not
+established by the captures.
 
 Search returns only identifiers and names by default. Selected contacts include
 their stored value and verification flag; a blank/null value remains null, and

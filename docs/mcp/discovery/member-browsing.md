@@ -112,6 +112,25 @@ follow-up's group-people rows, rather than observed in these filter rows.
 Null, blank and missing search-contact fields used in offline edge-case tests
 are simulated, not additional capture observations.
 
+### Reported group subscription dates
+
+The people responses (49, 250) and filter responses (188, 252, 280) also carry a
+string `date` per member, in English `Mon D, YYYY` or `Mon DD, YYYY` format.
+`Mar 5, 2026` is a fictional example of that format. The captured person-card
+template (59, `/templates/person-card-contents.tpl`) renders this field inside
+`user_subscribe_date`. The `Date Joined` filter category identifies a
+`Subscribed` filter with `date`, `dateQueryType` and `groupID` inputs (49).
+Four people occur in both captured groups; one has different date values across
+those groups. Together these observations support treating the date as a
+group-scoped reported subscription date, rather than a general profile creation
+date. No personal dates or identifiers are reproduced here.
+
+The member's group-list response (86) has no corresponding date field. Retrieve
+the selected group's people/search data when a subscription date is requested.
+These display dates establish neither an exact time/timezone nor the adding
+actor, historical first subscription, or leave/rejoin behavior. Missing, null,
+invalid, leap-day and unsupported-format cases in tests are simulated.
+
 ### List a group's members
 
 `POST /group/{groupId}/people?ajax` sends `includeUnsubscribed`. Entries 49 and

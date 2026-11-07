@@ -2,22 +2,25 @@ import { FlockbotError } from "../errors.js";
 import { identifier } from "./identifier.js";
 import {
   type ContactValue,
-  type MemberField,
+  type GroupMemberField,
+  groupMemberFields,
   inputIdentifier,
-  memberFields,
   memberFlag,
   memberName,
   storedContact,
+  subscriptionDate,
 } from "./member-fields.js";
 import { type Network, normalizedGroupName } from "./network.js";
 import { invalidResponse, record } from "./parsing.js";
 import type { ResourceQuery } from "./resource-read.js";
 
+export type MemberSearchField = GroupMemberField;
+
 export interface MemberSearchInput {
   readonly searchTerm: string;
   readonly groupId?: string | undefined;
   readonly groupName?: string | undefined;
-  readonly fields?: readonly MemberField[] | undefined;
+  readonly fields?: readonly MemberSearchField[] | undefined;
   readonly limit?: number | undefined;
 }
 export interface MemberCandidate {
@@ -26,6 +29,8 @@ export interface MemberCandidate {
   readonly lastName: string;
   readonly email?: ContactValue;
   readonly mobilePhone?: ContactValue;
+  /** Flocknote's reported subscription calendar date for the searched group. */
+  readonly joinedOn?: string | null;
 }
 export interface MemberSearchResult {
   readonly groupId: string;
@@ -64,7 +69,7 @@ export class MemberSearch {
   readonly #term: string;
   readonly #groupId: string | undefined;
   readonly #groupName: string | undefined;
-  readonly #fields: readonly MemberField[];
+  readonly #fields: readonly MemberSearchField[];
   readonly #limit: number;
 
   constructor(input: MemberSearchInput) {
@@ -86,7 +91,7 @@ export class MemberSearch {
       input.groupName === undefined
         ? undefined
         : normalizedGroupName(input.groupName);
-    this.#fields = memberFields(input.fields);
+    this.#fields = groupMemberFields(input.fields);
     this.#limit = input.limit === undefined ? 50 : input.limit;
     if (!Number.isInteger(this.#limit) || this.#limit < 1 || this.#limit > 50)
       throw new FlockbotError("invalid_input");
@@ -160,15 +165,19 @@ export class MemberSearch {
               },
             }
           : {}),
+        ...(this.#fields.includes("joinedOn")
+          ? { joinedOn: subscriptionDate(row.date) }
+          : {}),
       };
     });
     const members = all.slice(0, this.#limit);
     const complete = data.resultCount === members.length;
     const exact = complete
-      ? members.filter(
-          (member) =>
-            normalizedName(`${member.firstName} ${member.lastName}`) ===
-            normalizedName(this.#term),
+      ? members.filter((member) =>
+          this.#term.includes("@")
+            ? member.email?.value?.toLowerCase() === this.#term.toLowerCase()
+            : normalizedName(`${member.firstName} ${member.lastName}`) ===
+              normalizedName(this.#term),
         )
       : [];
     return {

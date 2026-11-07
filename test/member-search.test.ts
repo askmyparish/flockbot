@@ -102,6 +102,8 @@ describe("member search domain reads", () => {
     { groupName: " " },
     { fields: ["email", "email"] },
     { fields: ["unknown"] },
+    { fields: ["joinedOn", "joinedOn"] },
+    { fields: ["email", "mobilePhone", "joinedOn", "joinedOn"] },
     { limit: 0 },
     { limit: 51 },
     { limit: 1.5 },
@@ -193,6 +195,97 @@ describe("member search domain reads", () => {
       expect(await fixture(rows).find()).not.toHaveProperty("exactMatchUserId");
     }
   });
+
+  it("resolves one exact selected email in complete results without exposing an unrelated contact", async () => {
+    const f = fixture([
+      searchRow(),
+      { ...searchRow(302), mail: "another@example.test" },
+    ]);
+    expect(
+      await f.find({
+        searchTerm: "ALEX@example.test",
+        groupId: "102",
+        fields: ["email", "joinedOn"],
+      }),
+    ).toMatchObject({
+      groupId: "102",
+      exactMatchUserId: "301",
+      members: [{ id: "301", joinedOn: "2026-03-05" }, { id: "302" }],
+    });
+    const withoutEmail = await fixture().find({
+      searchTerm: "alex@example.test",
+      fields: ["joinedOn"],
+    });
+    expect(withoutEmail).not.toHaveProperty("exactMatchUserId");
+    expect(JSON.stringify(withoutEmail)).not.toContain("alex@");
+  });
+
+  it("does not select a duplicated email or an email in incomplete results", async () => {
+    for (const f of [
+      fixture([searchRow(), searchRow(302)]),
+      fixture([searchRow()], 2),
+    ])
+      expect(
+        await f.find({ searchTerm: "alex@example.test", fields: ["email"] }),
+      ).not.toHaveProperty("exactMatchUserId");
+  });
+
+  it("keeps subscription dates scoped to the searched group for the same person", async () => {
+    const f = fixture();
+    f.context.query.mockImplementation(async (path) =>
+      path.endsWith("?ajax")
+        ? f.metadata
+        : {
+            ...f.data,
+            results: [
+              {
+                ...searchRow(),
+                date: path.startsWith("group/102/")
+                  ? "Apr 6, 2026"
+                  : "Mar 5, 2026",
+              },
+            ],
+          },
+    );
+    expect(
+      await f.find({ groupId: "101", fields: ["joinedOn"] }),
+    ).toMatchObject({
+      groupId: "101",
+      members: [{ joinedOn: "2026-03-05" }],
+    });
+    expect(
+      await f.find({ groupId: "102", fields: ["joinedOn"] }),
+    ).toMatchObject({
+      groupId: "102",
+      members: [{ joinedOn: "2026-04-06" }],
+    });
+    expect(await fixture().find()).not.toHaveProperty("members.0.joinedOn");
+  });
+
+  it.each([
+    ["Feb 29, 2024", "2024-02-29"],
+    ["Feb 29, 2000", "2000-02-29"],
+    ["Feb 29, 1900", null],
+    ["Feb 29, 2025", null],
+    ["Apr 31, 2026", null],
+    ["Mar 0, 2026", null],
+    ["Mar 5, 0000", null],
+    ["2026-03-05T12:00:00Z", null],
+    ["yesterday", null],
+    ["", null],
+    [null, null],
+    [undefined, null],
+    [123, null],
+  ])(
+    "reports the calendar date or unknown for simulated date %j",
+    async (date, expected) => {
+      expect(
+        await fixture([{ ...searchRow(), date }]).find({
+          fields: ["joinedOn"],
+        }),
+      ).toMatchObject({ members: [{ joinedOn: expected }] });
+    },
+  );
 
   it("makes both server-side and caller-side truncation visible without an exact selection", async () => {
     const server = await fixture([searchRow()], 2).find();

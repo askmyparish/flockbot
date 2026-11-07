@@ -17,9 +17,14 @@ export type { ResourceRead, ResourceQuery } from "./models/resource-read.js";
 export {
   MemberSearch,
   type MemberSearchInput,
+  type MemberSearchField,
   type MemberSearchResult,
 } from "./models/member-search.js";
-export type { MemberField, ContactValue } from "./models/member-fields.js";
+export type {
+  MemberField,
+  GroupMemberField,
+  ContactValue,
+} from "./models/member-fields.js";
 export {
   MemberProfile,
   type MemberProfileResult,

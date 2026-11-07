@@ -453,6 +453,43 @@ describe("identified profile MCP/connection boundary", () => {
 });
 
 describe("member search MCP/connection boundary", () => {
+  it("reads a group subscription date by a uniquely matching selected email", async () => {
+    const f = await fixture();
+    const result = await f.client.callTool({
+      name: "find_members",
+      arguments: {
+        searchTerm: "alex@example.test",
+        groupId: "101",
+        fields: ["email", "joinedOn"],
+      },
+    });
+    expect(result.structuredContent).toMatchObject({
+      ok: true,
+      groupId: "101",
+      exactMatchUserId: "301",
+      members: [{ id: "301", joinedOn: "2026-03-05" }],
+    });
+    expect(JSON.stringify(result)).not.toContain("555");
+    expect(f.client.getInstructions()).toContain("within that requested group");
+    expect(f.client.getInstructions()).toContain("no precise time, timezone");
+    expect(
+      brokerRequestSchema.safeParse({
+        action: "find_members",
+        searchTerm: "alex@example.test",
+        groupId: "101",
+        fields: ["email", "mobilePhone", "joinedOn"],
+      }).success,
+    ).toBe(true);
+    // Profile contact selection remains separate from group subscription dates.
+    expect(
+      brokerRequestSchema.safeParse({
+        action: "member",
+        userId: "301",
+        fields: ["joinedOn"],
+      }).success,
+    ).toBe(false);
+  });
+
   it("supports resolving same-name records by contacts while retaining IDs for internal follow-up", async () => {
     const f = await fixture();
     f.state.response = {

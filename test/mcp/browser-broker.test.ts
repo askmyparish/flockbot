@@ -187,11 +187,19 @@ describe.skipIf(process.platform === "win32")(
       const result = await f.service.findMembers({
         searchTerm: "Alex Rivera",
         groupId: "101",
+        fields: ["joinedOn"],
       });
       expect(result).toMatchObject({
         exactMatchUserId: "301",
         complete: true,
-        members: [{ id: "301", firstName: "Alex", lastName: "Rivera" }],
+        members: [
+          {
+            id: "301",
+            firstName: "Alex",
+            lastName: "Rivera",
+            joinedOn: "2026-03-05",
+          },
+        ],
       });
       expect(JSON.stringify(result)).not.toMatch(/alex@|555/);
       expect(f.events()).toEqual([
