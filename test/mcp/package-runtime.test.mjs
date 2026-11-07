@@ -1,12 +1,16 @@
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { copyFile, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 async function fixture({ onTestFinished }) {
-  const root = await mkdtemp(join(tmpdir(), "flockbot-package-process-"));
+  // Match the package check: Windows TEMP can contain an 8.3 path alias,
+  // while process metadata reports the executable's canonical path.
+  const root = await mkdtemp(
+    join(await realpath(tmpdir()), "flockbot-package-process-"),
+  );
   const children = [];
   onTestFinished(async () => {
     for (const { child } of children) child.kill();
@@ -63,6 +67,7 @@ describe.skipIf(process.platform !== "win32")(
         "setTimeout(() => {}, 4000)",
       );
       f.wait(runtime.node);
+      expect(() => process.kill(runtime.child.pid, 0)).toThrow();
       await runtime.closed;
       expect(runtime.child.exitCode).toBe(0);
       await rm(runtime.node, {
@@ -82,6 +87,7 @@ describe.skipIf(process.platform !== "win32")(
         "unrelated runtime",
         "setInterval(() => {}, 1000)",
       );
+      expect(() => process.kill(runtime.child.pid, 0)).not.toThrow();
       expect(() => f.wait(runtime.node)).toThrow(
         /runtime processes survived MCP shutdown/,
       );
