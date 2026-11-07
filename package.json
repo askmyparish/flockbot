@@ -38,7 +38,7 @@
     "check:setup-package": "node scripts/mcp/check-setup-package.mjs"
   },
   "dependencies": {
-    "parse5": "7.3.0",
+    "parse5": "8.1.0",
     "tough-cookie": "6.0.2"
   },
   "devDependencies": {
