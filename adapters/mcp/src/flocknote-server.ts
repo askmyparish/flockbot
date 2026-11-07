@@ -16,6 +16,7 @@ const INSTRUCTIONS =
   "Only if connect still returns pending should you ask the user to finish sign-in and let you know, then check flocknote_status once. " +
   "Never request passwords, codes, cookies, browser storage, arbitrary URLs or scripts. " +
   "For additions use a known groupId, or supply the user's groupName for a case-insensitive unique match to resolve it in the same call. List groups only when the choice is unclear. " +
+  "For an existing person, use flocknote_find_members first unless their user ID is already known. Continue directly only when exactMatchUserId identifies one exact full-name match in complete results; duplicate, similar or incomplete matches require clarification. Completeness covers only the selected group's active-member search, not inactive or inaccessible users. Request contact fields only when needed for the user's task. " +
   "When a tool includes update metadata, answer the parish request first, then briefly mention the available Flockbot version (label prereleases) and say ‘Update Flockbot’ to install it. Mention it once per conversation unless asked again. Do not interrupt sign-in, hide an error or unknown write outcome, or install automatically. For an explicit update request, follow the canonical Flockbot guide, not the older installed setup script. " +
   "Add members only when requested, after resolving the parish, group and contact details. " +
   "Never repeat a write with outcome unknown: tell the user to check Flocknote before deciding what to do.";
@@ -43,6 +44,8 @@ const MESSAGES: Readonly<Record<string, string>> = {
     "The local browser owner is unavailable. A later request can reconnect; never repeat a write with outcome unknown.",
   group_not_found:
     "No group matches that name (matching ignores case). List groups and select the intended identifier.",
+  everyone_not_found:
+    "Everyone is unavailable in this parish. Supply an explicit groupId or groupName for the member search.",
   group_ambiguous:
     "More than one group has that name. List groups and select the intended identifier.",
   permission_denied: "Flocknote denied access to this parish or operation.",
@@ -87,6 +90,7 @@ export type FlocknoteConnection = Pick<
   | "connect"
   | "groups"
   | "count"
+  | "findMembers"
   | "addMember"
   | "addMemberByName"
   | "close"
@@ -300,6 +304,30 @@ export function createFlocknoteServer(
         subscriberCount: await connection.count(groupId, {
           signal: extra.signal,
         }),
+      })),
+  );
+  server.registerTool(
+    "flocknote_find_members",
+    {
+      title: "Find parish members",
+      description:
+        "Find existing active parish members by general text search. Select groupId or a unique groupName, or omit both to search dynamically discovered Everyone. Returns at most 50 identity candidates and scoped result counts; fields optionally selects email/mobilePhone. Continue directly only with exactMatchUserId from complete results; clarify duplicate, similar or incomplete matches. No preliminary status check and no automatic retry.",
+      inputSchema: {
+        searchTerm: z.string().min(1).max(256),
+        groupId: groupId.optional(),
+        groupName: z.string().min(1).max(256).optional(),
+        fields: z
+          .array(z.enum(["email", "mobilePhone"]))
+          .max(2)
+          .optional(),
+        limit: z.number().int().min(1).max(50).optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async (input, extra) =>
+      guarded(async () => ({
+        ok: true,
+        ...(await connection.findMembers(input, { signal: extra.signal })),
       })),
   );
   server.registerTool(

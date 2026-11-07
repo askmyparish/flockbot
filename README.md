@@ -394,6 +394,12 @@ never change the write outcome, infer an email-validation rule, or permit replay
 The [Codex MCP candidate](./docs/mcp/README.md) exposes group discovery, subscriber
 counts and member additions through a dedicated local browser session. Staff sign
 in directly on Flocknote's website; credentials and cookies stay outside chat.
+
+Member search can locate active members in a selected group or Everyone, returning
+bounded identities and only explicitly requested contact fields. It distinguishes
+complete scoped results from truncated matches; see the
+[MCP tool contract](./docs/mcp/README.md#tools).
+
 `npm run check` builds/tests its stdio contract and packaging offline. The opt-in
 `npm run test:mcp:browser` uses real Chromium with intercepted fictional responses.
 Initial live sign-in, session reuse, group discovery and counts passed on macOS.

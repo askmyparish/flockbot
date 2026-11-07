@@ -22,6 +22,7 @@ published by these changes.
 | `flocknote_connect` | Open real Flocknote sign-in for a parish subdomain |
 | `flocknote_groups` | Return group identifiers, names and Everyone status; optional `refresh` |
 | `flocknote_subscriber_count` | Fetch a current count without member records |
+| `flocknote_find_members` | Search active members in a selected group or Everyone; return bounded identities and explicitly selected contact fields |
 | `flocknote_add_member` | Add once by `groupId` or case-insensitive unique `groupName`; return only success |
 
 The MCP server publishes input schemas and workflow instructions. It offers no raw
@@ -52,6 +53,30 @@ original error and readiness. Business rejections, malformed JSON/domain values,
 network failures and timeouts do not trigger an authentication probe. No failed
 operation is automatically replayed, including a POST rejected for auth reasons;
 its write outcome remains unknown after possible submission.
+
+Member search accepts `searchTerm`, optional `groupId` or `groupName`, optional
+`fields` (`email`, `mobilePhone`), and `limit` (1–50; default 50). Omitting a group
+uses the dynamically discovered Everyone group; a parish without Everyone needs
+an explicit group. A known ID skips discovery, and a group name requires a unique
+case-insensitive match. The connector reads the group's general-search filter
+definition before submitting the observed active-member query, without assuming
+a permanent filter ID.
+
+Results include `members`, upstream `resultCount`, `returnedCount`, `complete`,
+and the selected `groupId`. Completeness covers that group's active-member query;
+it does not establish coverage of inactive members or records the login cannot
+see. Server omissions or the requested limit make the result incomplete. Only
+complete results with one exact full-name match (ignoring case and repeated
+whitespace) include `exactMatchUserId`. Assistants may continue the requested
+lookup with that identifier; duplicate, similar or incomplete matches require
+clarification. Empty results are scoped to the query, not proof that a person
+has no parish record.
+
+Search returns only identifiers and names by default. Selected contacts include
+their stored value and verification flag; a blank/null value remains null, and
+verification is not a delivery guarantee. Other contact, role and UI fields are
+discarded. These read operations use the observed POST contracts without being
+automatically replayed. No member-search live verification is claimed here.
 
 ## Develop and verify
 

@@ -116,6 +116,36 @@ describe.skipIf(process.platform === "win32")(
   "shared local browser owner over private IPC",
   { concurrent: true },
   () => {
+    it("rejects invalid member search before starting a browser owner", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
+      await expect(
+        f.service.findMembers({ searchTerm: "Alex", limit: 0 }),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      expect(f.launches()).toBe(0);
+      expect(f.events()).toEqual([]);
+    });
+
+    it("routes member search through actual private IPC without authentication preflight", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
+      const result = await f.service.findMembers({
+        searchTerm: "Alex Rivera",
+        groupId: "101",
+      });
+      expect(result).toMatchObject({
+        exactMatchUserId: "301",
+        complete: true,
+        members: [{ id: "301", firstName: "Alex", lastName: "Rivera" }],
+      });
+      expect(JSON.stringify(result)).not.toMatch(/alex@|555/);
+      expect(f.events()).toEqual([
+        "launch",
+        "POST group/101/people?ajax",
+        "POST group/101/filter",
+      ]);
+    });
+
     it("reports busy rather than cancelled when connect waits for an active operation", async (context) => {
       const { expect } = context;
       const f = await fixture(context);

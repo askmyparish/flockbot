@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { searchMetadata, searchRow } from "../../fixtures/member-search.js";
 import {
   BrowserService,
   runBrowserBroker,
@@ -43,6 +44,10 @@ if (role === "broker") {
             case "group/101/getSubscriberCount":
               while (existsSync(join(profile, "hold-count"))) await delay(10);
               return { subscriberCount: 7 };
+            case "group/101/people?ajax":
+              return searchMetadata();
+            case "group/101/filter":
+              return { success: true, results: [searchRow()], resultCount: 1 };
             case "group/102/addToGroupByAdmin":
               while (existsSync(join(profile, "hold"))) await delay(10);
               return { success: true };

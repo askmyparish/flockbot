@@ -94,10 +94,23 @@ response identifies this filter as `generalPeopleSearch`, with filter ID `3`,
 operator `Search`, and input `searchTerm` (entry 49). Future implementations should
 validate that metadata rather than assume all parishes share a permanent ID.
 
+The captured `peopleFilterInfo.generalSearchFilter` has a numeric `filterID`,
+`filterName: "generalPeopleSearch"`, `operator: "Search"`, and
+`inputs.searchTerm` with `inputName: "searchTerm"`, `dataType: "text"`, and
+boolean `allowMultiple: false` (49, 250). These are observed metadata values,
+not a guarantee that unsupported metadata variants can be interpreted safely.
+
 Entries 188, 252, and 280 return `success: true`, `resultCount`, and `results`.
 Result fields include `userID`, `fn`, `ln`, `mail`, `phn`, verification flags,
 membership/role flags, and photo information. No pagination input, sorting input,
 or search with `includeInactive=true` was exercised.
+
+In these filter responses, `userID` is numeric and `fn`, `ln`, `mail`, and
+`phn` are strings; the contact-verification keys are specifically boolean
+`mailVer` and `phnVer`. Numeric verification flags are documented for the
+follow-up's group-people rows, rather than observed in these filter rows.
+Null, blank and missing search-contact fields used in offline edge-case tests
+are simulated, not additional capture observations.
 
 ### List a group's members
 
@@ -133,6 +146,21 @@ Member A's response has `success: true`, a nonempty error, and
 `canEditContactInfo: false`; Member B's permits contact editing. A top-level
 success flag does not imply that every profile capability is available.
 
+The contact-bearing keys are `userInfo.userID`, `firstName`, `lastName`,
+`email`, `emailVerified`, `pendingEmail`, `mobilePhone`,
+`mobilePhoneVerified`, and `pendingMobilePhone`. Email is a string in both
+profiles; mobile phone is a string in one and null in the other. Both pending
+contact fields are null in these observations. `isBadEmail` is a boolean and
+can be true while an email value is present. A stored address therefore does
+not establish verification or deliverability. Non-null pending contacts and
+missing email values still require separate fixture/contract evidence.
+
+Both profiles have `canViewProfile: true` at the top level and in `userInfo`.
+`canEditContactInfo` governs editing, so its false value alone must not be
+interpreted as denial of a contact read. `userInfo.userID` matches the requested
+person; the top-level `userID` does not in either response. Do not validate the
+requested person's identity against that top-level field.
+
 `POST /user/{userId}/profile2` is a separate supporting response: it contains
 identifiers, household linkage, merge-related capability/state fields, and giving
 configuration. It is not a replacement for the contact-bearing profile response.
@@ -148,6 +176,21 @@ not been characterized.
 (entry 86). Subscribed entries include group IDs/names, Everyone status,
 `isSubscribed`, `emailPref`, `smsPref`, `voicePref`, `commentsPref`, and role flags.
 Available groups also include parent IDs and disabled/smart-group fields.
+
+In entry 86, `data.canView` is true and all seven `subscribedGroups` rows have
+boolean `isSubscribed: true`. Its four `availableGroups` rows omit
+`isSubscribed`. The captured groups-tab JavaScript (entry 87,
+`/assets/userprofile/tabs/groups.js`) explicitly handles proxy-only entries in
+`subscribedGroups` with `isSubscribed: false`, filtering on that flag when
+determining actual subscriptions. This is evidence from the captured UI code;
+the JSON capture itself has no proxy-only row. Array inclusion alone must not
+be treated as a confirmed subscription. An available-group row has no explicit
+subscription flag, and absence from the response is not independently proven
+to be an exhaustive negative membership result.
+
+The membership envelope's top-level `userID` also differs from the requested
+person. The request path selects that person; the captured `data` object has no
+separate subject-user identifier or explicit completeness/pagination field.
 
 This response provides membership and preference information. It does not prove a
 contract for subscribing, unsubscribing, or updating channel preferences.

@@ -2,6 +2,7 @@ import { upstreamResponse, type UpstreamResponse } from "./rejections.js";
 
 export type ErrorCode =
   | "group_not_found"
+  | "everyone_not_found"
   | "group_ambiguous"
   | "coordination_failed"
   | "operation_failed"

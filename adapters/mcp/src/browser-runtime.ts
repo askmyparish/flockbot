@@ -63,7 +63,9 @@ function allowed(path: string, method: string): boolean {
       /^group\/[A-Za-z0-9_-]+\/getSubscriberCount$/.test(path)
     );
   return (
-    method === "POST" && /^group\/[A-Za-z0-9_-]+\/addToGroupByAdmin$/.test(path)
+    method === "POST" &&
+    (/^group\/[A-Za-z0-9_-]+\/addToGroupByAdmin$/.test(path) ||
+      /^group\/[A-Za-z0-9_-]+\/(?:people\?ajax|filter)$/.test(path))
   );
 }
 

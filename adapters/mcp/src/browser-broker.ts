@@ -25,6 +25,7 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   FlockbotError,
+  MemberSearch,
   type MemberInput,
   type OperationOptions,
 } from "../../../src/index.js";
@@ -283,6 +284,11 @@ export async function runBrowserBroker(options: BrokerOptions): Promise<void> {
                 case "count":
                   value = await connection.count(request.groupId, { signal });
                   break;
+                case "find_members": {
+                  const { action: _, ...input } = request;
+                  value = await connection.findMembers(input, { signal });
+                  break;
+                }
                 case "forget":
                   await connection.forget();
                   value = { forgotten: true };
@@ -561,6 +567,20 @@ export class BrowserService {
       { action: "count", groupId },
       options.signal,
     )) as number;
+  }
+  async findMembers(
+    input: Parameters<BrowserConnection["findMembers"]>[0],
+    options: OperationOptions = {},
+  ) {
+    const prepared = new MemberSearch(input).toInput();
+    return (await this.#call(
+      {
+        ...prepared,
+        fields: [...(prepared.fields ?? [])],
+        action: "find_members",
+      },
+      options.signal,
+    )) as Awaited<ReturnType<BrowserConnection["findMembers"]>>;
   }
   async addMember(
     groupId: string,

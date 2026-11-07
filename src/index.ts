@@ -13,7 +13,13 @@ export { User, type UserInput } from "./models/user.js";
 export { GroupMembership } from "./models/group-membership.js";
 export { FlocknoteLogin } from "./models/flocknote-login.js";
 export type { Group } from "./models/group.js";
-export type { ResourceRead } from "./models/resource-read.js";
+export type { ResourceRead, ResourceQuery } from "./models/resource-read.js";
+export {
+  MemberSearch,
+  type MemberSearchInput,
+  type MemberSearchResult,
+} from "./models/member-search.js";
+export type { MemberField, ContactValue } from "./models/member-fields.js";
 export type {
   MembershipExecutor,
   MembershipRequest,

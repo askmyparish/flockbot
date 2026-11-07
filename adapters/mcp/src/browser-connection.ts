@@ -26,6 +26,10 @@ import {
 } from "../../../src/models/network.js";
 import { GroupMembership } from "../../../src/models/group-membership.js";
 import { User } from "../../../src/models/user.js";
+import {
+  MemberSearch,
+  type MemberSearchInput,
+} from "../../../src/models/member-search.js";
 import { FlocknoteLogin } from "../../../src/models/flocknote-login.js";
 import { Operation } from "../../../src/operation.js";
 import {
@@ -581,8 +585,22 @@ export class BrowserConnection {
     return {
       read: async (path: string) =>
         accepted(await session.request(path), path === "dashboard"),
+      query: async (path: string, body?: string) => {
+        op.check();
+        const value = accepted(await session.request(path, "POST", body));
+        op.check();
+        return value;
+      },
       check: () => op.check(),
     };
+  }
+
+  async findMembers(input: MemberSearchInput, options: OperationOptions = {}) {
+    // Snapshot/validate before waiting for coordination or opening a browser.
+    const search = new MemberSearch(input);
+    return this.#operate(options, (session, op, network) =>
+      search.find(this.#resources(session, op), network),
+    );
   }
 
   async count(

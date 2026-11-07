@@ -21,6 +21,7 @@ import { CODEX_VERSION } from "./browser-build.mjs";
 export const FLOCKNOTE_TOOLS = [
   "flocknote_add_member",
   "flocknote_connect",
+  "flocknote_find_members",
   "flocknote_groups",
   "flocknote_status",
   "flocknote_subscriber_count",
