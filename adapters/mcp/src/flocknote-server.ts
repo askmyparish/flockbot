@@ -21,7 +21,8 @@ const INSTRUCTIONS =
   'Resolving an ambiguous name is a reason to request contact fields. Before asking which person, use find_members with the same search and group and fields:["email"]; request mobilePhone only if email is missing or does not distinguish the candidates. Present the distinguishing email addresses or phone details and ask which person the user means. Never ask the user to choose between member IDs unless they explicitly requested IDs. Keep each choice\'s ID internal, then resume the original task with that userId after the user chooses. If available contacts still do not distinguish the records, explain that and ask for a known email or phone; do not invent differences or guess a record. ' +
   "Use member with the chosen userId and selected fields for contact questions. Without fields it returns identity only. Report stored unverified or bad email status accurately; unavailable or null values are not a new address, and pending contacts never replace stored ones. " +
   "Use member_groups to list a selected person's explicitly confirmed subscriptions, and is_member for one selected group. Missing groups mean unknown, not nonmembership. Proxy-only relationships with isSubscribed false are not subscriptions. Membership-read failures never mean no membership. " +
-  'For when someone joined a group, use find_members within that requested group with fields:["email","joinedOn"] when identifying by email. joinedOn is Flocknote\'s reported subscription date for the searched group, not a profile creation date or another group\'s date. A null joinedOn means the date is unavailable; do not guess. Report only the calendar date: no precise time, timezone, who added them, or first-ever/rejoin history is established. Resolve the person before answering and keep member IDs internal. ' +
+  "For who belongs to a group, use group_members with the user's groupName directly. Return names, keeping IDs internal and contact fields omitted unless requested. Follow nextOffset with the returned groupId until hasMore is false before presenting the full visible list. Track member IDs internally across pages; if a page repeats records, fails, or membership changes prevent consistent paging, stop and explain that the list is partial. Never present the first page as the whole group while hasMore is true. Pending and unsubscribed people are not included, and the login's permissions may limit visibility. " +
+  'For when someone joined a group, request fields:["joinedOn"] with group_members in that group, or use find_members within that requested group with fields:["email","joinedOn"] when identifying by email. On follow-up questions, reuse the already selected person and group. An omitted joinedOn means it was not requested, not that Flocknote has no date: fetch it before answering. Only a requested joinedOn returned as null means the date is unavailable. To check whether any group members have dates, request joinedOn on every page before making a group-wide claim. joinedOn is Flocknote\'s reported subscription date for the selected group, not a profile creation date or another group\'s date. Report only the calendar date: no precise time, timezone, who added them, or first-ever/rejoin history is established. Resolve the person before answering, keep member IDs internal and never guess a date. ' +
   "When a tool includes update metadata, answer the parish request first, then briefly mention the available Flockbot version (label prereleases) and say ‘Update Flockbot’ to install it. Mention it once per conversation unless asked again. Do not interrupt sign-in, hide an error or unknown write outcome, or install automatically. For an explicit update request, follow the canonical Flockbot guide, not the older installed setup script. " +
   "Add members only when requested, after resolving the parish, group and contact details. " +
   "Never repeat a write with outcome unknown: tell the user to check Flocknote before deciding what to do.";
@@ -98,6 +99,7 @@ export type FlocknoteConnection = Pick<
   | "findMembers"
   | "member"
   | "memberGroups"
+  | "groupMembers"
   | "isMember"
   | "addMember"
   | "addMemberByName"
@@ -374,6 +376,34 @@ export function createFlocknoteServer(
       guarded(async () => ({
         ok: true,
         ...(await connection.memberGroups(userId, { signal: extra.signal })),
+      })),
+  );
+  server.registerTool(
+    "group_members",
+    {
+      title: "List people in a group",
+      description:
+        "List a group's subscribed members by groupId or a unique case-insensitive groupName, such as Youth Ministry. Returns one page of up to 100 names/internal IDs; fields optionally selects email/mobilePhone/joinedOn only when needed. For join-date questions request joinedOn, the selected group's reported subscription calendar date (YYYY-MM-DD or null). Omitted joinedOn means not requested; it does not mean no date exists. Start at offset 0. When hasMore is true, continue with nextOffset, the returned groupId and the same fields; do not call a partial page the whole group. Stop on repeated records or an error and report a partial list. Excludes pending and unsubscribed people; visibility is limited by the login. Uses the saved session with no preflight or automatic retry.",
+      inputSchema: {
+        groupId: groupId.optional(),
+        groupName: z.string().min(1).max(256).optional(),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .max(Number.MAX_SAFE_INTEGER - 100)
+          .optional(),
+        fields: z
+          .array(z.enum(["email", "mobilePhone", "joinedOn"]))
+          .max(3)
+          .optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async (input, extra) =>
+      guarded(async () => ({
+        ok: true,
+        ...(await connection.groupMembers(input, { signal: extra.signal })),
       })),
   );
   server.registerTool(

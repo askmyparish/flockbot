@@ -116,6 +116,43 @@ describe.skipIf(process.platform === "win32")(
   "shared local browser owner over private IPC",
   { concurrent: true },
   () => {
+    it("lists every visible page of a named group through private IPC", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
+      await expect(f.service.groupMembers({})).rejects.toMatchObject({
+        code: "invalid_input",
+      });
+      expect(f.launches()).toBe(0);
+      const first = await f.service.groupMembers({ groupName: "Volunteers" });
+      expect(first).toMatchObject({
+        groupId: "102",
+        returnedCount: 100,
+        hasMore: true,
+        nextOffset: 100,
+      });
+      const last = await f.service.groupMembers({
+        groupId: first.groupId,
+        offset: first.nextOffset ?? undefined,
+        fields: ["joinedOn"],
+      });
+      expect(last).toMatchObject({
+        offset: 100,
+        members: [{ id: "401", joinedOn: "2026-03-05" }],
+        returnedCount: 1,
+        hasMore: false,
+        nextOffset: null,
+      });
+      expect(JSON.stringify([first, last])).not.toMatch(/alex@|555/);
+      expect(JSON.stringify(first)).not.toContain("joinedOn");
+      expect(
+        f.events().filter((event) => event.startsWith("POST group/102/people")),
+      ).toEqual([
+        "POST group/102/people?ajax",
+        "POST group/102/people/100?ajax&more",
+      ]);
+      expect(f.events()).not.toContain("GET user/userData");
+    });
+
     it("lists subscriptions and checks explicit/unknown membership through actual IPC", async (context) => {
       const { expect } = context;
       const f = await fixture(context);

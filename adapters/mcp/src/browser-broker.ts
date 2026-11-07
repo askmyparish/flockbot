@@ -28,6 +28,7 @@ import {
   MemberSearch,
   MemberProfile,
   MemberGroups,
+  GroupMembers,
   membershipGroupSelector,
   type GroupSelector,
   type MemberInput,
@@ -305,6 +306,11 @@ export async function runBrowserBroker(options: BrokerOptions): Promise<void> {
                     signal,
                   });
                   break;
+                case "group_members": {
+                  const { action: _, ...input } = request;
+                  value = await connection.groupMembers(input, { signal });
+                  break;
+                }
                 case "is_member":
                   value = await connection.isMember(request.userId, request, {
                     signal,
@@ -620,6 +626,21 @@ export class BrowserService {
       { action: "member_groups", ...prepared },
       options.signal,
     )) as Awaited<ReturnType<BrowserConnection["memberGroups"]>>;
+  }
+
+  async groupMembers(
+    input: Parameters<BrowserConnection["groupMembers"]>[0],
+    options: OperationOptions = {},
+  ) {
+    const prepared = new GroupMembers(input).toInput();
+    return (await this.#call(
+      {
+        ...prepared,
+        fields: [...(prepared.fields ?? [])],
+        action: "group_members",
+      },
+      options.signal,
+    )) as Awaited<ReturnType<BrowserConnection["groupMembers"]>>;
   }
   async isMember(
     userId: string,

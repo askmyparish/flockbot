@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { searchMetadata, searchRow } from "../../fixtures/member-search.js";
 import { profileResponse } from "../../fixtures/member-profile.js";
 import { membershipResponse } from "../../fixtures/member-groups.js";
+import { rosterPage, rosterRow } from "../../fixtures/group-members.js";
 import {
   BrowserService,
   runBrowserBroker,
@@ -50,6 +51,15 @@ if (role === "broker") {
               return searchMetadata();
             case "group/101/filter":
               return { success: true, results: [searchRow()], resultCount: 1 };
+            case "group/102/people?ajax":
+              return rosterPage(
+                Array.from({ length: 100 }, (_, i) =>
+                  rosterRow(301 + i, "Alex", `Example${i}`),
+                ),
+                true,
+              );
+            case "group/102/people/100?ajax&more":
+              return rosterPage([rosterRow(401)], false, null);
             case "user/301/profile":
               return profileResponse();
             case "user/301/groups":

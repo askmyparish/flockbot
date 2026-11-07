@@ -25,6 +25,7 @@ published by these changes.
 | `find_members` | Search active members in a selected group or Everyone; return bounded identities and selected contacts or group subscription dates |
 | `member` | Read one identified member's identity and explicitly selected stored email/mobile phone with status |
 | `member_groups` | List a chosen member's explicit group subscriptions with bounded output and visibility limits |
+| `group_members` | List a named group's subscribed members in bounded pages, with names by default |
 | `is_member` | Check one chosen member/group relationship as `member`, `not_member`, or `unknown` |
 | `add_member` | Add once by `groupId` or case-insensitive unique `groupName`; return only success |
 
@@ -88,6 +89,10 @@ and ask for a known email or phone rather than guessing or presenting numeric ID
 For “when was alex@example.test added to Volunteers?”, use `find_members` with
 that `groupName`, `searchTerm: "alex@example.test"`, and
 `fields: ["email", "joinedOn"]`. Resolve the person before reporting the date.
+For a follow-up after listing a group, reuse the chosen person and group and
+call `group_members` with `fields: ["joinedOn"]` to read that roster's dates.
+An omitted `joinedOn` means the field was not requested; it does not establish
+that the member has no date. Fetch the field before answering a join-date question.
 `joinedOn` is the selected group's reported subscription calendar date as
 `YYYY-MM-DD`, converted from the observed English display format. A missing,
 null, invalid or unrecognized date is `null` (unavailable). It is opt-in and is
@@ -127,6 +132,37 @@ guarantee, even when presentation is not truncated. Proxy-only relationships
 with `isSubscribed: false` are excluded from the subscription list. Their false
 flag is supported by captured Flocknote UI code and exercised with simulated
 JSON fixtures; the captured membership response itself has only true rows.
+
+For “Who are the members of Youth Ministry?”, call
+`group_members({groupName: "Youth Ministry"})`. Exactly one `groupName` or
+`groupId` is required; names use the existing case-insensitive unique match.
+The tool returns a page of up to 100 `members`, `groupId`, an optional canonical
+`groupName`, `offset`, `returnedCount`, `hasMore`, and `nextOffset`. Names and
+internal identifiers are returned by default. Optional `fields` selects
+`email`, `mobilePhone`, and/or `joinedOn` only when the task needs them.
+For “when did Alex join?” after this roster, request `fields: ["joinedOn"]`
+in the same group and match the already selected person by their internal ID.
+Only a requested `joinedOn: null` establishes that the returned record's date
+is unavailable. To answer whether anyone has a date, request `joinedOn` on
+every page; omitted dates in the default roster do not answer that question.
+
+Start at offset zero. If `hasMore` is true, request the returned `nextOffset`
+with that `groupId` and the same selected fields until `hasMore` is false. Present names to the
+user and keep member IDs internal. Do not describe a page as the whole group or
+use `returnedCount` as a total while more pages remain. If paging fails or
+records repeat across pages, explain that the list is partial rather than
+silently skipping people or claiming completeness. The connector rejects
+empty nonfinal pages, oversized pages, malformed rows and duplicate IDs within
+a page. Paging is not an atomic snapshot of changing group membership.
+
+These are the login-visible subscribed-member records with
+`includeUnsubscribed=0`; pending and unsubscribed people are not included.
+Contact-view responses are unsupported. Permission errors and missing member
+arrays are errors, not empty groups. Each page uses one POST attempt within
+the existing coordination/cancellation/authentication boundary, without a
+preflight or automatic replay. General offset paging is supported by captured
+UI code and the observed offset-100 request; later offsets and additional-page
+termination have offline fixture coverage, without new live verification.
 
 `is_member` takes a chosen `userId` and exactly one `groupId` or uniquely matching
 case-insensitive `groupName`. It returns the selected IDs, a group name when

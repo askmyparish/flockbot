@@ -22,6 +22,7 @@ export const FLOCKNOTE_TOOLS = [
   "add_member",
   "connect",
   "find_members",
+  "group_members",
   "groups",
   "is_member",
   "member",

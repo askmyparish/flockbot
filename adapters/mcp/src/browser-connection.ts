@@ -34,6 +34,10 @@ import {
 } from "../../../src/models/member-groups.js";
 import type { MemberField } from "../../../src/models/member-fields.js";
 import {
+  GroupMembers,
+  type GroupMembersInput,
+} from "../../../src/models/group-members.js";
+import {
   MemberSearch,
   type MemberSearchInput,
 } from "../../../src/models/member-search.js";
@@ -625,6 +629,13 @@ export class BrowserConnection {
     const groups = new MemberGroups(userId);
     return this.#operate(options, (session, op) =>
       groups.list(this.#resources(session, op)),
+    );
+  }
+
+  async groupMembers(input: GroupMembersInput, options: OperationOptions = {}) {
+    const page = new GroupMembers(input);
+    return this.#operate(options, (session, op, network) =>
+      page.list(this.#resources(session, op), network),
     );
   }
 

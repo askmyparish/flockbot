@@ -414,6 +414,10 @@ stored email/mobile phone details, preserving verification and bad-email status.
 Contact editing remains separate from these read operations.
 `member_groups` lists explicit subscriptions, while `is_member` checks one chosen
 group and preserves `unknown` when the response cannot establish membership.
+`group_members` answers who belongs to a named group, returning names by default
+and explicit offsets for additional pages rather than silently truncating a list.
+Request its `joinedOn` field for each person's reported subscription date in that
+group; an omitted field in the default roster does not mean no date is available.
 
 `npm run check` builds/tests its stdio contract and packaging offline. The opt-in
 `npm run test:mcp:browser` uses real Chromium with intercepted fictional responses.

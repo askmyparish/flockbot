@@ -26,6 +26,12 @@ export type {
   ContactValue,
 } from "./models/member-fields.js";
 export {
+  GroupMembers,
+  type GroupMembersInput,
+  type GroupMembersResult,
+  type GroupMember,
+} from "./models/group-members.js";
+export {
   MemberProfile,
   type MemberProfileResult,
   type MemberEmail,

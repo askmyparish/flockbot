@@ -69,6 +69,17 @@ termination, and pending-member pagination remain unverified. Do not report an
 initial page as the complete group or assume an unobserved `/200` request is a
 validated contract.
 
+The captured `/js/people.js` (second-capture entry 87) supplies additional
+client-code evidence: `loadPeople` builds `/group/{groupId}/people/{offset}`
+with `?ajax&more`, using the number of loaded nondeleted member cards as the
+offset. It submits `includeUnsubscribed` and removes the load-more control
+when `moreSubscribersExist` is false. This establishes the UI's continuation
+algorithm beyond the single observed offset, without establishing a live
+response at every later offset or a stable snapshot. The small initial pages
+in the first capture (49, 250) already show `moreSubscribersExist: false`.
+Later offsets, empty final pages and additional-page termination in connector
+tests remain simulated cases.
+
 Entries 298 and 313 load another group's initial page, again returning 100
 subscribers and `moreSubscribersExist: true`.
 
@@ -224,7 +235,7 @@ These extend the earlier candidate list; names and scope remain proposals.
 
 | Candidate | Observed basis | Remaining boundary |
 | --- | --- | --- |
-| Extend `flocknote_group_members` | First and additional pages, with two row formats | Avoid silent truncation; final-page and stable-order behavior are not captured. |
+| `group_members` | First and additional pages, with two row formats and captured UI continuation code | Avoid silent truncation; final additional-page and stable-order behavior remain unverified live. |
 | `flocknote_network_summary` | Non-demo `/unolyticsData` metrics | No arbitrary date-range input observed for this request; giving/attendance fields may be null. |
 | `flocknote_notes_sent_report` | `getReport`, `reportType=notesSent`, date range, populated rows | Other report types, permissions, date boundaries, and range limits remain unknown. |
 | `flocknote_member_count_history` | Date-range summary datapoints | Returned labels lack year/timezone; historical semantics need verification. |

@@ -28,17 +28,22 @@ describe("member read runtime allowlist", () => {
     try {
       for (const path of [
         "group/101/people?ajax",
+        "group/101/people/100?ajax&more",
         "group/101/filter",
         "user/301/profile",
         "user/301/groups",
       ])
         await session.request(path, "POST", "fictional=value");
-      expect(page.evaluate).toHaveBeenCalledTimes(4);
+      expect(page.evaluate).toHaveBeenCalledTimes(5);
       for (const [path, method] of [
         ["group/101/people?ajax", "GET"],
         ["group/101/filter", "GET"],
         ["group/101/people", "POST"],
         ["group/101/people?ajax&more", "POST"],
+        ["group/101/people/100?ajax&more", "GET"],
+        ["group/101/people/0?ajax&more", "POST"],
+        ["group/101/people/1e2?ajax&more", "POST"],
+        ["group/101/people/100?ajax&more&arbitrary=1", "POST"],
         ["group/101/filter?arbitrary=1", "POST"],
         ["group/../people?ajax", "POST"],
         ["user/301/updateContactInfo?ajax", "POST"],
@@ -51,7 +56,7 @@ describe("member read runtime allowlist", () => {
         await expect(session.request(path, method)).rejects.toMatchObject({
           code: "invalid_path",
         });
-      expect(page.evaluate).toHaveBeenCalledTimes(4);
+      expect(page.evaluate).toHaveBeenCalledTimes(5);
       expect(page.evaluate.mock.calls[0]?.[1]).toMatchObject({
         path: "group/101/people?ajax",
         method: "POST",

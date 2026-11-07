@@ -116,6 +116,7 @@ try {
     "add_member",
     "connect",
     "find_members",
+    "group_members",
     "groups",
     "is_member",
     "member",

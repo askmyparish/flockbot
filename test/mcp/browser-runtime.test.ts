@@ -15,6 +15,7 @@ import { createFlocknoteServer } from "../../adapters/mcp/src/flocknote-server.j
 import { searchMetadata, searchRow } from "../fixtures/member-search.js";
 import { profileResponse } from "../fixtures/member-profile.js";
 import { membershipResponse } from "../fixtures/member-groups.js";
+import { rosterPage, rosterRow } from "../fixtures/group-members.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -121,7 +122,22 @@ async function fixture() {
           url.search === "?ajax" &&
           request.method() === "POST"
         ) {
-          await json(searchMetadata());
+          await json({
+            ...searchMetadata(),
+            ...rosterPage(
+              Array.from({ length: 100 }, (_, i) =>
+                rosterRow(301 + i, "Alex", `Example${i}`),
+              ),
+              path === "group/102/people",
+              path === "group/102/people" ? 102 : 101,
+            ),
+          });
+        } else if (
+          path === "group/102/people/100" &&
+          url.search === "?ajax&more" &&
+          request.method() === "POST"
+        ) {
+          await json(rosterPage([rosterRow(401)], false, null));
         } else if (
           (path === "group/101/filter" || path === "group/102/filter") &&
           request.method() === "POST"
@@ -211,6 +227,53 @@ async function fixture() {
 describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
   "real Chromium with offline Flocknote fixtures",
   () => {
+    it("lists a named group across pages through browser fetch and MCP", async () => {
+      const f = await fixture();
+      await f.signIn();
+      await f.connection.groups();
+      f.visits.length = 0;
+      const server = createFlocknoteServer(f.connection);
+      const client = new Client({
+        name: "fictional-roster-workflow",
+        version: "1",
+      });
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      await server.connect(a);
+      await client.connect(b);
+      cleanup.unshift(() => client.close());
+      const first = await client.callTool({
+        name: "group_members",
+        arguments: { groupName: "Volunteers" },
+      });
+      expect(first.structuredContent).toMatchObject({
+        ok: true,
+        groupId: "102",
+        returnedCount: 100,
+        hasMore: true,
+        nextOffset: 100,
+      });
+      const last = await client.callTool({
+        name: "group_members",
+        arguments: { groupId: "102", offset: 100, fields: ["joinedOn"] },
+      });
+      expect(last.structuredContent).toMatchObject({
+        ok: true,
+        offset: 100,
+        members: [{ id: "401", joinedOn: "2026-03-05" }],
+        returnedCount: 1,
+        hasMore: false,
+        nextOffset: null,
+      });
+      expect(JSON.stringify([first, last])).not.toMatch(/alex@|555/);
+      expect(JSON.stringify(first)).not.toContain("joinedOn");
+      expect(f.visits).toEqual([
+        { path: "group/102/people", method: "POST" },
+        { path: "group/102/people/100", method: "POST" },
+      ]);
+      expect(f.state.external).toBe(0);
+      expect(f.state.launches).toBe(1);
+    }, 60_000);
+
     it("finds a person, reads selected contact details and checks subscriptions through actual browser fetch and MCP", async () => {
       const f = await fixture();
       await f.signIn();
