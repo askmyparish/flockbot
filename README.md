@@ -402,6 +402,8 @@ complete scoped results from truncated matches; see the
 For a chosen member ID, `flocknote_member` reads identity and explicitly selected
 stored email/mobile phone details, preserving verification and bad-email status.
 Contact editing remains separate from these read operations.
+`member_groups` lists explicit subscriptions, while `is_member` checks one chosen
+group and preserves `unknown` when the response cannot establish membership.
 
 `npm run check` builds/tests its stdio contract and packaging offline. The opt-in
 `npm run test:mcp:browser` uses real Chromium with intercepted fictional responses.

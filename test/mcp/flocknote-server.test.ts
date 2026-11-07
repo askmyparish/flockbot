@@ -582,6 +582,8 @@ describe("Flocknote MCP contract", () => {
       "flocknote_member",
       "flocknote_status",
       "flocknote_subscriber_count",
+      "is_member",
+      "member_groups",
     ]);
     for (const tool of tools)
       expect(JSON.stringify(tool.inputSchema)).not.toMatch(

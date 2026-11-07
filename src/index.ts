@@ -25,6 +25,13 @@ export {
   type MemberProfileResult,
   type MemberEmail,
 } from "./models/member-profile.js";
+export {
+  MemberGroups,
+  membershipGroupSelector,
+  type GroupSelector,
+  type MemberGroupsResult,
+  type MembershipCheckResult,
+} from "./models/member-groups.js";
 export type {
   MembershipExecutor,
   MembershipRequest,

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { searchMetadata, searchRow } from "../../fixtures/member-search.js";
 import { profileResponse } from "../../fixtures/member-profile.js";
+import { membershipResponse } from "../../fixtures/member-groups.js";
 import {
   BrowserService,
   runBrowserBroker,
@@ -51,6 +52,8 @@ if (role === "broker") {
               return { success: true, results: [searchRow()], resultCount: 1 };
             case "user/301/profile":
               return profileResponse();
+            case "user/301/groups":
+              return membershipResponse();
             case "group/102/addToGroupByAdmin":
               while (existsSync(join(profile, "hold"))) await delay(10);
               return { success: true };

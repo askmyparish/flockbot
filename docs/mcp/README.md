@@ -24,6 +24,8 @@ published by these changes.
 | `flocknote_subscriber_count` | Fetch a current count without member records |
 | `flocknote_find_members` | Search active members in a selected group or Everyone; return bounded identities and explicitly selected contact fields |
 | `flocknote_member` | Read one identified member's identity and explicitly selected stored email/mobile phone with status |
+| `member_groups` | List a chosen member's explicit group subscriptions with bounded output and visibility limits |
+| `is_member` | Check one chosen member/group relationship as `member`, `not_member`, or `unknown` |
 | `flocknote_add_member` | Add once by `groupId` or case-insensitive unique `groupName`; return only success |
 
 The MCP server publishes input schemas and workflow instructions. It offers no raw
@@ -96,6 +98,25 @@ keys and non-null pending contacts are simulated offline cases; the captured
 profiles establish string email, string/null mobile and null pending values.
 Each call fetches a fresh profile with one POST attempt and no authentication
 preflight. No live verification of this tool is claimed.
+
+`member_groups({userId})` returns only explicitly subscribed group IDs/names,
+with `observedCount`, `returnedCount`, `truncated`, and `complete: false`. At most
+50 subscriptions are shown. The observed response has no exhaustive-visibility
+guarantee, even when presentation is not truncated. Proxy-only relationships
+with `isSubscribed: false` are excluded from the subscription list. Their false
+flag is supported by captured Flocknote UI code and exercised with simulated
+JSON fixtures; the captured membership response itself has only true rows.
+
+`is_member` takes a chosen `userId` and exactly one `groupId` or uniquely matching
+case-insensitive `groupName`. It returns the selected IDs, a group name when
+known, and `membership`: `member` for an explicit true subscription,
+`not_member` for an explicit false relationship, or `unknown` when the selected
+group is absent. Available groups alone do not establish nonmembership. A denied,
+malformed, conflicting, or failed response produces an error. Checks inspect
+all validated rows before list presentation is clipped. These tools fetch fresh
+data using one membership POST attempt, preserve the current connection's
+coordination/cancellation/authentication boundaries, and expose no channel
+preferences or administrative capabilities. No live verification is claimed.
 
 ## Develop and verify
 

@@ -27,6 +27,9 @@ import {
   FlockbotError,
   MemberSearch,
   MemberProfile,
+  MemberGroups,
+  membershipGroupSelector,
+  type GroupSelector,
   type MemberInput,
   type OperationOptions,
 } from "../../../src/index.js";
@@ -296,6 +299,16 @@ export async function runBrowserBroker(options: BrokerOptions): Promise<void> {
                     request.fields,
                     { signal },
                   );
+                  break;
+                case "member_groups":
+                  value = await connection.memberGroups(request.userId, {
+                    signal,
+                  });
+                  break;
+                case "is_member":
+                  value = await connection.isMember(request.userId, request, {
+                    signal,
+                  });
                   break;
                 case "forget":
                   await connection.forget();
@@ -600,6 +613,25 @@ export class BrowserService {
       { action: "member", ...prepared },
       options.signal,
     )) as Awaited<ReturnType<BrowserConnection["member"]>>;
+  }
+  async memberGroups(userId: string, options: OperationOptions = {}) {
+    const prepared = new MemberGroups(userId).toInput();
+    return (await this.#call(
+      { action: "member_groups", ...prepared },
+      options.signal,
+    )) as Awaited<ReturnType<BrowserConnection["memberGroups"]>>;
+  }
+  async isMember(
+    userId: string,
+    selector: GroupSelector,
+    options: OperationOptions = {},
+  ) {
+    const prepared = new MemberGroups(userId).toInput();
+    const selected = membershipGroupSelector(selector);
+    return (await this.#call(
+      { action: "is_member", ...prepared, ...selected },
+      options.signal,
+    )) as Awaited<ReturnType<BrowserConnection["isMember"]>>;
   }
   async addMember(
     groupId: string,

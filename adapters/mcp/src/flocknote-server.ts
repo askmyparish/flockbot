@@ -18,6 +18,7 @@ const INSTRUCTIONS =
   "For additions use a known groupId, or supply the user's groupName for a case-insensitive unique match to resolve it in the same call. List groups only when the choice is unclear. " +
   "For an existing person, use flocknote_find_members first unless their user ID is already known. Continue directly only when exactMatchUserId identifies one exact full-name match in complete results; duplicate, similar or incomplete matches require clarification. Completeness covers only the selected group's active-member search, not inactive or inaccessible users. Request contact fields only when needed for the user's task. " +
   "Use flocknote_member with the chosen userId and selected fields for contact questions. Without fields it returns identity only. Report stored unverified or bad email status accurately; unavailable or null values are not a new address, and pending contacts never replace stored ones. " +
+  "Use member_groups to list a selected person's explicitly confirmed subscriptions, and is_member for one selected group. Missing groups mean unknown, not nonmembership. Proxy-only relationships with isSubscribed false are not subscriptions. Membership-read failures never mean no membership. " +
   "When a tool includes update metadata, answer the parish request first, then briefly mention the available Flockbot version (label prereleases) and say ‘Update Flockbot’ to install it. Mention it once per conversation unless asked again. Do not interrupt sign-in, hide an error or unknown write outcome, or install automatically. For an explicit update request, follow the canonical Flockbot guide, not the older installed setup script. " +
   "Add members only when requested, after resolving the parish, group and contact details. " +
   "Never repeat a write with outcome unknown: tell the user to check Flocknote before deciding what to do.";
@@ -93,6 +94,8 @@ export type FlocknoteConnection = Pick<
   | "count"
   | "findMembers"
   | "member"
+  | "memberGroups"
+  | "isMember"
   | "addMember"
   | "addMemberByName"
   | "close"
@@ -353,6 +356,42 @@ export function createFlocknoteServer(
         member: await connection.member(userId, fields, {
           signal: extra.signal,
         }),
+      })),
+  );
+  server.registerTool(
+    "member_groups",
+    {
+      title: "List a member's group subscriptions",
+      description:
+        "Read a chosen user's explicitly subscribed groups, returning at most 50 IDs/names with observed/returned counts and truncation. A proxy-only relationship is not a subscription. Complete is false because this response does not establish an exhaustive view; absence is not proof of nonmembership. Takes a resolved userId, with no preliminary status check or automatic retry.",
+      inputSchema: { userId: groupId },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ userId }, extra) =>
+      guarded(async () => ({
+        ok: true,
+        ...(await connection.memberGroups(userId, { signal: extra.signal })),
+      })),
+  );
+  server.registerTool(
+    "is_member",
+    {
+      title: "Check a person's group membership",
+      description:
+        "Check one resolved userId against exactly one groupId or a unique case-insensitive groupName. Returns membership as member, not_member (explicit false/proxy-only relationship), or unknown (group absent from the authorized response). Errors are never negative membership. Checks all validated rows before list clipping, with no preliminary status check or automatic retry.",
+      inputSchema: {
+        userId: groupId,
+        groupId: groupId.optional(),
+        groupName: z.string().min(1).max(256).optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ userId, ...selector }, extra) =>
+      guarded(async () => ({
+        ok: true,
+        ...(await connection.isMember(userId, selector, {
+          signal: extra.signal,
+        })),
       })),
   );
   server.registerTool(

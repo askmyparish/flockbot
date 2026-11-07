@@ -26,6 +26,8 @@ export const FLOCKNOTE_TOOLS = [
   "flocknote_member",
   "flocknote_status",
   "flocknote_subscriber_count",
+  "is_member",
+  "member_groups",
 ];
 const scratch = await mkdtemp(
   join(await realpath(tmpdir()), "flockbot-browser-package-"),

@@ -12,6 +12,9 @@ import {
   type BrowserFactory,
 } from "../../adapters/mcp/src/browser-runtime.js";
 import { createFlocknoteServer } from "../../adapters/mcp/src/flocknote-server.js";
+import { searchMetadata, searchRow } from "../fixtures/member-search.js";
+import { profileResponse } from "../fixtures/member-profile.js";
+import { membershipResponse } from "../fixtures/member-groups.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -32,6 +35,7 @@ async function fixture() {
     oversized: false,
     external: 0,
     restoredParishPage: false,
+    searchForms: [] as string[],
   };
   let context: BrowserContext;
   const factory: BrowserFactory = (options) =>
@@ -112,6 +116,26 @@ async function fixture() {
           });
         } else if (path === "network/getMetadata") {
           await json({ everyoneGroupID: 101 });
+        } else if (
+          path === "group/101/people" &&
+          url.search === "?ajax" &&
+          request.method() === "POST"
+        ) {
+          await json(searchMetadata());
+        } else if (path === "group/101/filter" && request.method() === "POST") {
+          state.searchForms.push(request.postData() ?? "");
+          await json({ success: true, results: [searchRow()], resultCount: 1 });
+        } else if (path === "user/301/profile" && request.method() === "POST") {
+          await json(profileResponse());
+        } else if (path === "user/301/groups" && request.method() === "POST") {
+          const response = membershipResponse();
+          response.data.subscribedGroups = response.data.subscribedGroups.map(
+            (group) =>
+              group.groupID === 102
+                ? { ...group, groupName: "Volunteers" }
+                : group,
+          );
+          await json(response);
         } else if (path === "group/101/getSubscriberCount") {
           if (state.redirect)
             await route.fulfill({
@@ -174,6 +198,110 @@ async function fixture() {
 describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
   "real Chromium with offline Flocknote fixtures",
   () => {
+    it("finds a person, reads selected contact details and checks subscriptions through actual browser fetch and MCP", async () => {
+      const f = await fixture();
+      await f.signIn();
+      await f.connection.groups();
+      f.visits.length = 0;
+      const server = createFlocknoteServer(f.connection);
+      const client = new Client({
+        name: "fictional-member-workflow",
+        version: "1",
+      });
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      await server.connect(a);
+      await client.connect(b);
+      cleanup.unshift(() => client.close());
+      const found = await client.callTool({
+        name: "flocknote_find_members",
+        arguments: { searchTerm: "Alex Rivera" },
+      });
+      expect(found.structuredContent).toMatchObject({
+        ok: true,
+        complete: true,
+        exactMatchUserId: "301",
+        members: [{ id: "301", firstName: "Alex", lastName: "Rivera" }],
+      });
+      expect(JSON.stringify(found)).not.toMatch(/alex@|555/);
+      const userId = String(
+        (found.structuredContent as Record<string, unknown>).exactMatchUserId,
+      );
+      const person = await client.callTool({
+        name: "flocknote_member",
+        arguments: { userId, fields: ["email"] },
+      });
+      expect(person.structuredContent).toMatchObject({
+        ok: true,
+        member: {
+          id: userId,
+          email: {
+            value: "alex@example.test",
+            verified: false,
+            isBadEmail: true,
+          },
+        },
+      });
+      expect(JSON.stringify(person)).not.toMatch(/555|pending|canEdit/);
+      const groups = await client.callTool({
+        name: "member_groups",
+        arguments: { userId },
+      });
+      expect(groups.structuredContent).toMatchObject({
+        ok: true,
+        userId,
+        groups: [
+          { id: "101", name: "Everyone" },
+          { id: "102", name: "Volunteers" },
+        ],
+        complete: false,
+        truncated: false,
+      });
+      const named = await client.callTool({
+        name: "is_member",
+        arguments: { userId, groupName: "Volunteers" },
+      });
+      expect(named.structuredContent).toMatchObject({
+        ok: true,
+        userId,
+        groupId: "102",
+        membership: "member",
+      });
+      for (const [groupId, membership] of [
+        ["103", "not_member"],
+        ["104", "unknown"],
+      ]) {
+        const result = await client.callTool({
+          name: "is_member",
+          arguments: { userId, groupId },
+        });
+        expect(result.structuredContent).toMatchObject({
+          ok: true,
+          userId,
+          groupId,
+          membership,
+        });
+      }
+      expect(f.visits).toEqual([
+        { path: "group/101/people", method: "POST" },
+        { path: "group/101/filter", method: "POST" },
+        { path: "user/301/profile", method: "POST" },
+        ...Array.from({ length: 4 }, () => ({
+          path: "user/301/groups",
+          method: "POST",
+        })),
+      ]);
+      expect(
+        Object.fromEntries(new URLSearchParams(f.state.searchForms[0])),
+      ).toEqual({
+        "request[and][0][or][0][and][0][filterID]": "17",
+        "request[and][0][or][0][and][0][isNegated]": "false",
+        "request[and][0][or][0][and][0][inputs][searchTerm]": "Alex Rivera",
+        includeInactive: "false",
+      });
+      expect(f.state.external).toBe(0);
+      expect(f.state.launches).toBe(1);
+    }, 60_000);
+
     it.each(["sign-in tab", "browser"])(
       "ends setup after closing only the %s and permits sign-in again",
       async (target) => {

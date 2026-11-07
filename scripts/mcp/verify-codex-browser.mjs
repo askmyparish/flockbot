@@ -120,6 +120,8 @@ try {
     "flocknote_member",
     "flocknote_status",
     "flocknote_subscriber_count",
+    "is_member",
+    "member_groups",
   ]);
   console.log(
     JSON.stringify({

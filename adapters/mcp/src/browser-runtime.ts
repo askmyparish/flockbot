@@ -66,7 +66,7 @@ function allowed(path: string, method: string): boolean {
     method === "POST" &&
     (/^group\/[A-Za-z0-9_-]+\/addToGroupByAdmin$/.test(path) ||
       /^group\/[A-Za-z0-9_-]+\/(?:people\?ajax|filter)$/.test(path) ||
-      /^user\/[A-Za-z0-9_-]+\/profile$/.test(path))
+      /^user\/[A-Za-z0-9_-]+\/(?:profile|groups)$/.test(path))
   );
 }
 

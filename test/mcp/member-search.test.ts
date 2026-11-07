@@ -12,6 +12,7 @@ import { SerialCoordinator } from "../../adapters/mcp/src/serial-coordinator.js"
 import type { BrowserSession } from "../../adapters/mcp/src/browser-runtime.js";
 import { searchMetadata, searchRow } from "../fixtures/member-search.js";
 import { profileResponse } from "../fixtures/member-profile.js";
+import { membershipResponse } from "../fixtures/member-groups.js";
 import { waitFor } from "./support.js";
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -37,11 +38,15 @@ async function fixture() {
     verification: unknown;
     everyoneGroupID: number | null;
     profile: unknown;
+    memberships: unknown;
+    navigation: unknown;
   } = {
     response: { success: true, results: [searchRow()], resultCount: 1 },
     verification: { success: true, userID: 201 },
     everyoneGroupID: 101,
     profile: profileResponse(),
+    memberships: membershipResponse(),
+    navigation: { groups: [] },
   };
   const session: BrowserSession = {
     signIn: vi.fn(async () => undefined),
@@ -49,7 +54,7 @@ async function fixture() {
     request: vi.fn(async (path) => {
       if (path === "user/userData") return state.verification;
       if (path === "dashboard") return '<div id="fnReactHolder"></div>';
-      if (path === "navigation/groups") return { groups: [] };
+      if (path === "navigation/groups") return state.navigation;
       if (path === "network/getMetadata")
         return { everyoneGroupID: state.everyoneGroupID };
       if (path === "group/101/people?ajax") return searchMetadata();
@@ -60,6 +65,10 @@ async function fixture() {
       if (path === "user/301/profile") {
         if (state.profile instanceof Error) throw state.profile;
         return state.profile;
+      }
+      if (path === "user/301/groups") {
+        if (state.memberships instanceof Error) throw state.memberships;
+        return state.memberships;
       }
       throw new Error("Unexpected fictional request");
     }),
@@ -94,6 +103,207 @@ async function fixture() {
   });
   return { connection, client, factory, session, state };
 }
+
+describe("membership MCP/connection boundary", () => {
+  it("performs search, selected contact lookup, subscriptions and one-group check through real MCP", async () => {
+    const f = await fixture();
+    const found = await f.client.callTool({
+      name: "flocknote_find_members",
+      arguments: { searchTerm: "Alex Rivera", groupId: "101" },
+    });
+    expect(found.structuredContent).toMatchObject({
+      ok: true,
+      exactMatchUserId: "301",
+      complete: true,
+    });
+    expect(JSON.stringify(found)).not.toContain("alex@");
+    const foundBody = found.structuredContent as Record<string, unknown>;
+    const userId = String(foundBody.exactMatchUserId);
+    const person = await f.client.callTool({
+      name: "flocknote_member",
+      arguments: { userId, fields: ["email"] },
+    });
+    expect(person.structuredContent).toMatchObject({
+      ok: true,
+      member: {
+        id: userId,
+        email: {
+          value: "alex@example.test",
+          verified: false,
+          isBadEmail: true,
+        },
+      },
+    });
+    const groups = await f.client.callTool({
+      name: "member_groups",
+      arguments: { userId },
+    });
+    expect(groups.structuredContent).toMatchObject({
+      ok: true,
+      userId,
+      groups: [
+        { id: "101", name: "Everyone" },
+        { id: "102", name: "Choir" },
+      ],
+      observedCount: 2,
+      returnedCount: 2,
+      truncated: false,
+      complete: false,
+    });
+    const checked = await f.client.callTool({
+      name: "is_member",
+      arguments: { userId, groupId: "102" },
+    });
+    expect(checked.structuredContent).toMatchObject({
+      ok: true,
+      userId,
+      groupId: "102",
+      groupName: "Choir",
+      membership: "member",
+      update: { availableVersion: "0.3.0" },
+    });
+    expect(f.session.request).toHaveBeenCalledTimes(5);
+    const tools = await f.client.listTools();
+    for (const name of ["member_groups", "is_member"])
+      expect(
+        tools.tools.find((t) => t.name === name)?.annotations?.readOnlyHint,
+      ).toBe(true);
+    expect(f.client.getInstructions()).toContain("Missing groups mean unknown");
+  });
+
+  it("resolves a unique group name in the same call and distinguishes explicit false from absence", async () => {
+    const f = await fixture();
+    f.state.navigation = {
+      groups: [{ ID: 102, name: "Choir", shortname: "choir" }],
+    };
+    const named = await f.client.callTool({
+      name: "is_member",
+      arguments: { userId: "301", groupName: " CHOIR " },
+    });
+    expect(named.structuredContent).toMatchObject({
+      groupId: "102",
+      membership: "member",
+    });
+    for (const [groupId, membership] of [
+      ["103", "not_member"],
+      ["104", "unknown"],
+    ]) {
+      const value = await f.client.callTool({
+        name: "is_member",
+        arguments: { userId: "301", groupId },
+      });
+      expect(value.structuredContent).toMatchObject({
+        ok: true,
+        userId: "301",
+        groupId,
+        membership,
+      });
+    }
+    expect(f.session.request).not.toHaveBeenCalledWith("user/userData");
+  });
+
+  it("rejects invalid inputs before opening a browser and restricts IPC operations", async () => {
+    const f = await fixture();
+    await expect(f.connection.memberGroups("../301")).rejects.toMatchObject({
+      code: "invalid_input",
+    });
+    await expect(f.connection.isMember("301", {})).rejects.toMatchObject({
+      code: "invalid_input",
+    });
+    await expect(
+      f.connection.isMember("301", { groupId: "102", groupName: "Choir" }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(f.factory).not.toHaveBeenCalled();
+    expect(
+      brokerRequestSchema.safeParse({ action: "member_groups", userId: "301" })
+        .success,
+    ).toBe(true);
+    expect(
+      brokerRequestSchema.safeParse({
+        action: "is_member",
+        userId: "301",
+        groupName: "Choir",
+      }).success,
+    ).toBe(true);
+    for (const input of [
+      { action: "member_groups", userId: "301", fields: ["email"] },
+      { action: "is_member", userId: "301", path: "arbitrary" },
+    ])
+      expect(brokerRequestSchema.safeParse(input).success).toBe(false);
+  });
+
+  it("keeps denied, malformed and transport errors distinct from negative membership", async () => {
+    const f = await fixture();
+    for (const response of [
+      { success: true, data: { canView: false, subscribedGroups: [] } },
+      {
+        success: true,
+        data: {
+          canView: true,
+          subscribedGroups: [
+            { groupID: 102, groupName: "Choir", isSubscribed: "false" },
+          ],
+        },
+      },
+      { success: false, error: "private@example.test" },
+      new Error("private@example.test"),
+    ]) {
+      f.state.memberships = response;
+      const result = await f.client.callTool({
+        name: "is_member",
+        arguments: { userId: "301", groupId: "102" },
+      });
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).not.toHaveProperty("membership");
+      expect(JSON.stringify(result)).not.toContain("private@");
+    }
+    expect(f.session.request).toHaveBeenCalledTimes(4);
+    expect(await f.connection.status()).toMatchObject({ state: "ready" });
+  });
+
+  it("diagnoses explicit expiry once and never replays the membership POST", async () => {
+    const f = await fixture();
+    f.state.memberships = { success: false, authorized: false };
+    f.state.verification = { success: true, userID: null, authorized: false };
+    await expect(
+      f.connection.isMember("301", { groupId: "102" }),
+    ).rejects.toMatchObject({ code: "authentication_required" });
+    expect(f.session.request).toHaveBeenCalledTimes(2);
+    expect(f.session.request).toHaveBeenLastCalledWith("user/userData");
+    expect(await f.connection.status()).toMatchObject({
+      state: "action_required",
+    });
+  });
+
+  it("cancels before browser access and interrupts in-flight membership work without replay", async () => {
+    const f = await fixture();
+    await expect(
+      f.connection.memberGroups("301", { signal: AbortSignal.abort() }),
+    ).rejects.toMatchObject({ code: "operation_cancelled" });
+    expect(f.factory).not.toHaveBeenCalled();
+    let finish = (_value: unknown) => {};
+    f.state.memberships = new Promise((resolve) => {
+      finish = resolve;
+    });
+    const controller = new AbortController();
+    const pending = f.connection.isMember(
+      "301",
+      { groupId: "102" },
+      { signal: controller.signal },
+    );
+    const rejected = expect(pending).rejects.toMatchObject({
+      code: "operation_cancelled",
+    });
+    try {
+      await waitFor(() => expect(f.session.request).toHaveBeenCalledTimes(1));
+      controller.abort();
+      await rejected;
+      expect(f.session.request).toHaveBeenCalledTimes(1);
+    } finally {
+      finish(membershipResponse());
+    }
+  });
+});
 
 describe("identified profile MCP/connection boundary", () => {
   it("returns identity by default and only explicitly selected contact details", async () => {

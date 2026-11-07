@@ -27,6 +27,11 @@ import {
 import { GroupMembership } from "../../../src/models/group-membership.js";
 import { User } from "../../../src/models/user.js";
 import { MemberProfile } from "../../../src/models/member-profile.js";
+import {
+  MemberGroups,
+  membershipGroupSelector,
+  type GroupSelector,
+} from "../../../src/models/member-groups.js";
 import type { MemberField } from "../../../src/models/member-fields.js";
 import {
   MemberSearch,
@@ -613,6 +618,25 @@ export class BrowserConnection {
     const profile = new MemberProfile(userId, fields);
     return this.#operate(options, (session, op) =>
       profile.read(this.#resources(session, op)),
+    );
+  }
+
+  async memberGroups(userId: string, options: OperationOptions = {}) {
+    const groups = new MemberGroups(userId);
+    return this.#operate(options, (session, op) =>
+      groups.list(this.#resources(session, op)),
+    );
+  }
+
+  async isMember(
+    userId: string,
+    selector: GroupSelector,
+    options: OperationOptions = {},
+  ) {
+    const groups = new MemberGroups(userId);
+    const selected = membershipGroupSelector(selector);
+    return this.#operate(options, (session, op, network) =>
+      groups.check(this.#resources(session, op), network, selected),
     );
   }
 

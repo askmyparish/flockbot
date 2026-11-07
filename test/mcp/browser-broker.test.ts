@@ -116,6 +116,36 @@ describe.skipIf(process.platform === "win32")(
   "shared local browser owner over private IPC",
   { concurrent: true },
   () => {
+    it("lists subscriptions and checks explicit/unknown membership through actual IPC", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
+      await expect(f.service.isMember("301", {})).rejects.toMatchObject({
+        code: "invalid_input",
+      });
+      expect(f.launches()).toBe(0);
+      const groups = await f.service.memberGroups("301");
+      expect(groups).toMatchObject({
+        userId: "301",
+        groups: [{ id: "101" }, { id: "102" }],
+        complete: false,
+        truncated: false,
+      });
+      expect(JSON.stringify(groups)).not.toMatch(/Pref|superAdmin|Proxy/);
+      expect(await f.service.isMember("301", { groupId: "102" })).toMatchObject(
+        { membership: "member" },
+      );
+      expect(await f.service.isMember("301", { groupId: "103" })).toMatchObject(
+        { membership: "not_member" },
+      );
+      expect(await f.service.isMember("301", { groupId: "104" })).toMatchObject(
+        { membership: "unknown" },
+      );
+      expect(f.events()).toEqual([
+        "launch",
+        ...Array.from({ length: 4 }, () => "POST user/301/groups"),
+      ]);
+    });
+
     it("reads selected member contacts over actual private IPC with no preflight", async (context) => {
       const { expect } = context;
       const f = await fixture(context);
