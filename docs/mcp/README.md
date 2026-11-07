@@ -75,6 +75,14 @@ lookup with that identifier; duplicate, similar or incomplete matches require
 clarification. Empty results are scoped to the query, not proof that a person
 has no parish record.
 
+Member IDs are internal lookup keys, not choices to present to parish staff.
+Before asking the user to distinguish same-name records, repeat the search in
+the same group with `fields: ["email"]`. If email is absent or identical, request
+`mobilePhone` as needed. Ask using only the distinguishing contact details, keep
+their corresponding IDs internal, and continue the original task once the user
+chooses. If the contacts do not distinguish the records, explain that limitation
+and ask for a known email or phone rather than guessing or presenting numeric IDs.
+
 Search returns only identifiers and names by default. Selected contacts include
 their stored value and verification flag; a blank/null value remains null, and
 verification is not a delivery guarantee. Other contact, role and UI fields are

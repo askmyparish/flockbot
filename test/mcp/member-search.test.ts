@@ -453,6 +453,93 @@ describe("identified profile MCP/connection boundary", () => {
 });
 
 describe("member search MCP/connection boundary", () => {
+  it("supports resolving same-name records by contacts while retaining IDs for internal follow-up", async () => {
+    const f = await fixture();
+    f.state.response = {
+      success: true,
+      resultCount: 3,
+      results: [
+        { ...searchRow(), mail: "alex.work@example.test" },
+        { ...searchRow(302), mail: "alex.home@example.test" },
+        { ...searchRow(303), mail: null, phn: "+1 (202) 555-0198" },
+      ],
+    };
+    const identities = await f.client.callTool({
+      name: "find_members",
+      arguments: { searchTerm: "Alex Rivera", groupId: "101" },
+    });
+    expect(identities.structuredContent).not.toHaveProperty("exactMatchUserId");
+    expect(JSON.stringify(identities)).not.toContain("@example.test");
+
+    const contacts = await f.client.callTool({
+      name: "find_members",
+      arguments: {
+        searchTerm: "Alex Rivera",
+        groupId: "101",
+        fields: ["email"],
+      },
+    });
+    expect(contacts.structuredContent).toMatchObject({
+      complete: true,
+      members: [
+        { id: "301", email: { value: "alex.work@example.test" } },
+        { id: "302", email: { value: "alex.home@example.test" } },
+        { id: "303", email: { value: null } },
+      ],
+    });
+    expect(contacts.structuredContent).not.toHaveProperty("exactMatchUserId");
+    expect(JSON.stringify(contacts)).not.toContain("555");
+
+    const phones = await f.client.callTool({
+      name: "find_members",
+      arguments: {
+        searchTerm: "Alex Rivera",
+        groupId: "101",
+        fields: ["mobilePhone"],
+      },
+    });
+    expect(phones.structuredContent).toMatchObject({
+      members: [
+        { id: "301", mobilePhone: { value: "+1 (202) 555-0123" } },
+        { id: "302", mobilePhone: { value: "+1 (202) 555-0123" } },
+        { id: "303", mobilePhone: { value: "+1 (202) 555-0198" } },
+      ],
+    });
+    expect(JSON.stringify(phones)).not.toContain("@example.test");
+
+    // The assistant maps the user's chosen email back to the internal key.
+    const body = contacts.structuredContent as {
+      members: { id: string; email: { value: string | null } }[];
+    };
+    const chosen = body.members.find(
+      (person) => person.email.value === "alex.work@example.test",
+    );
+    expect(chosen).toBeDefined();
+    expect(
+      (
+        await f.client.callTool({
+          name: "member_groups",
+          arguments: { userId: chosen?.id },
+        })
+      ).structuredContent,
+    ).toMatchObject({
+      ok: true,
+      groups: [{ name: "Everyone" }, { name: "Choir" }],
+    });
+
+    const instructions = f.client.getInstructions();
+    expect(instructions).toContain("Member IDs are internal");
+    expect(instructions).toContain("Before asking which person");
+    expect(instructions).toContain("email is missing or does not distinguish");
+    expect(instructions).toContain(
+      "do not invent differences or guess a record",
+    );
+    const { tools } = await f.client.listTools();
+    expect(
+      tools.find((tool) => tool.name === "find_members")?.description,
+    ).toContain("clarify using distinguishing contacts");
+  });
+
   it("asks for an explicit group when Everyone is unavailable", async () => {
     const f = await fixture();
     f.state.everyoneGroupID = null;

@@ -11,12 +11,14 @@ import { UpdateChecker, type UpdateNotifications } from "./update-check.js";
 
 const INSTRUCTIONS =
   "Use these tools for the user's Flocknote parish requests. Trust the saved session and call the requested tool directly; no preliminary status or authentication check is needed. " +
+  "Member IDs are internal: identify people to the user by name and distinguishing contact details, not numeric IDs. " +
   "If sign-in is needed, ask for the parish subdomain and call connect; the user signs in on Flocknote's real website. " +
   "The connect call waits briefly for sign-in. When it returns ready, continue the user's original request without asking them to say they are signed in. Sign-in alone does not finish their parish task. " +
   "Only if connect still returns pending should you ask the user to finish sign-in and let you know, then check status once. " +
   "Never request passwords, codes, cookies, browser storage, arbitrary URLs or scripts. " +
   "For additions use a known groupId, or supply the user's groupName for a case-insensitive unique match to resolve it in the same call. List groups only when the choice is unclear. " +
   "For an existing person, use find_members first unless their user ID is already known. Continue directly only when exactMatchUserId identifies one exact full-name match in complete results; duplicate, similar or incomplete matches require clarification. Completeness covers only the selected group's active-member search, not inactive or inaccessible users. Request contact fields only when needed for the user's task. " +
+  'Resolving an ambiguous name is a reason to request contact fields. Before asking which person, use find_members with the same search and group and fields:["email"]; request mobilePhone only if email is missing or does not distinguish the candidates. Present the distinguishing email addresses or phone details and ask which person the user means. Never ask the user to choose between member IDs unless they explicitly requested IDs. Keep each choice\'s ID internal, then resume the original task with that userId after the user chooses. If available contacts still do not distinguish the records, explain that and ask for a known email or phone; do not invent differences or guess a record. ' +
   "Use member with the chosen userId and selected fields for contact questions. Without fields it returns identity only. Report stored unverified or bad email status accurately; unavailable or null values are not a new address, and pending contacts never replace stored ones. " +
   "Use member_groups to list a selected person's explicitly confirmed subscriptions, and is_member for one selected group. Missing groups mean unknown, not nonmembership. Proxy-only relationships with isSubscribed false are not subscriptions. Membership-read failures never mean no membership. " +
   "When a tool includes update metadata, answer the parish request first, then briefly mention the available Flockbot version (label prereleases) and say ‘Update Flockbot’ to install it. Mention it once per conversation unless asked again. Do not interrupt sign-in, hide an error or unknown write outcome, or install automatically. For an explicit update request, follow the canonical Flockbot guide, not the older installed setup script. " +
@@ -316,7 +318,7 @@ export function createFlocknoteServer(
     {
       title: "Find parish members",
       description:
-        "Find existing active parish members by general text search. Select groupId or a unique groupName, or omit both to search dynamically discovered Everyone. Returns at most 50 identity candidates and scoped result counts; fields optionally selects email/mobilePhone. Continue directly only with exactMatchUserId from complete results; clarify duplicate, similar or incomplete matches. No preliminary status check and no automatic retry.",
+        "Find existing active parish members by general text search. Select groupId or a unique groupName, or omit both to search dynamically discovered Everyone. Returns at most 50 identity candidates and scoped result counts; fields optionally selects email/mobilePhone. Continue directly only with exactMatchUserId from complete results; clarify duplicate, similar or incomplete matches. For ambiguous names, request email first and mobilePhone if needed, then clarify using distinguishing contacts. Member IDs are internal; do not ask users to choose numeric IDs. No preliminary status check and no automatic retry.",
       inputSchema: {
         searchTerm: z.string().min(1).max(256),
         groupId: groupId.optional(),
