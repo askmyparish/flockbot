@@ -1,9 +1,16 @@
 import { spawnSync } from "node:child_process";
+import { availableParallelism } from "node:os";
 import { resolve } from "node:path";
 
 const test = spawnSync(
   process.execPath,
-  ["node_modules/vitest/vitest.mjs", "run", "test/mcp/browser-runtime.test.ts"],
+  [
+    "node_modules/vitest/vitest.mjs",
+    "run",
+    "test/mcp/browser-runtime.test.ts",
+    // Overlap independent browser startups without oversubscribing smaller hosts.
+    `--maxConcurrency=${Math.min(3, availableParallelism())}`,
+  ],
   {
     stdio: "inherit",
     env: {

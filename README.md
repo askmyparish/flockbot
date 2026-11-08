@@ -42,7 +42,8 @@ bin/test -t "reuses cookies"
 
 Passing a file runs only that spec; add `-t` to narrow it to a test name. The full
 offline suite remains `bin/test`. Real Chromium fixtures run separately with
-`npm run test:mcp:browser`.
+`npm run test:mcp:browser`, using up to three concurrent browsers (bounded by
+available CPUs), each with its own disposable profile and cleanup.
 
 Tests reuse workers and imported modules to avoid repeated startup costs. Keep
 fixtures local to each test and clean up timers, environment changes, and resources;

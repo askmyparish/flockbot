@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { chromium, type BrowserContext } from "playwright";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, it, vi, type TestContext } from "vitest";
 import { BrowserConnection } from "../../adapters/mcp/src/browser-connection.js";
 import { SerialCoordinator } from "../../adapters/mcp/src/serial-coordinator.js";
 import {
@@ -17,13 +17,8 @@ import { profileResponse } from "../fixtures/member-profile.js";
 import { membershipResponse } from "../fixtures/member-groups.js";
 import { rosterPage, rosterRow } from "../fixtures/group-members.js";
 
-const cleanup: (() => Promise<void>)[] = [];
-afterEach(async () => {
-  for (const close of cleanup.splice(0)) await close();
-});
-
 /** Every page/API request is fulfilled here. DNS is disabled in the browser too. */
-async function fixture() {
+async function fixture({ onTestFinished, expect }: TestContext) {
   const profile = mkdtempSync(join(tmpdir(), "flockbot-real-browser-"));
   const origin = "https://example-parish.flocknote.com";
   const visits: { path: string; method: string }[] = [];
@@ -198,7 +193,7 @@ async function fixture() {
     setupMs: 15_000,
     coordinator: new SerialCoordinator(),
   });
-  cleanup.push(async () => {
+  onTestFinished(async () => {
     await connection.close();
     rmSync(profile, { recursive: true, force: true });
   });
@@ -226,9 +221,11 @@ async function fixture() {
 
 describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
   "real Chromium with offline Flocknote fixtures",
+  { concurrent: true },
   () => {
-    it("lists a named group across pages through browser fetch and MCP", async () => {
-      const f = await fixture();
+    it("lists a named group across pages through browser fetch and MCP", async (context) => {
+      const { expect, onTestFinished } = context;
+      const f = await fixture(context);
       await f.signIn();
       await f.connection.groups();
       f.visits.length = 0;
@@ -240,7 +237,7 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
       const [a, b] = InMemoryTransport.createLinkedPair();
       await server.connect(a);
       await client.connect(b);
-      cleanup.unshift(() => client.close());
+      onTestFinished(() => client.close());
       const first = await client.callTool({
         name: "group_members",
         arguments: { groupName: "Volunteers" },
@@ -274,8 +271,9 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
       expect(f.state.launches).toBe(1);
     }, 60_000);
 
-    it("finds a person, reads selected contact details and checks subscriptions through actual browser fetch and MCP", async () => {
-      const f = await fixture();
+    it("finds a person, reads selected contact details and checks subscriptions through actual browser fetch and MCP", async (context) => {
+      const { expect, onTestFinished } = context;
+      const f = await fixture(context);
       await f.signIn();
       await f.connection.groups();
       f.visits.length = 0;
@@ -287,7 +285,7 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
       const [a, b] = InMemoryTransport.createLinkedPair();
       await server.connect(a);
       await client.connect(b);
-      cleanup.unshift(() => client.close());
+      onTestFinished(() => client.close());
       const found = await client.callTool({
         name: "find_members",
         arguments: { searchTerm: "Alex Rivera" },
@@ -394,10 +392,12 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
       expect(f.state.launches).toBe(1);
     }, 60_000);
 
-    it.each(["sign-in tab", "browser"])(
+    it.for(["sign-in tab", "browser"])(
       "ends setup after closing only the %s and permits sign-in again",
-      async (target) => {
-        const f = await fixture();
+      { timeout: 60_000 },
+      async (target, test) => {
+        const { expect } = test;
+        const f = await fixture(test);
         await f.connection.connect("example-parish");
         const context = f.context();
         const signIn = context
@@ -428,11 +428,11 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
         });
         expect(f.state.external).toBe(0);
       },
-      60_000,
     );
 
-    it("keeps one Chromium process and uses only one POST for a warm named addition", async () => {
-      const f = await fixture();
+    it("keeps one Chromium process and uses only one POST for a warm named addition", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
       await f.signIn();
       await f.connection.groups();
       f.visits.length = 0;
@@ -455,8 +455,9 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
       expect(f.state.restoredParishPage).toBe(false);
     }, 60_000);
 
-    it("keeps a session-only cookie through browser restarts and serves structured MCP operations", async () => {
-      const f = await fixture();
+    it("keeps a session-only cookie through browser restarts and serves structured MCP operations", async (context) => {
+      const { expect, onTestFinished } = context;
+      const f = await fixture(context);
       await f.signIn();
       // Explicit owner shutdowns exercise cookie reuse with the production lifecycle.
       await f.connection.close();
@@ -465,7 +466,7 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
       const [a, b] = InMemoryTransport.createLinkedPair();
       await server.connect(a);
       await client.connect(b);
-      cleanup.unshift(() => client.close());
+      onTestFinished(() => client.close());
       const groups = await client.callTool({ name: "groups" });
       expect(groups.structuredContent).toMatchObject({
         ok: true,
@@ -515,10 +516,12 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
       expect(await f.connection.count("101")).toBe(4);
     }, 60_000);
 
-    it.each(["http403", "json", "html"])(
+    it.for(["http403", "json", "html"])(
       "confirms expiry only after an operation fails (%s)",
-      async (mode) => {
-        const f = await fixture();
+      { timeout: 60_000 },
+      async (mode, context) => {
+        const { expect } = context;
+        const f = await fixture(context);
         await f.signIn();
         f.visits.length = 0;
         f.state.expired = true;
@@ -537,11 +540,11 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
         });
         expect(f.state.external).toBe(0);
       },
-      60_000,
     );
 
-    it("never replays a membership POST after confirming an expired session", async () => {
-      const f = await fixture();
+    it("never replays a membership POST after confirming an expired session", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
       await f.signIn();
       await f.connection.groups();
       f.visits.length = 0;
@@ -566,8 +569,9 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
       });
     }, 60_000);
 
-    it("rejects redirects and oversized responses, and never repeats a disconnected write", async () => {
-      const f = await fixture();
+    it("rejects redirects and oversized responses, and never repeats a disconnected write", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
       await f.signIn();
       f.state.redirect = true;
       await expect(f.connection.count("101")).rejects.toMatchObject({
