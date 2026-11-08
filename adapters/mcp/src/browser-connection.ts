@@ -28,6 +28,10 @@ import { GroupMembership } from "../../../src/models/group-membership.js";
 import { User } from "../../../src/models/user.js";
 import { MemberProfile } from "../../../src/models/member-profile.js";
 import {
+  MemberCommunicationStatus,
+  type MemberCommunicationInput,
+} from "../../../src/models/member-communication-status.js";
+import {
   MemberGroups,
   membershipGroupSelector,
   type GroupSelector,
@@ -629,6 +633,16 @@ export class BrowserConnection {
     const groups = new MemberGroups(userId);
     return this.#operate(options, (session, op) =>
       groups.list(this.#resources(session, op)),
+    );
+  }
+
+  async memberCommunicationStatus(
+    input: MemberCommunicationInput,
+    options: OperationOptions = {},
+  ) {
+    const diagnostic = new MemberCommunicationStatus(input);
+    return this.#operate(options, (session, op, network) =>
+      diagnostic.read(this.#resources(session, op), network),
     );
   }
 

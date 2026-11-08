@@ -99,6 +99,7 @@ export type FlocknoteConnection = Pick<
   | "findMembers"
   | "member"
   | "memberGroups"
+  | "memberCommunicationStatus"
   | "groupMembers"
   | "isMember"
   | "addMember"
@@ -404,6 +405,31 @@ export function createFlocknoteServer(
       guarded(async () => ({
         ok: true,
         ...(await connection.groupMembers(input, { signal: extra.signal })),
+      })),
+  );
+  server.registerTool(
+    "member_communication_status",
+    {
+      title: "Read member communication settings and warnings",
+      description:
+        "Explain observed email/SMS settings and contact concerns for one resolved userId and exactly one groupId or unique groupName. Returns membership, stored group preferences, contact availability/verification, bad-email and reported SMS STOP flags, warnings and limitations. Missing facts remain unknown, not false. Contact values are omitted unless fields selects email/mobilePhone. No suppression lookup or changes; settings and an empty warnings list never prove delivery. Separate reads are not an atomic snapshot. Uses the saved session without a preliminary status check or automatic retry.",
+      inputSchema: {
+        userId: groupId,
+        groupId: groupId.optional(),
+        groupName: z.string().min(1).max(256).optional(),
+        fields: z
+          .array(z.enum(["email", "mobilePhone"]))
+          .max(2)
+          .optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async (input, extra) =>
+      guarded(async () => ({
+        ok: true,
+        ...(await connection.memberCommunicationStatus(input, {
+          signal: extra.signal,
+        })),
       })),
   );
   server.registerTool(

@@ -28,6 +28,7 @@ import {
   MemberSearch,
   MemberProfile,
   MemberGroups,
+  MemberCommunicationStatus,
   GroupMembers,
   membershipGroupSelector,
   type GroupSelector,
@@ -306,6 +307,13 @@ export async function runBrowserBroker(options: BrokerOptions): Promise<void> {
                     signal,
                   });
                   break;
+                case "member_communication_status": {
+                  const { action: _, ...input } = request;
+                  value = await connection.memberCommunicationStatus(input, {
+                    signal,
+                  });
+                  break;
+                }
                 case "group_members": {
                   const { action: _, ...input } = request;
                   value = await connection.groupMembers(input, { signal });
@@ -626,6 +634,21 @@ export class BrowserService {
       { action: "member_groups", ...prepared },
       options.signal,
     )) as Awaited<ReturnType<BrowserConnection["memberGroups"]>>;
+  }
+
+  async memberCommunicationStatus(
+    input: Parameters<BrowserConnection["memberCommunicationStatus"]>[0],
+    options: OperationOptions = {},
+  ) {
+    const prepared = new MemberCommunicationStatus(input).toInput();
+    return (await this.#call(
+      {
+        ...prepared,
+        fields: [...(prepared.fields ?? [])],
+        action: "member_communication_status",
+      },
+      options.signal,
+    )) as Awaited<ReturnType<BrowserConnection["memberCommunicationStatus"]>>;
   }
 
   async groupMembers(

@@ -25,6 +25,7 @@ published by these changes.
 | `find_members` | Search active members in a selected group or Everyone; return bounded identities and selected contacts or group subscription dates |
 | `member` | Read one identified member's identity and explicitly selected stored email/mobile phone with status |
 | `member_groups` | List a chosen member's explicit group subscriptions with bounded output and visibility limits |
+| `member_communication_status` | Read one member/group's email/SMS preferences and contact warnings without promising delivery |
 | `group_members` | List a named group's subscribed members in bounded pages, with names by default |
 | `is_member` | Check one chosen member/group relationship as `member`, `not_member`, or `unknown` |
 | `add_member` | Add once by `groupId` or case-insensitive unique `groupName`; return only success |
@@ -174,6 +175,39 @@ all validated rows before list presentation is clipped. These tools fetch fresh
 data using one membership POST attempt, preserve the current connection's
 coordination/cancellation/authentication boundaries, and expose no channel
 preferences or administrative capabilities. No live verification is claimed.
+
+### Communication diagnostics
+
+`member_communication_status` takes a resolved `userId`, exactly one `groupId`
+or uniquely matching `groupName`, and optional `fields` (`email`, `mobilePhone`).
+It returns the selected IDs/group name, the same three-state `membership`, and
+`email` and `sms` facts. Each channel has `preference` (`enabled`, `disabled`,
+`unknown`), `contactPresent` and `verified`. Email also has `isBadEmail`; SMS has
+`stopReplied`. Missing diagnostic facts are `null`, not false. Only captured
+numeric 0/1 preferences and boolean profile flags are accepted; malformed values
+are errors. Explicit null/blank contacts mean no stored value; absent contacts
+mean availability is unknown. Pending contacts never replace stored contacts.
+
+Contact values are omitted by default. Selecting `email` adds `email.value`;
+selecting `mobilePhone` adds `sms.value`, only when that stored field is present.
+The phone associated with a STOP record is never returned. Group selection checks
+all validated rows, including targets beyond the subscription list's 50-row cap.
+
+`warnings` contains applicable codes: `email_preference_disabled`,
+`sms_preference_disabled`, `email_contact_missing`, `sms_contact_missing`,
+`email_contact_unverified`, `sms_contact_unverified`, `email_flagged_bad`, and
+`sms_stop_reported`. These describe observed facts, not a complete list of delivery
+blockers. An enabled preference can coexist with a missing, unverified or bad
+contact. An empty warnings list is not an all-clear. Always retain the returned
+`limitations`: suppressions are not assessed, settings do not establish delivery,
+group visibility may be incomplete, and separate reads are not an atomic snapshot.
+
+This operation performs the existing groups/profile POST reads within one
+coordinated deadline, with no automatic retry, preference writes or suppression
+lookup. Failure of either read returns an error, not partial diagnostic success.
+The preference/STOP fields are supported by offline capture inspection; missing
+fields and malformed/denied responses are simulated test cases. No live delivery
+or Codex desktop verification is claimed.
 
 ## Develop and verify
 

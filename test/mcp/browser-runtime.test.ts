@@ -388,6 +388,31 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
         "request[and][0][or][0][and][0][inputs][searchTerm]": "Alex Rivera",
         includeInactive: "false",
       });
+      const diagnostic = await client.callTool({
+        name: "member_communication_status",
+        arguments: { userId, groupId: "102" },
+      });
+      expect(diagnostic.structuredContent).toMatchObject({
+        ok: true,
+        membership: "member",
+        email: {
+          preference: "enabled",
+          contactPresent: true,
+          verified: false,
+          isBadEmail: true,
+        },
+        sms: {
+          preference: "disabled",
+          contactPresent: true,
+          verified: true,
+          stopReplied: null,
+        },
+      });
+      expect(JSON.stringify(diagnostic)).not.toMatch(/alex@|555|userInfo/);
+      expect(f.visits.slice(-2)).toEqual([
+        { path: "user/301/groups", method: "POST" },
+        { path: "user/301/profile", method: "POST" },
+      ]);
       expect(f.state.external).toBe(0);
       expect(f.state.launches).toBe(1);
     }, 60_000);
