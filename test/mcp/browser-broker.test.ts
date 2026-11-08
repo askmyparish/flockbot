@@ -116,6 +116,28 @@ describe.skipIf(process.platform === "win32")(
   "shared local browser owner over private IPC",
   { concurrent: true },
   () => {
+    it("routes latest email engagement through the private broker", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
+      await expect(
+        f.service.memberLatestEmailStatus({ userId: "301" }),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      expect(f.launches()).toBe(0);
+      const result = await f.service.memberLatestEmailStatus({
+        userId: "301",
+        groupId: "101",
+      });
+      expect(result).toMatchObject({
+        userId: "301",
+        groupId: "101",
+        email: { id: "801" },
+        engagement: "recorded_open",
+        reason: null,
+      });
+      expect(JSON.stringify(result)).not.toMatch(/Rivera|alex@|PRIVATE/);
+      expect(f.events()).not.toContain("GET user/userData");
+    });
+
     it("lists every visible page of a named group through private IPC", async (context) => {
       const { expect } = context;
       const f = await fixture(context);

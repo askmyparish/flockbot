@@ -584,6 +584,7 @@ describe("Flocknote MCP contract", () => {
       "member",
       "member_communication_status",
       "member_groups",
+      "member_latest_email_status",
       "status",
       "subscriber_count",
     ]);

@@ -16,6 +16,7 @@ import { searchMetadata, searchRow } from "../fixtures/member-search.js";
 import { profileResponse } from "../fixtures/member-profile.js";
 import { membershipResponse } from "../fixtures/member-groups.js";
 import { rosterPage, rosterRow } from "../fixtures/group-members.js";
+import { latestEmailResponses } from "../fixtures/latest-email.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -27,6 +28,7 @@ async function fixture() {
   const profile = mkdtempSync(join(tmpdir(), "flockbot-real-browser-"));
   const origin = "https://example-parish.flocknote.com";
   const visits: { path: string; method: string }[] = [];
+  const emailResponses: Record<string, unknown> = latestEmailResponses();
   const state = {
     launches: 0,
     expired: false,
@@ -106,6 +108,23 @@ async function fixture() {
               status: state.authFailure === "http403" ? 403 : 401,
               body: "",
             });
+        } else if (
+          url.search === "?ajax" &&
+          Object.hasOwn(emailResponses, `${path}${url.search}`)
+        ) {
+          const value = emailResponses[`${path}${url.search}`];
+          if (path === "group/101") {
+            expect(request.method()).toBe("POST");
+            expect(request.postData()).toBe(
+              "preferredBoardUrl=&preferredPanelType=notes",
+            );
+          } else if (path.endsWith("searchAnalytics")) {
+            expect(request.method()).toBe("POST");
+            expect(request.postData()).toBe("s=Rivera");
+          } else expect(request.method()).toBe("GET");
+          if (typeof value === "string")
+            await route.fulfill({ contentType: "text/html", body: value });
+          else await json(value);
         } else if (path === "dashboard") {
           await route.fulfill({
             contentType: "text/html",
@@ -414,6 +433,27 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
       expect(f.visits.slice(-2)).toEqual([
         { path: "user/301/groups", method: "POST" },
         { path: "user/301/profile", method: "POST" },
+      ]);
+      const engagement = await client.callTool({
+        name: "member_latest_email_status",
+        arguments: { userId, groupId: "101" },
+      });
+      expect(engagement.structuredContent).toMatchObject({
+        ok: true,
+        selection: "selected",
+        email: { id: "801" },
+        engagement: "recorded_open",
+        reason: null,
+      });
+      expect(JSON.stringify(engagement)).not.toMatch(
+        /PRIVATE|Rivera|alex@|other@/,
+      );
+      expect(f.visits.slice(-5)).toEqual([
+        { path: "group/101", method: "POST" },
+        { path: "note/801/analyticsSummary", method: "GET" },
+        { path: "note/801/analytics2", method: "GET" },
+        { path: "user/301/profile", method: "POST" },
+        { path: "note/801/searchAnalytics", method: "POST" },
       ]);
       expect(f.state.external).toBe(0);
       expect(f.state.launches).toBe(1);

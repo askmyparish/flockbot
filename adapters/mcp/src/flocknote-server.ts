@@ -100,6 +100,7 @@ export type FlocknoteConnection = Pick<
   | "member"
   | "memberGroups"
   | "memberCommunicationStatus"
+  | "memberLatestEmailStatus"
   | "groupMembers"
   | "isMember"
   | "addMember"
@@ -428,6 +429,27 @@ export function createFlocknoteServer(
       guarded(async () => ({
         ok: true,
         ...(await connection.memberCommunicationStatus(input, {
+          signal: extra.signal,
+        })),
+      })),
+  );
+  server.registerTool(
+    "member_latest_email_status",
+    {
+      title: "Check a member's latest group email engagement",
+      description:
+        "Check one resolved userId against the group's newest distinct originally sent email, using exactly one groupId or unique groupName. Resends do not change selection; never fall back to an older email addressed to the member. Returns recorded_open, reported_unopened or unknown with a reason, email ID and raw publication timestamp. Supports the observed ordinary-email feed; mixed, ambiguous or unsupported feeds and send histories remain unknown. A surname of at least three characters is required for the observed analytics search; matches use stable member IDs, not names. Missing matches never prove non-recipient status. Opens do not prove human reading or delivery, and separate reads are not atomic. No contacts, message content, preflight, automatic retry or writes.",
+      inputSchema: {
+        userId: groupId,
+        groupId: groupId.optional(),
+        groupName: z.string().min(1).max(256).optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async (input, extra) =>
+      guarded(async () => ({
+        ok: true,
+        ...(await connection.memberLatestEmailStatus(input, {
           signal: extra.signal,
         })),
       })),
