@@ -29,7 +29,14 @@ function profileFlag(value: unknown): boolean {
   return value;
 }
 
-/** An identified profile-read intent. Contact values are exposed only by read(). */
+function optionalFlag(
+  info: Record<string, unknown>,
+  key: string,
+): boolean | null {
+  return Object.hasOwn(info, key) ? profileFlag(info[key]) : null;
+}
+
+/** An identified profile-read intent. Only explicitly selected contacts are exposed. */
 export class MemberProfile {
   readonly #userId: string;
   readonly #fields: readonly MemberField[];
@@ -40,7 +47,7 @@ export class MemberProfile {
     Object.freeze(this);
   }
 
-  async read(context: ResourceQuery): Promise<MemberProfileResult> {
+  async #info(context: ResourceQuery): Promise<Record<string, unknown>> {
     context.check();
     const data = record(await context.query(`user/${this.#userId}/profile`));
     context.check();
@@ -58,13 +65,18 @@ export class MemberProfile {
     const firstName = memberName(info.firstName);
     const lastName = memberName(info.lastName);
     if (!firstName && !lastName) return invalidResponse();
+    return info;
+  }
+
+  async read(context: ResourceQuery): Promise<MemberProfileResult> {
+    const info = await this.#info(context);
     const unavailableFields = this.#fields.filter(
       (field) => !Object.hasOwn(info, field),
     );
     return {
       id: this.#userId,
-      firstName,
-      lastName,
+      firstName: memberName(info.firstName),
+      lastName: memberName(info.lastName),
       ...(this.#fields.includes("email") && Object.hasOwn(info, "email")
         ? {
             email: {
@@ -84,6 +96,29 @@ export class MemberProfile {
           }
         : {}),
       ...(unavailableFields.length ? { unavailableFields } : {}),
+    };
+  }
+
+  async communication(context: ResourceQuery) {
+    const info = await this.#info(context);
+    const contact = (field: MemberField) => {
+      const present = Object.hasOwn(info, field);
+      const value = present ? storedContact(info[field]) : null;
+      return {
+        contactPresent: present ? value !== null : null,
+        verified: optionalFlag(info, `${field}Verified`),
+        ...(present && this.#fields.includes(field) ? { value } : {}),
+      };
+    };
+    const stopReplied = Object.hasOwn(info, "stopReplyData")
+      ? optionalFlag(record(info.stopReplyData), "isStopReplied")
+      : null;
+    return {
+      email: {
+        ...contact("email"),
+        isBadEmail: optionalFlag(info, "isBadEmail"),
+      },
+      sms: { ...contact("mobilePhone"), stopReplied },
     };
   }
 
