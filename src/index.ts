@@ -44,6 +44,13 @@ export {
   type MemberCommunicationWarning,
 } from "./models/member-communication-status.js";
 export {
+  MemberLatestEmailStatus,
+  type MemberLatestEmailInput,
+  type MemberLatestEmailResult,
+  type MemberLatestEmailReason,
+  type MemberEmailEngagement,
+} from "./models/member-latest-email-status.js";
+export {
   MemberGroups,
   membershipGroupSelector,
   type GroupSelector,

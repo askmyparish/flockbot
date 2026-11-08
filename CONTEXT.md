@@ -39,6 +39,9 @@ _Avoid_: Password reset when referring to a one-time login code
 **Group**:
 A named collection of members within a parish network to which communications can be addressed.
 
+**Latest group email**:
+The email with the newest original send time for a group. Resending an older email does not make it latest, and selection does not depend on whether a particular user was a recipient.
+
 **User**:
 A person associated with, or intended to join, a Flocknote parish network, distinct from the Flocknote login used to authenticate an integration. Supplied contact details alone do not establish that an existing parish record has been identified or created.
 _Avoid_: Login or account when referring to the person represented in parish records
