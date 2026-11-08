@@ -29,6 +29,7 @@ import {
   MemberProfile,
   MemberGroups,
   MemberCommunicationStatus,
+  MemberLatestEmailStatus,
   GroupMembers,
   membershipGroupSelector,
   type GroupSelector,
@@ -307,6 +308,13 @@ export async function runBrowserBroker(options: BrokerOptions): Promise<void> {
                     signal,
                   });
                   break;
+                case "member_latest_email_status": {
+                  const { action: _, ...input } = request;
+                  value = await connection.memberLatestEmailStatus(input, {
+                    signal,
+                  });
+                  break;
+                }
                 case "member_communication_status": {
                   const { action: _, ...input } = request;
                   value = await connection.memberCommunicationStatus(input, {
@@ -649,6 +657,17 @@ export class BrowserService {
       },
       options.signal,
     )) as Awaited<ReturnType<BrowserConnection["memberCommunicationStatus"]>>;
+  }
+
+  async memberLatestEmailStatus(
+    input: Parameters<BrowserConnection["memberLatestEmailStatus"]>[0],
+    options: OperationOptions = {},
+  ) {
+    const prepared = new MemberLatestEmailStatus(input).toInput();
+    return (await this.#call(
+      { ...prepared, action: "member_latest_email_status" },
+      options.signal,
+    )) as Awaited<ReturnType<BrowserConnection["memberLatestEmailStatus"]>>;
   }
 
   async groupMembers(

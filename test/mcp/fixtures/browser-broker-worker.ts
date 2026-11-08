@@ -6,6 +6,7 @@ import { searchMetadata, searchRow } from "../../fixtures/member-search.js";
 import { profileResponse } from "../../fixtures/member-profile.js";
 import { membershipResponse } from "../../fixtures/member-groups.js";
 import { rosterPage, rosterRow } from "../../fixtures/group-members.js";
+import { latestEmailResponses } from "../../fixtures/latest-email.js";
 import {
   BrowserService,
   runBrowserBroker,
@@ -67,8 +68,11 @@ if (role === "broker") {
             case "group/102/addToGroupByAdmin":
               while (existsSync(join(profile, "hold"))) await delay(10);
               return { success: true };
-            default:
+            default: {
+              const responses: Record<string, unknown> = latestEmailResponses();
+              if (Object.hasOwn(responses, path)) return responses[path];
               throw new Error("Missing fictional fixture");
+            }
           }
         },
       };

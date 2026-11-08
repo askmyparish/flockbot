@@ -26,6 +26,7 @@ published by these changes.
 | `member` | Read one identified member's identity and explicitly selected stored email/mobile phone with status |
 | `member_groups` | List a chosen member's explicit group subscriptions with bounded output and visibility limits |
 | `member_communication_status` | Read one member/group's email/SMS preferences and contact warnings without promising delivery |
+| `member_latest_email_status` | Check recorded engagement on the group's latest distinct sent email; unsupported cases remain unknown |
 | `group_members` | List a named group's subscribed members in bounded pages, with names by default |
 | `is_member` | Check one chosen member/group relationship as `member`, `not_member`, or `unknown` |
 | `add_member` | Add once by `groupId` or case-insensitive unique `groupName`; return only success |
@@ -208,6 +209,35 @@ lookup. Failure of either read returns an error, not partial diagnostic success.
 The preference/STOP fields are supported by offline capture inspection; missing
 fields and malformed/denied responses are simulated test cases. No live delivery
 or Codex desktop verification is claimed.
+
+### Latest group email engagement
+
+`member_latest_email_status` takes a resolved `userId` and exactly one `groupId`
+or uniquely matching `groupName`. It selects by original send time, not resend
+activity, independently of whether the member received that email. It never
+substitutes an older email addressed to the member.
+
+`selection` is `selected` or `unknown`; `email` is either `{ id, publishedDate }`
+or `null`. `publishedDate` preserves the upstream numeric publication timestamp.
+`engagement` is `recorded_open`, `reported_unopened`, or `unknown`; `reason`
+explains uncertainty, and `observedAt` is the lookup observation time. Retain the
+returned `limitations`: tracking does not prove human reading or delivery,
+engagement is not attributed to an individual resend, and separate reads are
+not an atomic snapshot.
+
+The conservative first version supports the captured ordinary-email feed. It
+checks the first displayed note against email, group, and send metadata. Newer
+non-email/unsent notes, ties, unsupported send histories, and inconsistent
+metadata produce unknown selection rather than a scan through mixed content.
+The member's stored surname must contain at least three characters for the
+observed analytics search. Search matches are selected by stable member ID, not
+by name; missing, duplicate, conflicting or unsupported recipient records remain
+unknown. `member_not_in_search_results` means the member's ID was absent from
+that bounded search response, not that the member does not exist or was not a
+recipient. No result establishes non-recipient status. Names, contact values,
+message content and upstream HTML are never returned. This bounded read uses the
+existing saved session and coordinated deadline without preflight or retries.
+Only offline behavior is verified; live and Codex desktop use remain unverified.
 
 ## Develop and verify
 

@@ -32,6 +32,10 @@ import {
   type MemberCommunicationInput,
 } from "../../../src/models/member-communication-status.js";
 import {
+  MemberLatestEmailStatus,
+  type MemberLatestEmailInput,
+} from "../../../src/models/member-latest-email-status.js";
+import {
   MemberGroups,
   membershipGroupSelector,
   type GroupSelector,
@@ -602,7 +606,10 @@ export class BrowserConnection {
         accepted(await session.request(path), path === "dashboard"),
       query: async (path: string, body?: string) => {
         op.check();
-        const value = accepted(await session.request(path, "POST", body));
+        const value = accepted(
+          await session.request(path, "POST", body),
+          /^group\/[A-Za-z0-9_-]+\?ajax$/.test(path),
+        );
         op.check();
         return value;
       },
@@ -643,6 +650,16 @@ export class BrowserConnection {
     const diagnostic = new MemberCommunicationStatus(input);
     return this.#operate(options, (session, op, network) =>
       diagnostic.read(this.#resources(session, op), network),
+    );
+  }
+
+  async memberLatestEmailStatus(
+    input: MemberLatestEmailInput,
+    options: OperationOptions = {},
+  ) {
+    const lookup = new MemberLatestEmailStatus(input);
+    return this.#operate(options, (session, op, network) =>
+      lookup.read(this.#resources(session, op), network),
     );
   }
 

@@ -13,6 +13,7 @@ import type { BrowserSession } from "../../adapters/mcp/src/browser-runtime.js";
 import { searchMetadata, searchRow } from "../fixtures/member-search.js";
 import { profileResponse } from "../fixtures/member-profile.js";
 import { membershipResponse } from "../fixtures/member-groups.js";
+import { latestEmailResponses } from "../fixtures/latest-email.js";
 import { waitFor } from "./support.js";
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -40,6 +41,7 @@ async function fixture() {
     profile: unknown;
     memberships: unknown;
     navigation: unknown;
+    latestEmail: Record<string, unknown>;
   } = {
     response: { success: true, results: [searchRow()], resultCount: 1 },
     verification: { success: true, userID: 201 },
@@ -47,6 +49,7 @@ async function fixture() {
     profile: profileResponse(),
     memberships: membershipResponse(),
     navigation: { groups: [] },
+    latestEmail: latestEmailResponses(),
   };
   const session: BrowserSession = {
     signIn: vi.fn(async () => undefined),
@@ -69,6 +72,11 @@ async function fixture() {
       if (path === "user/301/groups") {
         if (state.memberships instanceof Error) throw state.memberships;
         return state.memberships;
+      }
+      if (Object.hasOwn(state.latestEmail, path)) {
+        const value = state.latestEmail[path];
+        if (value instanceof Error) throw value;
+        return value;
       }
       throw new Error("Unexpected fictional request");
     }),
@@ -103,6 +111,130 @@ async function fixture() {
   });
   return { connection, client, factory, session, state };
 }
+
+describe("latest email MCP/connection boundary", () => {
+  it("resolves a named group and returns only the requested member's engagement", async () => {
+    const f = await fixture();
+    const result = await f.client.callTool({
+      name: "member_latest_email_status",
+      arguments: { userId: "301", groupName: " EVERYONE " },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      ok: true,
+      selection: "selected",
+      email: { id: "801" },
+      engagement: "recorded_open",
+      reason: null,
+    });
+    expect(JSON.stringify(result)).not.toMatch(
+      /alex@|other@|PRIVATE|Rivera|userInfo/,
+    );
+    expect(
+      (await f.client.listTools()).tools.find(
+        (t) => t.name === "member_latest_email_status",
+      )?.annotations?.readOnlyHint,
+    ).toBe(true);
+    expect(f.session.request).not.toHaveBeenCalledWith("user/userData");
+    f.state.latestEmail["note/801/searchAnalytics?ajax"] = new Error(
+      "private@example.test",
+    );
+    const failed = await f.client.callTool({
+      name: "member_latest_email_status",
+      arguments: { userId: "301", groupId: "101" },
+    });
+    expect(failed.isError).toBe(true);
+    expect(failed.structuredContent).not.toHaveProperty("engagement");
+    expect(JSON.stringify(failed)).not.toContain("private@");
+  });
+
+  it.each([
+    {
+      signedIn: false,
+      code: "authentication_required",
+      state: "action_required",
+    },
+    { signedIn: true, code: "invalid_response", state: "ready" },
+  ])(
+    "diagnoses non-group HTML with signedIn=$signedIn without replay",
+    async ({ signedIn, code, state }) => {
+      const f = await fixture();
+      f.state.latestEmail["group/101?ajax"] =
+        "<html><body>Sign in</body></html>";
+      f.state.verification = signedIn
+        ? { success: true, userID: 201 }
+        : { success: true, userID: null, authorized: false };
+      await expect(
+        f.connection.memberLatestEmailStatus({ userId: "301", groupId: "101" }),
+      ).rejects.toMatchObject({ code });
+      expect(await f.connection.status()).toMatchObject({ state });
+      expect(
+        vi.mocked(f.session.request).mock.calls.map(([path]) => path),
+      ).toEqual(["group/101?ajax", "user/userData"]);
+    },
+  );
+
+  it("rejects a different group without diagnosing the session", async () => {
+    const f = await fixture();
+    f.state.latestEmail["group/101?ajax"] =
+      '<div class="page_group" data-groupid="102"></div>';
+    await expect(
+      f.connection.memberLatestEmailStatus({ userId: "301", groupId: "101" }),
+    ).rejects.toMatchObject({ code: "invalid_response" });
+    expect(await f.connection.status()).toMatchObject({ state: "ready" });
+    expect(
+      vi.mocked(f.session.request).mock.calls.map(([path]) => path),
+    ).toEqual(["group/101?ajax"]);
+  });
+
+  it("validates before browser access and cancels between notes and analytics", async () => {
+    const f = await fixture();
+    for (const input of [
+      { userId: "301" },
+      { userId: "301", groupId: "101", groupName: "Everyone" },
+      { userId: "../301", groupId: "101" },
+    ])
+      await expect(
+        f.connection.memberLatestEmailStatus(input),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+    await expect(
+      f.connection.memberLatestEmailStatus(
+        { userId: "301", groupId: "101" },
+        { signal: AbortSignal.abort() },
+      ),
+    ).rejects.toMatchObject({ code: "operation_cancelled" });
+    expect(f.factory).not.toHaveBeenCalled();
+    expect(
+      brokerRequestSchema.safeParse({
+        action: "member_latest_email_status",
+        userId: "301",
+        groupId: "101",
+        url: "https://example.test",
+      }).success,
+    ).toBe(false);
+    let finish = (_value: unknown) => {};
+    f.state.latestEmail["group/101?ajax"] = new Promise((resolve) => {
+      finish = resolve;
+    });
+    const controller = new AbortController();
+    const pending = f.connection.memberLatestEmailStatus(
+      { userId: "301", groupId: "101" },
+      { signal: controller.signal },
+    );
+    const rejected = expect(pending).rejects.toMatchObject({
+      code: "operation_cancelled",
+    });
+    try {
+      await waitFor(() => expect(f.session.request).toHaveBeenCalledTimes(1));
+      controller.abort();
+      await rejected;
+    } finally {
+      finish(latestEmailResponses()["group/101?ajax"]);
+    }
+    await f.connection.close();
+    expect(f.session.request).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("membership MCP/connection boundary", () => {
   it("performs search, selected contact lookup, subscriptions and one-group check through real MCP", async () => {
