@@ -183,6 +183,36 @@ describe.skipIf(process.platform === "win32")(
       ]);
     });
 
+    it("returns communication diagnostics over private IPC with opt-in contact values", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
+      await expect(
+        f.service.memberCommunicationStatus({ userId: "301" }),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      expect(f.launches()).toBe(0);
+      const input = { userId: "301", groupId: "102" };
+      const result = await f.service.memberCommunicationStatus(input);
+      expect(result).toMatchObject({
+        membership: "member",
+        email: { preference: "enabled", isBadEmail: true },
+        sms: { preference: "disabled", stopReplied: null },
+      });
+      expect(JSON.stringify(result)).not.toMatch(/alex@|555/);
+      const selected = await f.service.memberCommunicationStatus({
+        ...input,
+        fields: ["email"],
+      });
+      expect(selected.email.value).toBe("alex@example.test");
+      expect(selected.sms).not.toHaveProperty("value");
+      expect(f.events()).toEqual([
+        "launch",
+        "POST user/301/groups",
+        "POST user/301/profile",
+        "POST user/301/groups",
+        "POST user/301/profile",
+      ]);
+    });
+
     it("reads selected member contacts over actual private IPC with no preflight", async (context) => {
       const { expect } = context;
       const f = await fixture(context);

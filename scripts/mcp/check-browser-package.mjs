@@ -29,6 +29,7 @@ export const FLOCKNOTE_TOOLS = [
   "groups",
   "is_member",
   "member",
+  "member_communication_status",
   "member_groups",
   "status",
   "subscriber_count",

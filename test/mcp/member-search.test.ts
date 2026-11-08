@@ -305,6 +305,134 @@ describe("membership MCP/connection boundary", () => {
   });
 });
 
+describe("communication diagnostics MCP/connection boundary", () => {
+  it("resolves a group and returns diagnostic facts without default contact disclosure", async () => {
+    const f = await fixture();
+    f.state.navigation = {
+      groups: [{ ID: 102, name: "Choir", shortname: "choir" }],
+    };
+    const result = await f.client.callTool({
+      name: "member_communication_status",
+      arguments: { userId: "301", groupName: " CHOIR " },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      ok: true,
+      userId: "301",
+      groupId: "102",
+      membership: "member",
+      email: {
+        preference: "enabled",
+        contactPresent: true,
+        verified: false,
+        isBadEmail: true,
+      },
+      sms: {
+        preference: "disabled",
+        contactPresent: true,
+        verified: true,
+        stopReplied: null,
+      },
+    });
+    expect(JSON.stringify(result)).not.toMatch(
+      /alex@|555|pendingEmail|userInfo/,
+    );
+    const selected = await f.client.callTool({
+      name: "member_communication_status",
+      arguments: { userId: "301", groupId: "102", fields: ["mobilePhone"] },
+    });
+    expect(selected.structuredContent).toMatchObject({
+      sms: { value: "+1 (202) 555-0123" },
+    });
+    expect(JSON.stringify(selected)).not.toContain("alex@");
+    expect(f.session.request).not.toHaveBeenCalledWith("user/userData");
+    expect(
+      (await f.client.listTools()).tools.find(
+        (t) => t.name === "member_communication_status",
+      )?.annotations?.readOnlyHint,
+    ).toBe(true);
+  });
+
+  it("rejects invalid selectors and fields before starting the browser", async () => {
+    const f = await fixture();
+    for (const input of [
+      { userId: "301" },
+      { userId: "301", groupId: "102", groupName: "Choir" },
+      { userId: "../301", groupId: "102" },
+      { userId: "301", groupId: "102", fields: ["email", "email"] as const },
+    ])
+      await expect(
+        f.connection.memberCommunicationStatus(input),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(f.factory).not.toHaveBeenCalled();
+    expect(
+      brokerRequestSchema.safeParse({
+        action: "member_communication_status",
+        userId: "301",
+        groupId: "102",
+        url: "https://example.test",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("returns sanitized errors rather than partial diagnostics when either read fails", async () => {
+    const f = await fixture();
+    for (const target of ["memberships", "profile"] as const) {
+      for (const bad of [
+        { success: true, canViewProfile: false, data: { canView: false } },
+        { success: true },
+        new Error("private@example.test"),
+      ]) {
+        f.state.memberships = membershipResponse();
+        f.state.profile = profileResponse();
+        f.state[target] = bad;
+        const result = await f.client.callTool({
+          name: "member_communication_status",
+          arguments: { userId: "301", groupId: "102" },
+        });
+        expect(result.isError).toBe(true);
+        expect(result.structuredContent).not.toHaveProperty("membership");
+        expect(result.structuredContent).not.toHaveProperty("email");
+        expect(JSON.stringify(result)).not.toContain("private@");
+      }
+    }
+    // Three failures before the profile, then three failures after one groups read.
+    expect(f.session.request).toHaveBeenCalledTimes(9);
+  });
+
+  it("cancels between reads without fetching a profile or replaying", async () => {
+    const f = await fixture();
+    await expect(
+      f.connection.memberCommunicationStatus(
+        { userId: "301", groupId: "102" },
+        { signal: AbortSignal.abort() },
+      ),
+    ).rejects.toMatchObject({ code: "operation_cancelled" });
+    expect(f.factory).not.toHaveBeenCalled();
+    let finish = (_value: unknown) => {};
+    f.state.memberships = new Promise((resolve) => {
+      finish = resolve;
+    });
+    const controller = new AbortController();
+    const pending = f.connection.memberCommunicationStatus(
+      { userId: "301", groupId: "102" },
+      { signal: controller.signal },
+    );
+    const rejected = expect(pending).rejects.toMatchObject({
+      code: "operation_cancelled",
+    });
+    try {
+      await waitFor(() => expect(f.session.request).toHaveBeenCalledTimes(1));
+      controller.abort();
+      await rejected;
+    } finally {
+      finish(membershipResponse());
+    }
+    await f.connection.close();
+    expect(f.session.request).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("identified profile MCP/connection boundary", () => {
   it("returns identity by default and only explicitly selected contact details", async () => {
     const f = await fixture();
