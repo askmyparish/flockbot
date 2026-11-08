@@ -69,7 +69,7 @@ beforeAll(async () => {
     },
   });
 });
-async function fixture({ onTestFinished, expect }: TestContext) {
+async function fixture({ onTestFinished, expect }: TestContext, idleMs = 1500) {
   const profile = mkdtempSync(join(tmpdir(), "flockbot-broker-fixture-"));
   profiles.add(profile);
   writeFileSync(
@@ -88,7 +88,13 @@ async function fixture({ onTestFinished, expect }: TestContext) {
     launches++;
     const child = spawn(
       process.execPath,
-      ["--disable-warning=ExperimentalWarning", entry, profile, "broker"],
+      [
+        "--disable-warning=ExperimentalWarning",
+        entry,
+        profile,
+        "broker",
+        String(idleMs),
+      ],
       { detached: true, stdio: "ignore" },
     );
     child.unref();
@@ -501,7 +507,7 @@ describe.skipIf(process.platform === "win32")(
 
     it("restarts after idle shutdown without discarding the saved connection", async (context) => {
       const { expect } = context;
-      const f = await fixture(context);
+      const f = await fixture(context, 100);
       await f.service.count("101");
       await waitFor(
         () => expect(existsSync(join(f.profile, "broker.json"))).toBe(false),

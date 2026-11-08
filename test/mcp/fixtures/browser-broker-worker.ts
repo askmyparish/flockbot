@@ -19,7 +19,7 @@ if (role === "broker") {
   await runBrowserBroker({
     entry,
     profile,
-    idleMs: 1500,
+    idleMs: Number(process.argv[4] ?? 1500),
     factory: async () => {
       appendFileSync(join(profile, "events"), "launch\n");
       return {
