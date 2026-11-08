@@ -37,11 +37,19 @@ export {
   type MemberEmail,
 } from "./models/member-profile.js";
 export {
+  MemberCommunicationStatus,
+  type MemberCommunicationInput,
+  type MemberCommunicationResult,
+  type MemberCommunicationChannel,
+  type MemberCommunicationWarning,
+} from "./models/member-communication-status.js";
+export {
   MemberGroups,
   membershipGroupSelector,
   type GroupSelector,
   type MemberGroupsResult,
   type MembershipCheckResult,
+  type CommunicationPreference,
 } from "./models/member-groups.js";
 export type {
   MembershipExecutor,

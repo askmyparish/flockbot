@@ -28,8 +28,21 @@ export interface MembershipCheckResult {
   readonly groupName?: string;
   readonly membership: "member" | "not_member" | "unknown";
 }
+export type CommunicationPreference = "enabled" | "disabled" | "unknown";
 interface MembershipRow extends MembershipGroup {
   readonly isSubscribed: boolean;
+  readonly emailPreference?: CommunicationPreference;
+  readonly smsPreference?: CommunicationPreference;
+}
+
+function preference(
+  row: Record<string, unknown>,
+  key: string,
+): CommunicationPreference {
+  if (!Object.hasOwn(row, key)) return "unknown";
+  if (row[key] === 1) return "enabled";
+  if (row[key] === 0) return "disabled";
+  return invalidResponse();
 }
 
 /** Validate and snapshot a selected group before an adapter starts I/O. */
@@ -50,7 +63,7 @@ export function membershipGroupSelector(
   );
 }
 
-/** An identified membership-read intent; no preferences or contacts are retained. */
+/** An identified membership-read intent; no contacts are retained. */
 export class MemberGroups {
   readonly #userId: string;
 
@@ -59,7 +72,10 @@ export class MemberGroups {
     Object.freeze(this);
   }
 
-  async #rows(context: ResourceQuery): Promise<readonly MembershipRow[]> {
+  async #rows(
+    context: ResourceQuery,
+    preferences = false,
+  ): Promise<readonly MembershipRow[]> {
     context.check();
     const response = record(await context.query(`user/${this.#userId}/groups`));
     context.check();
@@ -81,7 +97,17 @@ export class MemberGroups {
       )
         return invalidResponse();
       ids.add(id);
-      return { id, name, isSubscribed: row.isSubscribed };
+      return {
+        id,
+        name,
+        isSubscribed: row.isSubscribed,
+        ...(preferences
+          ? {
+              emailPreference: preference(row, "emailPref"),
+              smsPreference: preference(row, "smsPref"),
+            }
+          : {}),
+      };
     });
   }
 
@@ -105,6 +131,33 @@ export class MemberGroups {
     network: Network,
     selector: GroupSelector,
   ): Promise<MembershipCheckResult> {
+    return (await this.#select(context, network, selector, false)).membership;
+  }
+
+  async communication(
+    context: ResourceQuery,
+    network: Network,
+    selector: GroupSelector,
+  ) {
+    const { membership, row } = await this.#select(
+      context,
+      network,
+      selector,
+      true,
+    );
+    return {
+      ...membership,
+      emailPreference: row?.emailPreference ?? "unknown",
+      smsPreference: row?.smsPreference ?? "unknown",
+    };
+  }
+
+  async #select(
+    context: ResourceQuery,
+    network: Network,
+    selector: GroupSelector,
+    preferences: boolean,
+  ) {
     const selected = membershipGroupSelector(selector);
     context.check();
     const target =
@@ -112,11 +165,11 @@ export class MemberGroups {
         ? { id: selected.groupId }
         : await network.findGroup(context, selected.groupName);
     context.check();
-    const row = (await this.#rows(context)).find(
+    const row = (await this.#rows(context, preferences)).find(
       (group) => group.id === target.id,
     );
     const name = row?.name ?? ("name" in target ? target.name : undefined);
-    return {
+    const membership: MembershipCheckResult = {
       userId: this.#userId,
       groupId: target.id,
       ...(name === undefined ? {} : { groupName: name }),
@@ -127,6 +180,7 @@ export class MemberGroups {
             ? "member"
             : "not_member",
     };
+    return { membership, row };
   }
 
   /** Explicit IPC projection; default inspection and JSON stay redacted. */
