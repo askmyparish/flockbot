@@ -44,6 +44,12 @@ Passing a file runs only that spec; add `-t` to narrow it to a test name. The fu
 offline suite remains `bin/test`. Real Chromium fixtures run separately with
 `npm run test:mcp:browser`.
 
+Tests reuse workers and imported modules to avoid repeated startup costs. Keep
+fixtures local to each test and clean up timers, environment changes, and resources;
+the shared setup reinstalls offline network guards and restores spies for each file.
+Use `bin/test --isolate` to diagnose shared-state failures, or
+`bin/test --maxWorkers=1 --sequence.shuffle --sequence.seed=123` to check ordering.
+
 </details>
 
 ### Amp orbs

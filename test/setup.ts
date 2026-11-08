@@ -25,4 +25,7 @@ vi.spyOn(http2, "connect").mockImplementation(blocked);
 syncBuiltinESMExports();
 afterAll(async () => {
   await network.close();
+  // A reused worker must not wrap the previous file's spies (or IPC exception).
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
 });
