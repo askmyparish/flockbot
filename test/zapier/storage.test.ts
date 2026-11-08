@@ -618,23 +618,18 @@ describe("Storage REST candidate (offline)", () => {
     },
   );
 
-  it.each(
-    [
-      "partial",
-      "reordered",
-      "readable",
-      "symlink",
-      "oversize",
-      "invalid UUID",
-    ].flatMap((fault) =>
-      [
-        "--authorize-isolated-storage-probe",
-        "--authorize-initialized-storage-probe",
-        "--authorize-storage-comparison-diagnostic",
-        "--authorize-storage-contention-diagnostic",
-      ].map((flag) => ({ fault, flag })),
+  // Argument/file guards run before dispatch: repeating them for every mode
+  // adds subprocesses, not coverage. UUID validation has three distinct consumers.
+  it.each([
+    ...["partial", "reordered", "readable", "symlink", "oversize"].map(
+      (fault) => ({ fault, flag: "--authorize-isolated-storage-probe" }),
     ),
-  )("keeps the wrapper offline for $fault with $flag", ({ fault, flag }) => {
+    ...[
+      "--authorize-isolated-storage-probe",
+      "--authorize-isolated-storage-diagnostic",
+      "--authorize-storage-comparison-diagnostic",
+    ].map((flag) => ({ fault: "invalid UUID", flag })),
+  ])("keeps the wrapper offline for $fault with $flag", ({ fault, flag }) => {
     const directory = mkdtempSync(join(tmpdir(), "flockbot-probe-test-"));
     try {
       const path = join(directory, "fictional-secret");
