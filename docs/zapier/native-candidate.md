@@ -135,6 +135,53 @@ preflight before the POST; the completion outcome, rather than the stage alone,
 indicates whether submission was possible. A pre-submission timeout remains an
 error and does not count as a completed membership.
 
+### Request timing diagnostics
+
+The source now attaches a `diagnostics` object to the existing failure and
+pending-merge warning console events. This requires a deployed build containing
+the change; it cannot add detail to historical attempts. The same `attempt_id`
+links the error to its request timings. One `z.console.log` event is emitted per
+failure/warning, not per request; confirmed successes and normal Session Auth
+renewal requests remain quiet.
+
+`diagnostics` contains the configured `timeout_ms`, total `elapsed_ms`, and at
+most 12 request records, with `requests_truncated` if additional requests were
+omitted. Durations use a monotonic clock. Each request records its allowlisted
+endpoint name, method, action stage, `started_ms` relative to the attempt,
+`elapsed_ms`, and state:
+
+- `responded`: the transport returned the complete response body; `http_status`
+  is available. This does not imply application success or valid response data.
+- `failed`: the transport threw before returning a complete response.
+- `aborted`: the transport threw while its cancellation signal was aborted.
+- `in_flight`: the transport had not settled when the report was captured,
+  including a stalled response-body read or a dependency ignoring cancellation.
+
+At a deadline, a cancellation-aware transport may appear as either `aborted` or
+`in_flight`, depending on whether its rejection reaches the wrapper before the
+snapshot. `in_flight` alone does not establish that cancellation was ignored.
+An in-flight duration is measured up to the report, not eventual completion.
+The transport boundary cannot distinguish DNS, TLS, headers and body-read delays;
+a status is unavailable if the complete transport response never returned.
+The final error code and write outcome remain authoritative: an in-flight or
+aborted membership POST is not evidence that a write was unsubmitted.
+
+Group IDs are replaced with `:groupId` in endpoint names; unrecognized endpoints
+become `other`. These new diagnostics contain no origins, queries, headers,
+request/response bodies, credentials, contact fields or raw exception messages.
+The existing failure report still contains its bounded member inputs and selected
+response details, so console output must still be treated as sensitive.
+
+Use the console command above with the version used by the failing Zap. It
+defaults to the CLI user's records; use `--user` when investigating another
+authorized user's run. Find the attempt ID, inspect the final error/outcome, then
+compare completed request durations and the in-flight endpoint. Do not enable
+`--debug`, dump bundles, or enable SDK HTTP patching to diagnose timing: those
+can expose credentials or bodies. Native fetch, cancellation and no-replay rules
+are unchanged. These timings cover the native membership action, not the
+separate authentication hook or group dropdown. Host termination before the
+failure handler runs can still leave no console record.
+
 The low-traffic tradeoff is to reuse the host-saved cookie without a separate
 Storage coordination protocol. Read-only test observations support reuse over
 their observed interval, not maximum lifetime or all rotation behavior. Natural

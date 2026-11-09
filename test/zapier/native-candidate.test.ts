@@ -305,6 +305,17 @@ it.each([401, 403, 429, 503])(
     expect(f.transport).toHaveBeenCalledTimes(1);
     expect(f.writes()).toHaveLength(0);
     expect(String(error)).not.toContain("private-upstream-sentinel");
+    const report = JSON.parse(f.log.mock.calls[0]?.[0] ?? "");
+    expect(report.diagnostics.requests).toEqual([
+      expect.objectContaining({
+        endpoint: "user/userData",
+        state: "responded",
+        http_status: status,
+      }),
+    ]);
+    expect(JSON.stringify(report.diagnostics)).not.toContain(
+      "private-upstream-sentinel",
+    );
   },
 );
 
@@ -394,12 +405,25 @@ it.each([
       expect(report.code).toBe("transport_failed");
       expect(report.http_status).toBeUndefined();
       expect(report.response).toBeUndefined();
+      expect(report.diagnostics.requests.at(-1)).toMatchObject({
+        endpoint: "group/:groupId/addToGroupByAdmin",
+        state: "failed",
+      });
+      expect(report.diagnostics.requests.at(-1).http_status).toBeUndefined();
     } else {
       expect(report.http_status).toBe(
         /^\d{3}$/.test(kind) ? Number(kind) : 200,
       );
       expect(report.response).toBeDefined();
+      expect(report.diagnostics.requests.at(-1)).toMatchObject({
+        endpoint: "group/:groupId/addToGroupByAdmin",
+        state: "responded",
+        http_status: /^\d{3}$/.test(kind) ? Number(kind) : 200,
+      });
     }
+    expect(JSON.stringify(report.diagnostics)).not.toMatch(
+      /example-parish|member@example|Could not add user|private-upstream-sentinel|fname|headers|body/,
+    );
     expect(f.log.mock.calls[0]?.[0] ?? "").not.toMatch(
       /fictional-password|fictional-saved|operator@example|authData|sessionData|Cookie/,
     );
@@ -687,7 +711,7 @@ it("bounds failed-input snapshots and reports truncation instead of dumping arbi
 });
 
 it("shares the total 25-second budget across slow discovery and a submitted write", async () => {
-  vi.useFakeTimers();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   const f = fixture();
   f.transport
     .mockImplementationOnce(async () => {
@@ -701,14 +725,36 @@ it("shares the total 25-second budget across slow discovery and a submitted writ
   await vi.advanceTimersByTimeAsync(25_001);
   expect(await pending).toBeInstanceOf(errors.HaltedError);
   expect(f.writes()).toHaveLength(1);
+  const report = JSON.parse(f.log.mock.calls[0]?.[0] ?? "");
+  expect(report.outcome).toBe("unknown");
+  expect(report.diagnostics).toMatchObject({
+    timeout_ms: 25_000,
+    elapsed_ms: 25_000,
+    requests_truncated: false,
+  });
+  expect(report.diagnostics.requests).toEqual([
+    expect.objectContaining({ endpoint: "user/userData", elapsed_ms: 15_000 }),
+    expect.objectContaining({ endpoint: "dashboard", elapsed_ms: 0 }),
+    expect.objectContaining({ endpoint: "user/userData", stage: "membership" }),
+    {
+      endpoint: "group/:groupId/addToGroupByAdmin",
+      method: "POST",
+      stage: "membership",
+      started_ms: 15_000,
+      elapsed_ms: 10_000,
+      state: "in_flight",
+    },
+  ]);
 });
 
 it("times out before submission without a POST or native refresh", async () => {
-  vi.useFakeTimers();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   const f = fixture();
   f.transport.mockImplementationOnce(() => new Promise(() => {}));
   const pending = f.perform().catch((e: unknown) => e);
-  await vi.advanceTimersByTimeAsync(25_001);
+  await vi.advanceTimersByTimeAsync(24_999);
+  expect(f.log).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(2);
   const error = await pending;
   expect(error).toBeInstanceOf(errors.Error);
   expect(error).not.toBeInstanceOf(errors.RefreshAuthError);
@@ -718,9 +764,195 @@ it("times out before submission without a POST or native refresh", async () => {
     stage: "group_lookup",
     code: "operation_timeout",
     outcome: "not_submitted",
+    diagnostics: {
+      timeout_ms: 25_000,
+      elapsed_ms: 25_000,
+      requests: [
+        {
+          endpoint: "user/userData",
+          method: "GET",
+          stage: "group_lookup",
+          started_ms: 0,
+          elapsed_ms: 25_000,
+          state: "in_flight",
+        },
+      ],
+    },
   });
   expect(String(error)).toContain("stage=group_lookup");
   expect(String(error)).toContain(`Attempt ${report.attempt_id}`);
+  expect(f.writes()).toHaveLength(0);
+});
+
+it("records cancellation-aware transport rejection at the action deadline", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  const f = fixture();
+  f.transport.mockImplementationOnce(
+    (request) =>
+      new Promise((_, reject) => {
+        request.signal.addEventListener(
+          "abort",
+          () => {
+            reject(new DOMException("private-abort-detail", "AbortError"));
+          },
+          { once: true },
+        );
+      }),
+  );
+  const pending = f.perform().catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(25_001);
+  const error = await pending;
+  expect(error).toBeInstanceOf(errors.Error);
+  expect(error).not.toBeInstanceOf(errors.RefreshAuthError);
+  expect(error).not.toBeInstanceOf(errors.HaltedError);
+  const report = JSON.parse(f.log.mock.calls[0]?.[0] ?? "");
+  expect(report).toMatchObject({
+    code: "operation_timeout",
+    outcome: "not_submitted",
+    diagnostics: {
+      elapsed_ms: 25_000,
+      requests: [
+        {
+          endpoint: "user/userData",
+          stage: "group_lookup",
+          elapsed_ms: 25_000,
+          state: "aborted",
+        },
+      ],
+    },
+  });
+  expect(f.log.mock.calls[0]?.[0]).not.toContain("private-abort-detail");
+  expect(f.log).toHaveBeenCalledTimes(1);
+  expect(f.writes()).toHaveLength(0);
+});
+
+it("captures a body-read timeout through the default fetch transport without late submission", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  let finishBody = () => {};
+  const body = new ReadableStream({
+    start(controller) {
+      finishBody = () => {
+        controller.enqueue(new TextEncoder().encode(legacy));
+        controller.close();
+        finishBody = () => {};
+      };
+    },
+  });
+  const fetch = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify(accepted), {
+        headers: { "content-type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(new Response(body));
+  const log = vi.fn<(message: string) => void>();
+  const app = createNativeCandidate();
+  try {
+    const pending = app.creates.add_member.operation
+      .perform({ ...z, console: { log } }, bundle())
+      .catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(25_001);
+    expect(await pending).toBeInstanceOf(errors.Error);
+    const report = JSON.parse(log.mock.calls[0]?.[0] ?? "");
+    expect(report).toMatchObject({
+      code: "operation_timeout",
+      outcome: "not_submitted",
+    });
+    expect(report.diagnostics.requests).toEqual([
+      expect.objectContaining({
+        endpoint: "user/userData",
+        state: "responded",
+      }),
+      expect.objectContaining({
+        endpoint: "dashboard",
+        state: "in_flight",
+        elapsed_ms: 25_000,
+      }),
+    ]);
+    finishBody();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(log.mock.calls[0]?.[0] ?? "")).toEqual(report);
+  } finally {
+    finishBody();
+    fetch.mockRestore();
+  }
+});
+
+it("allows a lookup beyond 20 seconds to complete within the 25-second budget", async () => {
+  vi.useFakeTimers();
+  const f = fixture();
+  f.transport.mockImplementationOnce(async () => {
+    await new Promise((r) => setTimeout(r, 22_000));
+    return response(accepted);
+  });
+  const pending = f.perform().catch((e: unknown) => e);
+  await vi.advanceTimersByTimeAsync(22_001);
+  expect(await pending).toEqual({ success: true });
+  expect(f.writes()).toHaveLength(1);
+  expect(f.log).not.toHaveBeenCalled();
+});
+
+it("identifies a stalled metadata read after completed discovery requests", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  const f = fixture();
+  f.transport
+    .mockImplementationOnce(async () => {
+      await new Promise((r) => setTimeout(r, 1_000));
+      return response(accepted);
+    })
+    .mockImplementationOnce(async () => {
+      await new Promise((r) => setTimeout(r, 2_000));
+      return html(shell);
+    })
+    .mockImplementationOnce(async () => {
+      await new Promise((r) => setTimeout(r, 3_000));
+      return response(navigation);
+    })
+    .mockImplementationOnce(() => new Promise(() => {}));
+  const pending = f.perform().catch((e: unknown) => e);
+  await vi.advanceTimersByTimeAsync(25_001);
+  expect(await pending).toBeInstanceOf(errors.Error);
+  const report = JSON.parse(f.log.mock.calls[0]?.[0] ?? "");
+  expect(report.diagnostics.requests).toEqual([
+    {
+      endpoint: "user/userData",
+      method: "GET",
+      stage: "group_lookup",
+      started_ms: 0,
+      elapsed_ms: 1_000,
+      state: "responded",
+      http_status: 200,
+    },
+    {
+      endpoint: "dashboard",
+      method: "GET",
+      stage: "group_lookup",
+      started_ms: 1_000,
+      elapsed_ms: 2_000,
+      state: "responded",
+      http_status: 200,
+    },
+    {
+      endpoint: "navigation/groups",
+      method: "GET",
+      stage: "group_lookup",
+      started_ms: 3_000,
+      elapsed_ms: 3_000,
+      state: "responded",
+      http_status: 200,
+    },
+    {
+      endpoint: "network/getMetadata",
+      method: "GET",
+      stage: "group_lookup",
+      started_ms: 6_000,
+      elapsed_ms: 19_000,
+      state: "in_flight",
+    },
+  ]);
   expect(f.writes()).toHaveLength(0);
 });
 

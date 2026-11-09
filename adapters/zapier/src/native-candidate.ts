@@ -26,6 +26,7 @@ import {
   type FailureConsole,
   type FailureStage,
 } from "./failures.js";
+import { membershipDiagnostics } from "./diagnostics.js";
 import { CLIENT_POLICY, CONFIGURATION_VERSION } from "./policy.js";
 
 const NATIVE_VERSION = "2.1.6";
@@ -61,6 +62,10 @@ export function createNativeCandidate(
           let renewalRequested = false;
           let attempt = membershipAttempt(bundle.inputData, NATIVE_VERSION);
           let stage: FailureStage = "validation";
+          const diagnostics = membershipDiagnostics(
+            () => stage,
+            dependencies.transport,
+          );
           let parish: string | undefined;
           try {
             const request = memberRequest(bundle);
@@ -86,6 +91,7 @@ export function createNativeCandidate(
                 ),
                 coordinator: new InvocationCoordinator(),
                 ...dependencies,
+                transport: diagnostics.transport,
                 policy: CLIENT_POLICY,
                 credentialProvider: {
                   load: async () => {
@@ -116,7 +122,10 @@ export function createNativeCandidate(
               throw new z.errors.RefreshAuthError(
                 "The saved Flocknote session needs renewal before member submission.",
               );
-            const report = membershipFailure(error, attempt, stage, parish);
+            const report = {
+              ...membershipFailure(error, attempt, stage, parish),
+              diagnostics: diagnostics.snapshot(),
+            };
             const warning = pendingMergeWarning(z, report);
             if (warning) return warning;
             reportMembershipFailure(z, report);
