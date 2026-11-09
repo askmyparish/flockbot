@@ -66,7 +66,7 @@ failure. Its actual operator visibility, notifications and replay behavior remai
 part of controlled host verification. No queue, retry-on-unknown, or early success
 is provided.
 
-One 20-second action budget covers group lookup, authentication and membership,
+One 25-second action budget covers group lookup, authentication and membership,
 including the shared calls' lock waits and persistence. Late dependencies cannot
 submit or publish after expiration. Offline deadlines aren't measured host runtime
 proof. Repeated-add matching, duplicates and notification effects still need the
@@ -157,7 +157,7 @@ tests before enabling operational writes or selecting a hosting fallback.
 
 The injected store/coordinator/transport parameters are test seams, not Zapier
 APIs. Tests deliberately separate their simulated persistence from host facts.
-The default 20-second client deadline leaves nominal room inside the documented
+The adapter's 25-second client deadline leaves nominal room inside the documented
 30-second ordinary action limit, but measured login/read/refresh budgets and the
 actual Zap's retries and notifications are still required before cutover.
 

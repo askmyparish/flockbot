@@ -568,7 +568,7 @@ describe("private Zapier candidate actions", () => {
       .perform(z, bundle())
       .catch((e: unknown) => e);
     await settle();
-    await vi.advanceTimersByTimeAsync(20_001);
+    await vi.advanceTimersByTimeAsync(25_001);
     const error = await result;
     expect(error).toMatchObject({ name: "AppError" });
     expect(String(error)).toContain("operation_timeout");
@@ -597,7 +597,7 @@ describe("private Zapier candidate actions", () => {
     lookup.resolve(html(legacy));
     await settle();
     expect(f.writes()).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(5_001);
+    await vi.advanceTimersByTimeAsync(10_001);
     const error = await result;
     expect(error).toMatchObject({ name: "HaltedError" });
     expect(String(error)).toContain("operation_timeout");

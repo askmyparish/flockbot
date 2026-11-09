@@ -686,7 +686,7 @@ it("bounds failed-input snapshots and reports truncation instead of dumping arbi
   expect(f.transport).not.toHaveBeenCalled();
 });
 
-it("shares the total 20-second budget across slow discovery and a submitted write", async () => {
+it("shares the total 25-second budget across slow discovery and a submitted write", async () => {
   vi.useFakeTimers();
   const f = fixture();
   f.transport
@@ -698,7 +698,7 @@ it("shares the total 20-second budget across slow discovery and a submitted writ
     .mockResolvedValueOnce(response(accepted))
     .mockImplementationOnce(() => new Promise(() => {}));
   const pending = f.perform().catch((e: unknown) => e);
-  await vi.advanceTimersByTimeAsync(20_001);
+  await vi.advanceTimersByTimeAsync(25_001);
   expect(await pending).toBeInstanceOf(errors.HaltedError);
   expect(f.writes()).toHaveLength(1);
 });
@@ -708,7 +708,7 @@ it("times out before submission without a POST or native refresh", async () => {
   const f = fixture();
   f.transport.mockImplementationOnce(() => new Promise(() => {}));
   const pending = f.perform().catch((e: unknown) => e);
-  await vi.advanceTimersByTimeAsync(20_001);
+  await vi.advanceTimersByTimeAsync(25_001);
   const error = await pending;
   expect(error).toBeInstanceOf(errors.Error);
   expect(error).not.toBeInstanceOf(errors.RefreshAuthError);
@@ -732,7 +732,7 @@ it("identifies a timeout in membership preflight without claiming a submission",
     .mockResolvedValueOnce(html(legacy))
     .mockImplementationOnce(() => new Promise(() => {}));
   const pending = f.perform().catch((e: unknown) => e);
-  await vi.advanceTimersByTimeAsync(20_001);
+  await vi.advanceTimersByTimeAsync(25_001);
   const error = await pending;
   expect(error).toBeInstanceOf(errors.Error);
   expect(error).not.toBeInstanceOf(errors.HaltedError);

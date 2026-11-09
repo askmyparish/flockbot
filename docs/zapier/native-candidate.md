@@ -38,7 +38,11 @@ contains the membership action's auth-scoped lock and `skipHttpPatch:true`.
 The five membership inputs and group dropdown match the existing integration.
 Input validation precedes connection access. Each membership invocation uses one
 client and cookie jar for group validation, authentication preflight and one
-membership POST, under one 20-second budget with no transient read retries.
+membership POST, under one 25-second budget with no transient read retries.
+This leaves nominal five-second headroom inside Zapier's documented 30-second
+action limit for cancellation, reporting and returning the result; it is not a
+measured host-runtime guarantee. The shared client default and isolated host
+probes retain their separate deadlines.
 The operation requests a native lock with a fixed key, auth scope and 60-second
 hold. This covers the membership action, not connection tests, the authentication
 hook or the group dropdown. Lock timing, refresh coverage and fencing remain
