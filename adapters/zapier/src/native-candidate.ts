@@ -29,7 +29,7 @@ import {
 import { membershipDiagnostics } from "./diagnostics.js";
 import { CLIENT_POLICY, CONFIGURATION_VERSION } from "./policy.js";
 
-const NATIVE_VERSION = "2.1.6";
+const NATIVE_VERSION = "2.1.7";
 
 /** Isolated candidate; this does not replace the default app's write gate. */
 export function createNativeCandidate(

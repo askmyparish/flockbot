@@ -37,7 +37,7 @@ try {
     join(directory, "package.json"),
     JSON.stringify({
       name: "@askmyparish/flockbot-zapier-native-candidate",
-      version: "2.1.6",
+      version: "2.1.7",
       private: true,
       main: "index.js",
       exports: "./index.js",
@@ -50,7 +50,7 @@ try {
     join(directory, ".gitignore"),
     "node_modules\n.env*\n.zapierrc\ncli-auth.json\nbuild\n",
   );
-  console.log(JSON.stringify({ directory, version: "2.1.6" }));
+  console.log(JSON.stringify({ directory, version: "2.1.7" }));
 } catch {
   if (directory) await rm(directory, { recursive: true, force: true });
   console.error("Native candidate build failed.");

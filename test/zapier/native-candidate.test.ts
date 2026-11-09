@@ -1008,7 +1008,7 @@ it("builds a private root-loader artifact with schema, log suppression and no St
     expect(
       require("zapier-platform-core/src/tools/schema").validateApp(app),
     ).toEqual([]);
-    expect(app.version).toBe("2.1.6");
+    expect(app.version).toBe("2.1.7");
     expect(app.flags.skipHttpPatch).toBe(true);
     expect(app.creates.add_member.operation.lock).toEqual({
       key: "flockbot-membership",

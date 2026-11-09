@@ -6,7 +6,7 @@ retains its write block. This candidate is prepared for controlled verification;
 building it does not upload, publish, migrate Zaps, or authorize live writes.
 
 On Node 22, run `node scripts/zapier/build-native-candidate.mjs`. The command
-prints a temporary directory containing a private 2.1.6 package with a root
+prints a temporary directory containing a private 2.1.7 package with a root
 CommonJS entry. Run `npm run check` for offline verification. Inspect the actual
 CLI ZIPs and hosted loader before any separately authorized upload.
 
@@ -126,7 +126,7 @@ console event supports investigation; it does not itself send a notification or
 configure an external error tracker. HTTP logging remains disabled.
 
 To inspect these records, run
-`zapier-platform logs --type console --status any --version 2.1.6` from the linked
+`zapier-platform logs --type console --status any --version 2.1.7` from the linked
 artifact directory and look for `flockbot.membership_failed`. Include all statuses
 because the action uses a halted outcome. The attempt ID connects the console
 record with the user-facing error or warning. Pre-submission errors also include
@@ -137,9 +137,10 @@ error and does not count as a completed membership.
 
 ### Request timing diagnostics
 
-The source now attaches a `diagnostics` object to the existing failure and
-pending-merge warning console events. This requires a deployed build containing
-the change; it cannot add detail to historical attempts. The same `attempt_id`
+Version 2.1.7 increases the action budget to 25 seconds and attaches a
+`diagnostics` object to the existing failure and pending-merge warning console
+events. Zaps must use this version to receive the change; uploading it does not
+migrate existing Zaps or add detail to historical attempts. The same `attempt_id`
 links the error to its request timings. One `z.console.log` event is emitted per
 failure/warning, not per request; confirmed successes and normal Session Auth
 renewal requests remain quiet.
