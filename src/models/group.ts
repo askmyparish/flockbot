@@ -83,9 +83,12 @@ export function subscriberCount(value: unknown): number {
     if (Number.isSafeInteger(count) && count >= 0) return count;
     return invalid();
   }
-  if (typeof count !== "string" || !/^\d+$/.test(count.trim()))
+  if (
+    typeof count !== "string" ||
+    !/^(?:\d+|[1-9]\d{0,2}(?:,\d{3})+)$/.test(count.trim())
+  )
     return invalid();
-  const parsed = Number(count.trim());
+  const parsed = Number(count.trim().replaceAll(",", ""));
   if (!Number.isSafeInteger(parsed)) return invalid();
   return parsed;
 }
