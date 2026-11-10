@@ -81,14 +81,14 @@ export function subscriberCount(value: unknown): number {
   const count = record(value).subscriberCount;
   if (typeof count === "number") {
     if (Number.isSafeInteger(count) && count >= 0) return count;
-    return invalid();
+    return invalid("subscriber_count_invalid");
   }
   if (
     typeof count !== "string" ||
     !/^(?:\d+|[1-9]\d{0,2}(?:,\d{3})+)$/.test(count.trim())
   )
-    return invalid();
+    return invalid("subscriber_count_invalid");
   const parsed = Number(count.trim().replaceAll(",", ""));
-  if (!Number.isSafeInteger(parsed)) return invalid();
+  if (!Number.isSafeInteger(parsed)) return invalid("subscriber_count_invalid");
   return parsed;
 }

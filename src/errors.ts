@@ -1,4 +1,5 @@
 import { upstreamResponse, type UpstreamResponse } from "./rejections.js";
+import { safeFailureReason, type FailureReason } from "./failure-reason.js";
 
 export type ErrorCode =
   | "group_not_found"
@@ -41,12 +42,14 @@ export class FlockbotError extends Error {
   readonly status?: number;
   readonly outcome: "not_submitted" | "unknown" | undefined;
   readonly response?: UpstreamResponse;
+  readonly reason?: FailureReason;
 
   constructor(
     code: ErrorCode,
     status?: number,
     outcome?: "not_submitted" | "unknown",
     response?: UpstreamResponse,
+    reason?: FailureReason,
   ) {
     super(`Flockbot request failed (${code}).`);
     this.name = "FlockbotError";
@@ -67,6 +70,8 @@ export class FlockbotError extends Error {
       this.status = status;
     const safeResponse = upstreamResponse(response);
     if (safeResponse) this.response = safeResponse;
+    const safeReason = safeFailureReason(reason);
+    if (safeReason) this.reason = safeReason;
   }
 }
 
@@ -82,7 +87,9 @@ export class AuthenticationSuspectedError extends FlockbotError {
       | "permission_denied"
       | "redirect_rejected"
       | "invalid_response",
+    reason?: FailureReason,
+    status?: number,
   ) {
-    super(code);
+    super(code, status, undefined, undefined, reason);
   }
 }

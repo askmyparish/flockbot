@@ -2,6 +2,8 @@
 export interface ResourceRead {
   read(path: string): Promise<unknown>;
   check(): void;
+  /** Select provenance when validating an earlier or concurrently read response. */
+  validationSource?(path: string): void;
 }
 
 /** Domain reads whose observed upstream contract uses form-encoded POST. */

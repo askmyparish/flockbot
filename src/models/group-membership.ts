@@ -1,6 +1,7 @@
 import { FlockbotError } from "../errors.js";
 import { identifier } from "./identifier.js";
 import { User, type UserInput } from "./user.js";
+import { invalidResponse } from "./parsing.js";
 export type MemberInput = UserInput;
 export interface AddMemberResult {
   readonly success: true;
@@ -69,6 +70,6 @@ export function confirmedMembership(value: unknown): AddMemberResult {
     !("success" in value) ||
     value.success !== true
   )
-    throw new FlockbotError("invalid_response");
+    return invalidResponse("membership_confirmation");
   return Object.freeze({ success: true });
 }

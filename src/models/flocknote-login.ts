@@ -13,10 +13,22 @@ export class FlocknoteLogin {
 
   static fromResponse(data: unknown): FlocknoteLogin {
     if (typeof data !== "object" || data === null || Array.isArray(data))
-      throw new FlockbotError("authentication_protocol_error");
+      throw new FlockbotError(
+        "authentication_protocol_error",
+        undefined,
+        undefined,
+        undefined,
+        "expected_object",
+      );
     const record = data as Record<string, unknown>;
     if (record.success !== true)
-      throw new FlockbotError("authentication_protocol_error");
+      throw new FlockbotError(
+        "authentication_protocol_error",
+        undefined,
+        undefined,
+        undefined,
+        "expected_success",
+      );
     if (record.authorized === false && record.userID === null)
       throw new FlockbotError("authentication_required");
     if (
@@ -31,7 +43,13 @@ export class FlocknoteLogin {
       !Number.isSafeInteger(record.userID) ||
       record.userID <= 0
     )
-      throw new FlockbotError("authentication_protocol_error");
+      throw new FlockbotError(
+        "authentication_protocol_error",
+        undefined,
+        undefined,
+        undefined,
+        "authentication_shape",
+      );
     return new FlocknoteLogin(String(record.userID));
   }
 }

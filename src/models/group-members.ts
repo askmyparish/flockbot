@@ -76,18 +76,29 @@ export class GroupMembers {
         : `group/${group.id}/people/${this.#offset}?ajax&more`;
     const data = record(await context.query(path, "includeUnsubscribed=0"));
     context.check();
-    if (data.success === false) throw new FlockbotError("upstream_rejected");
+    if (data.success === false)
+      throw new FlockbotError(
+        "upstream_rejected",
+        undefined,
+        undefined,
+        undefined,
+        "success_false",
+      );
     if (data.canView === false) throw new FlockbotError("permission_denied");
-    if (
-      (data.success !== undefined && data.success !== true) ||
-      (data.groupID !== undefined && identifier(data.groupID) !== group.id) ||
-      data.includeContacts === true ||
-      !Array.isArray(data.subscribedMembers) ||
-      data.subscribedMembers.length > 100 ||
-      typeof data.moreSubscribersExist !== "boolean" ||
-      (data.moreSubscribersExist && data.subscribedMembers.length === 0)
-    )
-      return invalidResponse();
+    if (data.success !== undefined && data.success !== true)
+      return invalidResponse("expected_success");
+    if (data.groupID !== undefined && identifier(data.groupID) !== group.id)
+      return invalidResponse("group_identity_mismatch");
+    if (data.includeContacts === true)
+      return invalidResponse("contacts_included");
+    if (!Array.isArray(data.subscribedMembers))
+      return invalidResponse("expected_member_array");
+    if (data.subscribedMembers.length > 100)
+      return invalidResponse("page_limit_exceeded");
+    if (typeof data.moreSubscribersExist !== "boolean")
+      return invalidResponse("expected_pagination_boolean");
+    if (data.moreSubscribersExist && data.subscribedMembers.length === 0)
+      return invalidResponse("empty_continuation_page");
 
     const ids = new Set<string>();
     const members = data.subscribedMembers.map((value): GroupMember => {
@@ -95,13 +106,10 @@ export class GroupMembers {
       const id = identifier(row.userID);
       const firstName = memberName(row.fn);
       const lastName = memberName(row.ln);
-      if (
-        id.length > 128 ||
-        ids.has(id) ||
-        (!firstName && !lastName) ||
-        row.contactData
-      )
-        return invalidResponse();
+      if (id.length > 128) return invalidResponse("identifier_too_long");
+      if (ids.has(id)) return invalidResponse("duplicate_identifier");
+      if (!firstName && !lastName) return invalidResponse("missing_name");
+      if (row.contactData) return invalidResponse("contacts_included");
       ids.add(id);
       return {
         id,

@@ -25,7 +25,7 @@ export interface MemberProfileResult {
 }
 
 function profileFlag(value: unknown): boolean {
-  if (typeof value !== "boolean") return invalidResponse();
+  if (typeof value !== "boolean") return invalidResponse("expected_boolean");
   return value;
 }
 
@@ -51,20 +51,29 @@ export class MemberProfile {
     context.check();
     const data = record(await context.query(`user/${this.#userId}/profile`));
     context.check();
-    if (data.success !== true) throw new FlockbotError("upstream_rejected");
+    if (data.success !== true)
+      throw new FlockbotError(
+        "upstream_rejected",
+        undefined,
+        undefined,
+        undefined,
+        data.success === false ? "success_false" : "expected_success",
+      );
     if (data.isInCurrentNet === false || data.canViewProfile === false)
       throw new FlockbotError("permission_denied");
     if (!profileFlag(data.isInCurrentNet) || !profileFlag(data.canViewProfile))
-      return invalidResponse();
+      return invalidResponse("profile_access_shape");
     const info = record(data.userInfo);
     if (info.canViewProfile === false)
       throw new FlockbotError("permission_denied");
-    if (!profileFlag(info.canViewProfile)) return invalidResponse();
+    if (!profileFlag(info.canViewProfile))
+      return invalidResponse("profile_access_shape");
     // The envelope userID is the viewer, not necessarily the selected person.
-    if (identifier(info.userID) !== this.#userId) return invalidResponse();
+    if (identifier(info.userID) !== this.#userId)
+      return invalidResponse("profile_identity_mismatch");
     const firstName = memberName(info.firstName);
     const lastName = memberName(info.lastName);
-    if (!firstName && !lastName) return invalidResponse();
+    if (!firstName && !lastName) return invalidResponse("missing_name");
     return info;
   }
 

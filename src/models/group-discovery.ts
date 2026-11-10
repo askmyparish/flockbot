@@ -49,7 +49,7 @@ function content(node: Node): string {
 
 /** null means the observed modern application shell, not an empty group list. */
 export function dashboardGroups(value: unknown): GroupAttributes[] | null {
-  if (typeof value !== "string") return invalid();
+  if (typeof value !== "string") return invalid("expected_text");
   const nodes = elements(parse(value));
   const items = nodes.filter((node) => hasClass(node, "group_item"));
   const groups: GroupAttributes[] = [];
@@ -65,19 +65,22 @@ export function dashboardGroups(value: unknown): GroupAttributes[] | null {
   }
   if (groups.length) return deduplicate(groups);
   if (nodes.some((node) => attr(node, "id") === "fnReactHolder")) return null;
-  return invalid();
+  return invalid("dashboard_shape");
 }
 
 export function navigationGroups(
   navigation: unknown,
   metadata: unknown,
+  validationSource?: (path: string) => void,
 ): GroupAttributes[] {
+  validationSource?.("navigation/groups");
   const list = record(navigation).groups;
-  if (!Array.isArray(list)) return invalid();
+  if (!Array.isArray(list)) return invalid("navigation_groups_shape");
   const groups = list.map((value: unknown) => {
     const item = record(value);
     return group(item.ID, item.name, item.shortname);
   });
+  validationSource?.("network/getMetadata");
   const everyoneID = record(metadata).everyoneGroupID;
   // Explicit null is the supported no-Everyone representation. Absence is a
   // protocol error. This empty shape is simulated, not live-verified.
