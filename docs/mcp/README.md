@@ -409,6 +409,48 @@ The [member-browsing discovery record](./discovery/member-browsing.md) documents
 sanitized observations for possible future tools; it does not expand the current
 connector's supported operations.
 
+## Direct development runner
+
+`npm run dev:mcp` runs the focused offline read-tool tests without accessing the
+saved browser profile. It does not build an installer or require Codex Desktop.
+`npm run dev:mcp -- --help` lists the live options and read-only tool allowlist.
+
+Live reads require explicit consent on every invocation, the expected saved
+parish, and exactly one allowlisted tool. Put tool arguments in a local JSON file
+outside version control, for example `{"groupId":"101"}` with fictional IDs
+replaced by the intended group. Never put passwords, cookies or tokens in it.
+
+```sh
+npm run dev:mcp -- --live --parish example-parish \
+  --tool subscriber_count --input /path/to/read-input.json \
+  --restart-owner --verbose
+```
+
+Live mode bundles the current checkout and invokes the existing MCP handlers
+through the SDK's in-memory transport and the existing shared browser broker.
+It is not a separate Flocknote transport and does not test Codex or stdio framing.
+Before the requested call, a local-only status check verifies the saved parish,
+readiness, and the browser owner's version and bundle fingerprint. An old owner
+requires explicit `--restart-owner`; a mismatched parish or non-ready connection
+stops without a live read. The runner never connects, reconnects, forgets the
+session, invokes membership writes, follows pagination, or retries a tool call.
+An allowed read retains the application's existing failure-driven authentication
+check; it does not perform password login.
+
+Pause calls from Codex and other clients while using live mode. Restart stops the
+shared local browser and can interrupt concurrent work. The runner stops its
+matching development owner afterward but retains the saved session, so the next
+Codex call can launch its installed build. Do not build or run another development
+invocation concurrently. Cleanup after a crash may require the existing local
+`stop` command; it must not use `forget`.
+
+Output includes the build fingerprint and structured tool result, which may
+contain requested personal data. Only explicit `--verbose` enables the existing
+bounded, sanitized local payload capture; it does not expand the HTML allowlist.
+Unknown selection is a completed read, not a proven engagement result. Tool errors
+exit unsuccessfully and are not retried. Installation, packaging, version bumps,
+and live reads are separate from routine offline checks.
+
 ## Continue after browser sign-in
 
 The MCP `connect` call stays active for up to 45 seconds, including

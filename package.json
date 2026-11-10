@@ -29,6 +29,7 @@
     "test:package": "node scripts/check-package.mjs && node scripts/zapier/check-package.mjs && node scripts/mcp/check-browser-package.mjs",
     "build:zapier": "node scripts/zapier/build.mjs",
     "build:mcp": "node scripts/mcp/build.mjs",
+    "dev:mcp": "node scripts/mcp/develop.mjs",
     "package:codex": "node scripts/mcp/codex-package.mjs",
     "test:mcp:browser": "node scripts/mcp/test-browser.mjs",
     "changeset": "changeset",
