@@ -2,7 +2,7 @@ import { FlockbotError } from "../errors.js";
 import type { FailureReason } from "../failure-reason.js";
 
 /** Common structure checks for domain responses; authentication has its own contract. */
-export function invalidResponse(reason?: FailureReason): never {
+export function invalidResponse(reason: FailureReason): never {
   throw new FlockbotError(
     "invalid_response",
     undefined,
