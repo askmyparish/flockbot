@@ -1,6 +1,8 @@
 import { AuthenticationSuspectedError as BrowserAuthenticationError } from "../../../src/errors.js";
 import type { chromium, BrowserContext, Page } from "playwright";
 import { FlockbotError } from "../../../src/index.js";
+import { safeFailureReason } from "../../../src/failure-reason.js";
+import { recordResponse, responseError } from "./diagnostics.js";
 
 const ANCHOR = "/__flockbot_request_context__";
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -144,18 +146,28 @@ export async function openBrowserSession(
         !(signInPage?.isClosed() ?? false),
       async request(path, method = "GET", body) {
         if (!allowed(path, method)) throw new FlockbotError("invalid_path");
+        const started = performance.now();
         let result: {
           data?: unknown;
           error?: string;
           authentication?: boolean;
+          reason?: string;
+          status?: number;
+          contentType?: string;
+          bytes?: number;
         };
         try {
           result = await page.evaluate(
             async ({ origin, path, method, body, limit }) => {
               if (location.origin !== origin)
-                return { error: "invalid_response" };
+                return { error: "invalid_response", reason: "origin_mismatch" };
               const controller = new AbortController();
               const timer = setTimeout(() => controller.abort(), 15_000);
+              const metadata: {
+                status?: number;
+                contentType?: string;
+                bytes?: number;
+              } = {};
               try {
                 const response = await fetch(`${origin}/${path}`, {
                   method,
@@ -172,18 +184,56 @@ export async function openBrowserSession(
                         body,
                       }),
                 });
+                if (response.status >= 100 && response.status <= 599)
+                  metadata.status = response.status;
+                const type = response.headers.get("Content-Type") ?? "";
+                const json = /(?:^|\/)json(?:;|$)|\+json(?:;|$)/i.test(type);
+                metadata.contentType = !type
+                  ? "missing"
+                  : json
+                    ? "json"
+                    : /^text\/html(?:;|$)/i.test(type)
+                      ? "html"
+                      : /^text\//i.test(type)
+                        ? "text"
+                        : "other";
                 if (
                   response.type === "opaqueredirect" ||
                   (response.status >= 300 && response.status < 400)
                 )
-                  return { error: "redirect_rejected", authentication: true };
+                  return {
+                    ...metadata,
+                    error: "redirect_rejected",
+                    authentication: true,
+                    reason: "redirect",
+                  };
                 if (response.status === 401)
-                  return { error: "upstream_rejected", authentication: true };
+                  return {
+                    ...metadata,
+                    error: "upstream_rejected",
+                    authentication: true,
+                    reason: "http_rejection",
+                  };
                 if (response.status === 403)
-                  return { error: "permission_denied", authentication: true };
-                if (!response.ok) return { error: "upstream_rejected" };
+                  return {
+                    ...metadata,
+                    error: "permission_denied",
+                    authentication: true,
+                    reason: "http_rejection",
+                  };
+                if (!response.ok)
+                  return {
+                    ...metadata,
+                    error: "upstream_rejected",
+                    reason: "http_rejection",
+                  };
                 const reader = response.body?.getReader();
-                if (!reader) return { error: "invalid_response" };
+                if (!reader)
+                  return {
+                    ...metadata,
+                    error: "invalid_response",
+                    reason: "missing_response_body",
+                  };
                 let size = 0;
                 let text = "";
                 const decoder = new TextDecoder();
@@ -191,30 +241,44 @@ export async function openBrowserSession(
                   const chunk = await reader.read();
                   if (chunk.done) break;
                   size += chunk.value.byteLength;
+                  metadata.bytes = size;
                   if (size > limit) {
                     controller.abort();
-                    return { error: "invalid_response" };
+                    return {
+                      ...metadata,
+                      error: "invalid_response",
+                      reason: "response_too_large",
+                    };
                   }
                   text += decoder.decode(chunk.value, { stream: true });
                 }
                 text += decoder.decode();
-                if (
-                  /(?:^|\/)json(?:;|$)|\+json(?:;|$)/i.test(
-                    response.headers.get("Content-Type") ?? "",
-                  )
-                ) {
+                metadata.bytes = size;
+                if (json) {
                   try {
-                    return { data: JSON.parse(text) as unknown };
+                    return { ...metadata, data: JSON.parse(text) as unknown };
                   } catch {
-                    return { error: "invalid_response" };
+                    return {
+                      ...metadata,
+                      error: "invalid_response",
+                      reason: size === 0 ? "empty_response" : "invalid_json",
+                    };
                   }
                 }
-                return { data: text };
+                return {
+                  ...metadata,
+                  data: text,
+                  ...(size === 0 ? { reason: "empty_response" } : {}),
+                };
               } catch {
                 return {
+                  ...metadata,
                   error: controller.signal.aborted
                     ? "operation_timeout"
                     : "transport_failed",
+                  reason: controller.signal.aborted
+                    ? "request_timeout"
+                    : "fetch_failed",
                 };
               } finally {
                 clearTimeout(timer);
@@ -229,8 +293,31 @@ export async function openBrowserSession(
             },
           );
         } catch {
-          throw new FlockbotError("transport_failed");
+          const event = recordResponse(
+            path,
+            method,
+            { reason: "evaluation_failed" },
+            performance.now() - started,
+          );
+          throw responseError(
+            new FlockbotError(
+              "transport_failed",
+              undefined,
+              undefined,
+              undefined,
+              "evaluation_failed",
+            ),
+            event,
+          );
         }
+        const event = recordResponse(
+          path,
+          method,
+          result,
+          performance.now() - started,
+          body,
+        );
+        const reason = safeFailureReason(result.reason);
         switch (result.error) {
           case undefined:
             return result.data;
@@ -238,12 +325,37 @@ export async function openBrowserSession(
           case "permission_denied":
           case "upstream_rejected":
             if (result.authentication)
-              throw new BrowserAuthenticationError(result.error);
-            throw new FlockbotError(result.error);
+              throw responseError(
+                new BrowserAuthenticationError(
+                  result.error,
+                  reason,
+                  result.status,
+                ),
+                event,
+              );
+            throw responseError(
+              new FlockbotError(
+                result.error,
+                result.status,
+                undefined,
+                undefined,
+                reason,
+              ),
+              event,
+            );
           case "invalid_response":
           case "operation_timeout":
           case "transport_failed":
-            throw new FlockbotError(result.error);
+            throw responseError(
+              new FlockbotError(
+                result.error,
+                result.status,
+                undefined,
+                undefined,
+                reason,
+              ),
+              event,
+            );
           default:
             throw new FlockbotError("invalid_response");
         }

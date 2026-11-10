@@ -7,6 +7,10 @@ import { BrowserConnection } from "../../adapters/mcp/src/browser-connection.js"
 import { waitFor } from "./support.js";
 import { SerialCoordinator } from "../../adapters/mcp/src/serial-coordinator.js";
 import {
+  runDiagnostic,
+  failureDiagnostic,
+} from "../../adapters/mcp/src/diagnostics.js";
+import {
   BrowserAuthenticationError,
   BrowserConnectionError,
   openBrowserSession,
@@ -473,20 +477,30 @@ describe("browser-owned local connection", () => {
   );
 
   it.each([
-    new FlockbotError("transport_failed"),
-    {},
-    { success: true, userID: 201, authorized: false },
+    [new FlockbotError("transport_failed"), "inconclusive"],
+    [{}, "inconclusive"],
+    [{ success: true, userID: 201, authorized: false }, "denied"],
+    [new BrowserAuthenticationError("permission_denied"), "denied"],
   ])(
     "does not infer expiry when an auth-failure diagnostic is inconclusive (%#)",
-    async (verification) => {
+    async (verification, authentication) => {
       const f = fixture();
       await ready(f.connection);
       f.responses["group/101/getSubscriberCount"] =
         new BrowserAuthenticationError("permission_denied");
       f.responses["user/userData"] = verification;
       f.requests.length = 0;
-      await expect(f.connection.count("101")).rejects.toMatchObject({
-        code: "permission_denied",
+      const diagnostic = await runDiagnostic("subscriber_count", async () => {
+        try {
+          await f.connection.count("101");
+        } catch (error) {
+          return failureDiagnostic(error);
+        }
+        throw new Error("Expected failure");
+      });
+      expect(diagnostic).toMatchObject({
+        authentication,
+        final: { code: "permission_denied" },
       });
       expect(f.requests.map(({ path }) => path)).toEqual([
         "group/101/getSubscriberCount",
@@ -495,6 +509,38 @@ describe("browser-owned local connection", () => {
       expect(await f.connection.status()).toMatchObject({ state: "ready" });
     },
   );
+
+  it("reports auth not attempted when the deadline expires before diagnosis", async () => {
+    const f = fixture();
+    await ready(f.connection);
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    f.responses["group/101/getSubscriberCount"] = () => {
+      now = 25_001;
+      throw new BrowserAuthenticationError("permission_denied");
+    };
+    f.requests.length = 0;
+    try {
+      const diagnostic = await runDiagnostic("subscriber_count", async () => {
+        try {
+          await f.connection.count("101");
+        } catch (error) {
+          return failureDiagnostic(error);
+        }
+        throw new Error("Expected deadline");
+      });
+      expect(diagnostic).toMatchObject({
+        authentication: "not_attempted",
+        failure: { code: "permission_denied" },
+        final: { code: "operation_timeout" },
+      });
+      expect(f.requests.map((r) => r.path)).toEqual([
+        "group/101/getSubscriberCount",
+      ]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
 
   it("diagnoses an expired dashboard before a named addition can be posted", async () => {
     const f = fixture();

@@ -64,6 +64,13 @@ import {
 } from "./browser-runtime.js";
 import { QueueWaitTimeoutError } from "./serial-coordinator.js";
 import { connectionProfileDirectory } from "./profile.js";
+import {
+  captureFailure,
+  beginAuthDiagnosis,
+  endAuthDiagnosis,
+  validationSource,
+  validationError,
+} from "./diagnostics.js";
 
 const SETUP_ERRORS = [
   "permission_denied",
@@ -126,6 +133,7 @@ function accepted(data: unknown, allowHtml = false): unknown {
   )
     throw new BrowserAuthenticationError(
       typeof data === "string" ? "invalid_response" : "upstream_rejected",
+      typeof data === "string" ? "unexpected_html" : "authorization_false",
     );
   if (
     typeof data === "object" &&
@@ -133,7 +141,13 @@ function accepted(data: unknown, allowHtml = false): unknown {
     "success" in data &&
     data.success === false
   )
-    throw new FlockbotError("upstream_rejected");
+    throw new FlockbotError(
+      "upstream_rejected",
+      undefined,
+      undefined,
+      undefined,
+      "success_false",
+    );
   return data;
 }
 
@@ -366,17 +380,28 @@ export class BrowserConnection {
           } catch (error) {
             this.#network?.model.clearGroups();
             let failure = error;
+            captureFailure(error);
             if (
               error instanceof BrowserAuthenticationError &&
               !op.signal.aborted
             ) {
               // A successful operation never pays for a preflight. Only diagnose
               // an actual auth-like failure, without replaying the operation.
+              op.check();
+              beginAuthDiagnosis();
               try {
-                op.check();
                 await this.#verify(session, saved);
+                endAuthDiagnosis("authenticated");
               } catch (verification) {
                 if (requiresSignIn(verification)) failure = verification;
+                endAuthDiagnosis(
+                  requiresSignIn(verification)
+                    ? "sign_in_required"
+                    : verification instanceof FlockbotError &&
+                        verification.code === "permission_denied"
+                      ? "denied"
+                      : "inconclusive",
+                );
                 // An unavailable/denied/unknown check cannot prove expiry. Keep
                 // the original operation error and the saved connection.
               }
@@ -605,19 +630,30 @@ export class BrowserConnection {
   }
 
   #resources(session: BrowserSession, op: Operation) {
+    const read = async (
+      path: string,
+      method: "GET" | "POST",
+      body?: string,
+    ) => {
+      const data = await session.request(path, method, body);
+      validationSource(path);
+      try {
+        return accepted(data, path === "dashboard");
+      } catch (error) {
+        validationError(error, path);
+        throw error;
+      }
+    };
     return {
-      read: async (path: string) =>
-        accepted(await session.request(path), path === "dashboard"),
+      read: (path: string) => read(path, "GET"),
       query: async (path: string, body?: string) => {
         op.check();
-        const value = accepted(
-          await session.request(path, "POST", body),
-          /^group\/[A-Za-z0-9_-]+\?ajax$/.test(path),
-        );
+        const value = await read(path, "POST", body);
         op.check();
         return value;
       },
       check: () => op.check(),
+      validationSource,
     };
   }
 
@@ -770,8 +806,10 @@ export class BrowserConnection {
       if (error instanceof FlockbotError)
         throw new FlockbotError(
           error.code,
-          undefined,
+          error.status,
           submitted ? "unknown" : "not_submitted",
+          undefined,
+          error.reason,
         );
       if (error instanceof BrowserConnectionError)
         throw new BrowserConnectionError(

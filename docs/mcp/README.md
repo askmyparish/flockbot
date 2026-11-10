@@ -434,3 +434,154 @@ finds a newer matching version. Say **Update Flockbot** to use the same guide-ba
 update flow while retaining sign-in. Checks run at most daily during use, tolerate
 network failures quietly and never delay the parish operation for the network.
 See [update notices](setup.md#update-notices) for timing and release selection.
+
+## Failure diagnostics
+
+Every tool handler uses the same diagnostic path. Errors retain their existing
+code, message and write outcome, and add a `diagnostic` record with an operation
+ID, observation time, fixed validation reason, request events, and separate MCP
+and browser-owner runtime identities. A runtime fingerprint hashes the running
+bundled server's bytes, not its installation path. Older owners or source-mode
+runs can have unavailable identities; these are not attributed to a newer build.
+
+Request events contain only endpoint templates (such as `group/{id}/people`),
+method, elapsed time, and observed HTTP status, content category and byte count.
+Validation failures remain distinct from transport failures. Events show the
+request sequence; transport errors retain the exact request even when reads run
+concurrently. Validators revisiting earlier responses select their source
+explicitly; unavailable observations are not guessed. The original
+failure remains separate from the outcome of an existing authentication check.
+Diagnostics never add authentication checks, retries or write replays.
+
+By default, reasons and metadata are allowlisted. No request/response bodies, credentials,
+cookies, contacts, identifiers, message content, raw exception text or local
+paths are included. There are at most 32 events including original/final failure,
+and at most 16 KiB per record; `truncated` reports omitted history. Successful
+operations discard their trace. `traceSaved: true` confirms a local record was
+saved; `false` means persistence was unavailable or could not be confirmed.
+Logging never changes the original error or write certainty, and never retries
+the operation. SDK input-schema rejections happen before a tool handler and retain the
+SDK's existing validation response.
+
+Normal failed calls save the same metadata record as newline-delimited JSON in the
+OS user's Flockbot application-data folder, outside `browser-v1`:
+
+- macOS: `~/Library/Application Support/Flockbot MCP/diagnostics-v2/`
+- Windows: `%LOCALAPPDATA%\Flockbot MCP\diagnostics-v2\`
+- Linux: `~/.local/state/Flockbot MCP/diagnostics-v2/`
+
+### Explicit verbose capture
+
+Every tool accepts optional `verboseDiagnostics: true`. Enable it only when the
+user explicitly requests verbose diagnostics for that call. Omitted or `false`
+keeps normal behavior. The flag applies to one operation, including its existing
+requests, on success or failure. Later and concurrent calls do not inherit it.
+There is no global setting or stop command. Never replay a write to obtain a trace.
+
+For example, ask Codex: “Run subscriber_count for the selected group once with
+verboseDiagnostics: true. Do not change any data or retry the call.” The tool
+returns only a `verboseDiagnostic` receipt: `operationId`, `traceSaved`,
+`available` and `truncated`. Payloads are not automatically returned to Codex.
+`available: false` means an owner reply was missing, incompatible or interrupted;
+it is not a reason to retry. A compatible older owner can still serve the tool
+without supporting verbose capture. `available: true` does not promise every
+body was captured: inspect each exchange's omission reason.
+
+Local version-2 verbose records include credential-filtered JSON responses and
+form request bodies, plus inert sanitized structure for HTML responses. They can
+contain emails, names and other sensitive parish data. Headers, authentication
+exchanges and unsupported responses are omitted, not copied as raw text.
+Structured credential fields and recognized
+embedded credentials are redacted; encoded/opaque or unsupported forms may be
+omitted. This is not a guarantee that arbitrary upstream prose cannot contain an
+unlabelled secret. Inspect a record before sharing it; do not upload an entire log.
+No real credential store or browser cookie is read for filtering.
+
+One centralized sanitizer handles JSON, forms and HTML at initial capture and
+again at broker/storage boundaries. HTML capture never runs scripts or loads
+resources. Its `format: "html"` payload contains JSON `elements` with source
+`position`, `depth`, an allowlisted `tag`, fixed status `text` and attributes:
+`class`, `id`, `data-date`, `data-noteid` and `data-groupid`. DOM IDs always redact.
+Only the fixed `page_group`, `page_notes`, `note_list_item`, `author` and
+`load_more_notes` class tokens survive; other classes redact. Text retains only
+the fixed labels `Sent by`, `Draft` and `Scheduled` when present at its start.
+Arbitrary HTML prose, names, contact details and message content are omitted,
+even in verbose mode. JSON/form capture can still retain permitted contact data.
+Numeric diagnostic attributes
+are prioritized when the projection cannot fit. Harmless unlisted wrappers use
+the neutral tag `other`, preserving their children and fixed labels. Position gaps and
+`truncated: true` expose missing structure; this is not the original DOM or a
+complete copy of the page. Input above 1 MiB, excessive depth or traversal count
+is omitted.
+
+Scripts, styles, comments, embedded documents, forms/controls, URL attributes,
+event handlers and other attributes are excluded, including `noembed`/`noframes`
+fallbacks and closed `dialog`/`details` subtrees. Other fallback content, such as
+`canvas`, `video`, `audio` and `applet` children, remains subject to the same
+filtered `other` projection. Subtrees marked `hidden`,
+`aria-hidden="true"`, with inline styles or `hidden`/`d-none` classes are omitted.
+The inert parser cannot determine visibility from external stylesheets or
+arbitrary CSS classes. HTML filtering does not infer credential relationships
+from labels, wrappers or table layout: arbitrary strings are removed regardless
+of where they appear. The three diagnostic data attributes must have numeric
+shapes and also pass the shared credential-value filter; unsupported values
+redact. This projection is deliberately lossy, not a credential-free copy of
+the page. Revalidation applies the same allowlist before disk or broker use.
+Ordinary calls still collect no bodies. Existing JSON/form
+records remain readable; older readers may further redact or drop the new
+projection but never receive raw HTML.
+
+Each payload is at most 8 KiB, exchanges share a 12 KiB budget, and the whole
+record retains the existing 32-event/16 KiB limits. Oversized bodies/history are
+omitted with `limit` markers or `truncated: true`; authentication and unsupported
+omissions have their own reasons. Filtering precedes stored truncation, and
+payloads are revalidated at IPC and disk boundaries. Capture never fetches a
+missing body, adds an authentication check or changes validation/write outcomes.
+
+Both normal failures and explicit verbose records use `diagnostics-v2`. Older
+`diagnostics-v1` files remain untouched so older writers cannot discard newer
+records. They are not migrated or pruned by the new reader; use the older runtime's
+reader or remove that old directory explicitly when no longer needed.
+
+### Storage and support access
+
+`failures.jsonl` and `failures.1.jsonl` each retain at most 1 MiB (2 MiB total).
+The writer rejects symlinks, hard links, nonregular files and unsafe permissions.
+Unix directories/files are owner-only; Windows checks current-user-only ACLs
+through PowerShell and refuses persistence when protection cannot be established.
+Native Windows execution remains unverified. A separate bounded process lock
+coordinates writers; corruption and incomplete trailing records are discarded.
+No raw response or exception text is used as a logging fallback.
+
+The handler limits asynchronous logging waits to 1.5 seconds and then returns
+the original error with `traceSaved: false`; a late preparation or lock wait
+cannot subsequently write that record. Local synchronous filesystem operations
+cannot be interrupted by this timer. Ordinary saves append; unchanged retained
+files are not rewritten. Pruning/rotation is best-effort, not crash-transactional:
+a crash or disk failure during those rewrites can lose diagnostic history.
+
+An interrupted first Windows ACL setup can leave diagnostic storage unavailable.
+The connector deliberately refuses unsafe existing ACLs rather than changing
+them automatically. With connector processes stopped, an operator can move only
+`diagnostics-v2` aside using the OS file manager and allow the next logged call to
+create protected storage again. Do not move or reset `browser-v1`. Elevated
+Windows accounts with a different directory owner may also require local
+administrator assistance; no weaker ACL fallback is used.
+Each Windows save rechecks ACLs with PowerShell. If startup/security scanning
+exceeds the logging budget, the tool still returns its diagnostic but no local
+record is saved. Native Windows timing and persistence availability have not
+been measured; do not treat the offline macOS checks as Windows certification.
+
+Records older than seven days are pruned on write or supported diagnostic access.
+There is no background cleanup: idle files may remain, and reading files directly
+does not invoke retention. The runtime's `diagnostics` command prunes and prints
+filtered JSON lines (including sensitive verbose records) without opening the browser or making a Flocknote request. From a
+built checkout, run `node adapters/mcp/dist/browser/server/index.mjs diagnostics`;
+for an installed runtime use its bundled Node and `server/index.mjs diagnostics`.
+Find the record whose `operationId` matches the tool error or verbose receipt,
+inspect its contents locally, and share only the required record. There is no MCP
+log-reading tool, automatic upload or telemetry.
+
+An `invalid_response` reason identifies a failed expectation, not proof of an
+upstream defect or expired session. Share the diagnostic record and error code
+when reporting a failure; do not share browser profiles or raw HAR captures.

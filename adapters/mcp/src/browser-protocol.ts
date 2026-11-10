@@ -1,8 +1,21 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { AsyncResource } from "node:async_hooks";
 import net from "node:net";
 import { z } from "zod";
 import { FlockbotError } from "../../../src/index.js";
 import { BrowserConnectionError } from "./browser-runtime.js";
+import {
+  diagnosticOperationId,
+  receiveDiagnostic,
+  type FailureDiagnostic,
+  receiveVerboseDiagnostic,
+  verboseDiagnosticsEnabled,
+  type VerboseDiagnostic,
+} from "./diagnostics.js";
+import {
+  safeFailureReason,
+  type FailureReason,
+} from "../../../src/failure-reason.js";
 
 export const MAX_REQUEST = 16 * 1024;
 export const MAX_RESPONSE = 2 * 1024 * 1024;
@@ -131,9 +144,13 @@ export interface BrokerDescriptor {
 export interface BrokerReply {
   nonce: string;
   value?: unknown;
+  diagnostic?: FailureDiagnostic;
+  verboseDiagnostic?: VerboseDiagnostic;
   error?: {
     kind: "flockbot" | "browser";
     code: string;
+    status?: number;
+    reason?: FailureReason;
     outcome?: "not_submitted" | "unknown";
     stage?: BrowserConnectionError["stage"];
   };
@@ -171,6 +188,10 @@ export async function requestBroker(
   timeoutMs = 35_000,
 ): Promise<unknown> {
   const nonce = randomBytes(32).toString("hex");
+  const capture =
+    verboseDiagnosticsEnabled() &&
+    request.action !== "ping" &&
+    request.action !== "shutdown";
   return new Promise((resolve, reject) => {
     let sent = false;
     let complete = false;
@@ -180,6 +201,7 @@ export async function requestBroker(
     const fail = (cancelled = false) => {
       if (complete) return;
       complete = true;
+      if (capture) receiveVerboseDiagnostic(undefined);
       socket.destroy();
       const outcome =
         request.action === "add"
@@ -194,7 +216,8 @@ export async function requestBroker(
       );
     };
     const onFailure = () => fail();
-    const onAbort = () => fail(true);
+    // AbortSignal listeners run in the canceller's context, not this request's.
+    const onAbort = AsyncResource.bind(() => fail(true));
     const finish = () => {
       signal?.removeEventListener("abort", onAbort);
     };
@@ -224,6 +247,8 @@ export async function requestBroker(
           descriptor.key,
         ) as BrokerReply;
         if (reply.nonce !== nonce) throw new Error();
+        receiveDiagnostic(reply.diagnostic);
+        if (capture) receiveVerboseDiagnostic(reply.verboseDiagnostic);
         let error: Error | undefined;
         if (reply.error) {
           if (
@@ -235,8 +260,10 @@ export async function requestBroker(
             reply.error.kind === "flockbot"
               ? new FlockbotError(
                   reply.error.code as FlockbotError["code"],
-                  undefined,
+                  reply.error.status,
                   reply.error.outcome,
+                  undefined,
+                  safeFailureReason(reply.error.reason),
                 )
               : new BrowserConnectionError(
                   reply.error.code as BrowserConnectionError["code"],
@@ -257,7 +284,17 @@ export async function requestBroker(
       socket.connect({ path: descriptor.address }, () => {
         if (complete) return;
         sent = true;
-        socket.write(encodeFrame({ nonce, request }, descriptor.key));
+        socket.write(
+          encodeFrame(
+            {
+              nonce,
+              request,
+              operationId: diagnosticOperationId(),
+              verboseDiagnostics: capture,
+            },
+            descriptor.key,
+          ),
+        );
       });
     } catch {
       fail();
