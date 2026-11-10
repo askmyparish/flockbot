@@ -42,6 +42,9 @@ A named collection of members within a parish network to which communications ca
 **Latest group email**:
 The email with the newest original send time for a group. Resending an older email does not make it latest, and selection does not depend on whether a particular user was a recipient.
 
+**Email aggregate analytics**:
+Flocknote's reported counts for an email across its tracking categories. These categories do not establish delivery or human reading, need not be mutually exclusive, and are not attributed to an individual resend attempt.
+
 **User**:
 A person associated with, or intended to join, a Flocknote parish network, distinct from the Flocknote login used to authenticate an integration. Supplied contact details alone do not establish that an existing parish record has been identified or created.
 _Avoid_: Login or account when referring to the person represented in parish records

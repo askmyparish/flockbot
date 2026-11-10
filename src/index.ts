@@ -51,6 +51,12 @@ export {
   type MemberEmailEngagement,
 } from "./models/member-latest-email-status.js";
 export {
+  EmailAnalytics,
+  type EmailAnalyticsInput,
+  type EmailAnalyticsResult,
+  type EmailAnalyticsCounts,
+} from "./models/email-analytics.js";
+export {
   MemberGroups,
   membershipGroupSelector,
   type GroupSelector,
