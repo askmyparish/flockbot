@@ -386,22 +386,28 @@ describe("group discovery", () => {
 });
 
 describe("subscriber counts", () => {
-  it.each([0, "0", 7, "007", " 23 "])(
-    "parses a valid count %j",
-    async (count) => {
-      const f = fixture({
-        "group/101/getSubscriberCount": json({ subscriberCount: count }),
-      });
-      const [group] = await f.client.groups();
-      expect(await group?.subscriberCount()).toBe(Number(count));
-      expect(f.paths()).toEqual([
-        "user/userData",
-        "dashboard",
-        "user/userData",
-        "group/101/getSubscriberCount",
-      ]);
-    },
-  );
+  it.each([
+    [0, 0],
+    ["0", 0],
+    [7, 7],
+    ["007", 7],
+    [" 23 ", 23],
+    ["4,716", 4716],
+    [" 12,345,678 ", 12345678],
+    ["9,007,199,254,740,991", Number.MAX_SAFE_INTEGER],
+  ])("parses a valid count %j", async (count, expected) => {
+    const f = fixture({
+      "group/101/getSubscriberCount": json({ subscriberCount: count }),
+    });
+    const [group] = await f.client.groups();
+    expect(await group?.subscriberCount()).toBe(expected);
+    expect(f.paths()).toEqual([
+      "user/userData",
+      "dashboard",
+      "user/userData",
+      "group/101/getSubscriberCount",
+    ]);
+  });
 
   it.each([
     undefined,
@@ -418,6 +424,16 @@ describe("subscriber counts", () => {
     [],
     "1e2",
     "+2",
+    "47,16",
+    "1,23,456",
+    "1234,567",
+    "1,,234",
+    ",123",
+    "123,",
+    "1,234.5",
+    "1, 234",
+    "0,123",
+    "9,007,199,254,740,992",
     "9007199254740992",
     Number.MAX_SAFE_INTEGER + 1,
   ])("rejects invalid or missing count %#", async (count) => {
