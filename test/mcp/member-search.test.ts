@@ -112,6 +112,203 @@ async function fixture() {
   return { connection, client, factory, session, state };
 }
 
+describe("aggregate email MCP/connection boundary", () => {
+  it("validates before launch and returns only aggregate facts through MCP", async () => {
+    const f = await fixture();
+    for (const input of [
+      {},
+      { emailId: "../801" },
+      { emailId: "801", groupId: "101" },
+      { groupId: "101", groupName: "Everyone" },
+      { groupName: " " },
+      { groupId: "101", userId: "301" },
+    ]) {
+      const result = await f.client.callTool({
+        name: "email_analytics",
+        arguments: input,
+      });
+      expect(result.isError).toBe(true);
+    }
+    await expect(
+      f.connection.emailAnalytics(
+        { emailId: "801" },
+        { signal: AbortSignal.abort() },
+      ),
+    ).rejects.toMatchObject({ code: "operation_cancelled" });
+    expect(f.factory).not.toHaveBeenCalled();
+    const result = await f.client.callTool({
+      name: "email_analytics",
+      arguments: { emailId: "801" },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      selection: "selected",
+      email: { id: "801" },
+      counts: { opened: 17, unopened: 9, complaint: 0 },
+    });
+    expect(
+      vi.mocked(f.session.request).mock.calls.map(([path]) => path),
+    ).toEqual(["note/801/analyticsSummary?ajax"]);
+    expect(
+      (await f.client.listTools()).tools.find(
+        (t) => t.name === "email_analytics",
+      )?.annotations?.readOnlyHint,
+    ).toBe(true);
+    expect(JSON.stringify(result)).not.toMatch(
+      /PRIVATE|Rivera|alex@|noteTargets/,
+    );
+    f.state.latestEmail["note/801/analyticsSummary?ajax"] = new Error(
+      "private@example.test",
+    );
+    const failed = await f.client.callTool({
+      name: "email_analytics",
+      arguments: { emailId: "801" },
+    });
+    expect(failed.isError).toBe(true);
+    expect(failed.structuredContent).not.toHaveProperty("counts");
+    expect(JSON.stringify(failed)).not.toContain("private@");
+  });
+
+  it.each([{ groupId: "00101" }, { groupName: " EVERYONE " }])(
+    "routes group selection %j through MCP without recipient reads",
+    async (input) => {
+      const f = await fixture();
+      const result = await f.client.callTool({
+        name: "email_analytics",
+        arguments: input,
+      });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        groupId: "101",
+        email: { id: "801" },
+        counts: { opened: 17, total: 31 },
+        reason: null,
+      });
+      const paths = vi
+        .mocked(f.session.request)
+        .mock.calls.map(([path]) => path);
+      expect(paths.slice(input.groupName ? 3 : 0)).toEqual([
+        "group/101/notes?ajax&more",
+        "note/801/analyticsSummary?ajax",
+        "note/801/analytics2?ajax",
+      ]);
+      if (input.groupName)
+        expect(paths.slice(0, 3).sort()).toEqual([
+          "dashboard",
+          "navigation/groups",
+          "network/getMetadata",
+        ]);
+      expect(JSON.stringify(result)).not.toMatch(
+        /PRIVATE|Rivera|alex@|summaryCounts|noteTargets/,
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "rejects missing/ambiguous group names before analytics (ambiguous=%s)",
+    async (ambiguous) => {
+      const f = await fixture();
+      if (ambiguous)
+        f.state.navigation = {
+          groups: [
+            { ID: 102, name: "Choir", shortname: "choir-a" },
+            { ID: 103, name: "CHOIR", shortname: "choir-b" },
+          ],
+        };
+      await expect(
+        f.connection.emailAnalytics({ groupName: "choir" }),
+      ).rejects.toMatchObject({
+        code: ambiguous ? "group_ambiguous" : "group_not_found",
+      });
+      expect(
+        vi
+          .mocked(f.session.request)
+          .mock.calls.map(([path]) => path)
+          .sort(),
+      ).toEqual(["dashboard", "navigation/groups", "network/getMetadata"]);
+    },
+  );
+
+  it.each([false, true])(
+    "diagnoses unexpected listing HTML once (signedIn=%s)",
+    async (signedIn) => {
+      const f = await fixture();
+      f.state.latestEmail["group/101/notes?ajax&more"] =
+        "<form>PRIVATE LOGIN</form>";
+      f.state.verification = signedIn
+        ? { success: true, userID: 201 }
+        : { success: true, userID: null, authorized: false };
+      await expect(
+        f.connection.emailAnalytics({ groupId: "101" }),
+      ).rejects.toMatchObject({
+        code: signedIn ? "invalid_response" : "authentication_required",
+      });
+      expect(await f.connection.status()).toMatchObject({
+        state: signedIn ? "ready" : "action_required",
+      });
+      expect(
+        vi.mocked(f.session.request).mock.calls.map(([path]) => path),
+      ).toEqual(["group/101/notes?ajax&more", "user/userData"]);
+    },
+  );
+
+  it("rejects wrong-group JSON without diagnosis and cancels before summary reads", async () => {
+    const f = await fixture();
+    f.state.latestEmail["group/101/notes?ajax&more"] = {
+      ...latestEmailResponses()["group/101/notes?ajax&more"],
+      groupID: 999,
+    };
+    await expect(
+      f.connection.emailAnalytics({ groupId: "101" }),
+    ).rejects.toMatchObject({
+      code: "invalid_response",
+      reason: "group_identity_mismatch",
+    });
+    expect(
+      vi.mocked(f.session.request).mock.calls.map(([path]) => path),
+    ).toEqual(["group/101/notes?ajax&more"]);
+    const controller = new AbortController();
+    vi.mocked(f.session.request)
+      .mockClear()
+      .mockImplementationOnce(async () => {
+        controller.abort();
+        return latestEmailResponses()["group/101/notes?ajax&more"];
+      });
+    await expect(
+      f.connection.emailAnalytics(
+        { groupId: "101" },
+        { signal: controller.signal },
+      ),
+    ).rejects.toMatchObject({ code: "operation_cancelled" });
+    expect(
+      vi.mocked(f.session.request).mock.calls.map(([path]) => path),
+    ).toEqual(["group/101/notes?ajax&more"]);
+  });
+
+  it.each([false, true])(
+    "diagnoses summary login HTML with signedIn=%s without replay",
+    async (signedIn) => {
+      const f = await fixture();
+      f.state.latestEmail["note/801/analyticsSummary?ajax"] =
+        "<form>PRIVATE LOGIN</form>";
+      f.state.verification = signedIn
+        ? { success: true, userID: 201 }
+        : { success: true, userID: null, authorized: false };
+      await expect(
+        f.connection.emailAnalytics({ emailId: "801" }),
+      ).rejects.toMatchObject({
+        code: signedIn ? "invalid_response" : "authentication_required",
+      });
+      expect(await f.connection.status()).toMatchObject({
+        state: signedIn ? "ready" : "action_required",
+      });
+      expect(
+        vi.mocked(f.session.request).mock.calls.map(([path]) => path),
+      ).toEqual(["note/801/analyticsSummary?ajax", "user/userData"]);
+    },
+  );
+});
+
 describe("latest email MCP/connection boundary", () => {
   it("resolves a named group and returns only the requested member's engagement", async () => {
     const f = await fixture();
@@ -156,10 +353,10 @@ describe("latest email MCP/connection boundary", () => {
     },
     { signedIn: true, code: "invalid_response", state: "ready" },
   ])(
-    "diagnoses non-group HTML with signedIn=$signedIn without replay",
+    "diagnoses unexpected listing HTML with signedIn=$signedIn without replay",
     async ({ signedIn, code, state }) => {
       const f = await fixture();
-      f.state.latestEmail["group/101?ajax"] =
+      f.state.latestEmail["group/101/notes?ajax&more"] =
         "<html><body>Sign in</body></html>";
       f.state.verification = signedIn
         ? { success: true, userID: 201 }
@@ -170,21 +367,23 @@ describe("latest email MCP/connection boundary", () => {
       expect(await f.connection.status()).toMatchObject({ state });
       expect(
         vi.mocked(f.session.request).mock.calls.map(([path]) => path),
-      ).toEqual(["group/101?ajax", "user/userData"]);
+      ).toEqual(["group/101/notes?ajax&more", "user/userData"]);
     },
   );
 
   it("rejects a different group without diagnosing the session", async () => {
     const f = await fixture();
-    f.state.latestEmail["group/101?ajax"] =
-      '<div class="page_group" data-groupid="102"></div>';
+    f.state.latestEmail["group/101/notes?ajax&more"] = {
+      ...latestEmailResponses()["group/101/notes?ajax&more"],
+      groupID: 102,
+    };
     await expect(
       f.connection.memberLatestEmailStatus({ userId: "301", groupId: "101" }),
     ).rejects.toMatchObject({ code: "invalid_response" });
     expect(await f.connection.status()).toMatchObject({ state: "ready" });
     expect(
       vi.mocked(f.session.request).mock.calls.map(([path]) => path),
-    ).toEqual(["group/101?ajax"]);
+    ).toEqual(["group/101/notes?ajax&more"]);
   });
 
   it("validates before browser access and cancels between notes and analytics", async () => {
@@ -213,9 +412,11 @@ describe("latest email MCP/connection boundary", () => {
       }).success,
     ).toBe(false);
     let finish = (_value: unknown) => {};
-    f.state.latestEmail["group/101?ajax"] = new Promise((resolve) => {
-      finish = resolve;
-    });
+    f.state.latestEmail["group/101/notes?ajax&more"] = new Promise(
+      (resolve) => {
+        finish = resolve;
+      },
+    );
     const controller = new AbortController();
     const pending = f.connection.memberLatestEmailStatus(
       { userId: "301", groupId: "101" },
@@ -229,7 +430,7 @@ describe("latest email MCP/connection boundary", () => {
       controller.abort();
       await rejected;
     } finally {
-      finish(latestEmailResponses()["group/101?ajax"]);
+      finish(latestEmailResponses()["group/101/notes?ajax&more"]);
     }
     await f.connection.close();
     expect(f.session.request).toHaveBeenCalledTimes(1);

@@ -61,12 +61,12 @@ function allowed(path: string, method: string): boolean {
         "network/getMetadata",
       ].includes(path) ||
       /^group\/[A-Za-z0-9_-]+\/getSubscriberCount$/.test(path) ||
+      /^group\/[A-Za-z0-9_-]+\/notes\?ajax&more$/.test(path) ||
       /^note\/[A-Za-z0-9_-]+\/(?:analyticsSummary|analytics2)\?ajax$/.test(path)
     );
   return (
     method === "POST" &&
     (/^group\/[A-Za-z0-9_-]+\/addToGroupByAdmin$/.test(path) ||
-      /^group\/[A-Za-z0-9_-]+\?ajax$/.test(path) ||
       /^note\/[A-Za-z0-9_-]+\/searchAnalytics\?ajax$/.test(path) ||
       /^group\/[A-Za-z0-9_-]+\/(?:people\?ajax|filter)$/.test(path) ||
       /^group\/[A-Za-z0-9_-]+\/people\/[1-9]\d{0,15}\?ajax&more$/.test(path) ||

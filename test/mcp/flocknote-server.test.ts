@@ -577,6 +577,7 @@ describe("Flocknote MCP contract", () => {
     expect(tools.map(({ name }) => name).sort()).toEqual([
       "add_member",
       "connect",
+      "email_analytics",
       "find_members",
       "group_members",
       "groups",

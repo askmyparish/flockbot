@@ -27,6 +27,7 @@ published by these changes.
 | `member_groups` | List a chosen member's explicit group subscriptions with bounded output and visibility limits |
 | `member_communication_status` | Read one member/group's email/SMS preferences and contact warnings without promising delivery |
 | `member_latest_email_status` | Check recorded engagement on the group's latest distinct sent email; unsupported cases remain unknown |
+| `email_analytics` | Read aggregate tracking categories for an explicit email ID or the latest group email without recipient records |
 | `group_members` | List a named group's subscribed members in bounded pages, with names by default |
 | `is_member` | Check one chosen member/group relationship as `member`, `not_member`, or `unknown` |
 | `add_member` | Add once by `groupId` or case-insensitive unique `groupName`; return only success |
@@ -225,10 +226,18 @@ returned `limitations`: tracking does not prove human reading or delivery,
 engagement is not attributed to an individual resend, and separate reads are
 not an atomic snapshot.
 
-The conservative first version supports the captured ordinary-email feed. It
-checks the first displayed note against email, group, and send metadata. Newer
-non-email/unsent notes, ties, unsupported send histories, and inconsistent
-metadata produce unknown selection rather than a scan through mixed content.
+Selection reads one JSON page from `GET /group/{groupId}/notes?ajax&more`,
+without a timestamp cursor or HTML extraction. The response must identify the
+requested group and contain a `notes` array and boolean `more` flag. Every row
+must have `status: "published"` and a positive safe-integer `publishedDate`.
+Unexpected statuses, invalid dates, duplicate IDs, ties for newest, or
+inconsistent ordering return `selection_ambiguous`; rows are never silently skipped.
+An empty page is unavailable; one row with `more: true` remains ambiguous.
+No continuation pages are fetched. The first note is checked against email,
+group, and send metadata.
+An otherwise selected non-email note returns `unsupported_latest_note`.
+Unsupported send histories and inconsistent metadata remain
+unknown without falling back to an older email.
 The member's stored surname must contain at least three characters for the
 observed analytics search. Search matches are selected by stable member ID, not
 by name; missing, duplicate, conflicting or unsupported recipient records remain
@@ -237,7 +246,45 @@ that bounded search response, not that the member does not exist or was not a
 recipient. No result establishes non-recipient status. Names, contact values,
 message content and upstream HTML are never returned. This bounded read uses the
 existing saved session and coordinated deadline without preflight or retries.
-Only offline behavior is verified; live and Codex desktop use remain unverified.
+JSON listing, aggregate selection, and individual engagement have read-only live
+verification through the development runner. Codex Desktop use of this selection
+change remains unverified.
+
+### Aggregate email analytics
+
+`email_analytics` accepts exactly one `emailId`, `groupId` or `groupName`.
+An explicit email ID, including an older email, reads the compact analytics
+summary without group discovery or send-history interpretation. A group selector
+uses the same conservative newest-original-send selection as
+`member_latest_email_status`, without requiring a member. Group names must resolve
+uniquely, ignoring case and surrounding whitespace. Neither mode reads member
+profiles or searches recipients. `requested` records the normalized selector;
+`groupId` is the resolved group ID in group mode and null in explicit-ID mode. `selection`
+is `selected` or `unknown`. A selected `email` contains `id` and the raw
+`publishedDate`; a non-email note returns `unsupported_email_type`, with null
+email and counts when selected by explicit ID. Unsupported, empty, tied, reordered
+or inconsistent group selections remain unknown with a reason and null email/counts;
+they never fall back to older mail or promote resend activity. Group mode reuses
+the selected email's summary without refetching it; separate reads are not an
+atomic snapshot. Invalid responses and failed requests are errors, not zero
+engagement. `observedAt` records lookup time, not a send or open time.
+
+For example, use `{"emailId":"801"}` for a known email,
+`{"groupId":"101"}` for a known group, or `{"groupName":"Choir"}` for its latest
+supported email. Do not combine selectors or include a member ID.
+
+`counts` preserves nine upstream categories: `opened`, `unopened`, `bounced`,
+`complaint`, `sms`, `total`, `voicecalls`, `clicks` and `unsubscribes`. Known values
+are nonnegative safe integers. Missing/null categories are null (unknown), not
+zero; malformed counters or an unrecognized counts container fail safely.
+The categories need not be mutually exclusive. `total` is not a verified unique
+recipient count; no rates, inferred delivery, or per-resend breakdown is provided.
+An explicit email does not require interpreted send history. Tracking does not
+prove human reading. Results omit recipients, contacts, authors and message
+content. The operation reuses the saved session and coordinated deadline without
+preflight or automatic retries. Group-mode selection and aggregate counts have
+read-only live verification through the development runner; explicit-ID mode
+has offline coverage only. Codex Desktop use of this change remains unverified.
 
 ## Develop and verify
 
