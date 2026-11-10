@@ -58,7 +58,10 @@ export class Network {
         typeof dashboard === "string" &&
         dashboard.trimStart().startsWith("<")
       )
-        throw new AuthenticationSuspectedError("invalid_response");
+        throw new AuthenticationSuspectedError(
+          "invalid_response",
+          error.reason,
+        );
       throw error;
     }
     context.check();
@@ -82,7 +85,7 @@ export class Network {
         metadata = await context.read("network/getMetadata");
         context.check();
       }
-      groups = navigationGroups(navigation, metadata);
+      groups = navigationGroups(navigation, metadata, context.validationSource);
     }
     context.check();
     const value = Object.freeze(

@@ -42,7 +42,7 @@ function preference(
   if (!Object.hasOwn(row, key)) return "unknown";
   if (row[key] === 1) return "enabled";
   if (row[key] === 0) return "disabled";
-  return invalidResponse();
+  return invalidResponse("invalid_preference");
 }
 
 /** Validate and snapshot a selected group before an adapter starts I/O. */
@@ -79,23 +79,29 @@ export class MemberGroups {
     context.check();
     const response = record(await context.query(`user/${this.#userId}/groups`));
     context.check();
-    if (response.success !== true) throw new FlockbotError("upstream_rejected");
+    if (response.success !== true)
+      throw new FlockbotError(
+        "upstream_rejected",
+        undefined,
+        undefined,
+        undefined,
+        response.success === false ? "success_false" : "expected_success",
+      );
     const data = record(response.data);
     if (data.canView === false) throw new FlockbotError("permission_denied");
-    if (data.canView !== true || !Array.isArray(data.subscribedGroups))
-      return invalidResponse();
+    if (data.canView !== true) return invalidResponse("expected_boolean");
+    if (!Array.isArray(data.subscribedGroups))
+      return invalidResponse("expected_group_array");
     const ids = new Set<string>();
     return data.subscribedGroups.map((value): MembershipRow => {
       const row = record(value);
       const id = identifier(row.groupID);
       const name = memberName(row.groupName);
-      if (
-        id.length > 128 ||
-        !name ||
-        ids.has(id) ||
-        typeof row.isSubscribed !== "boolean"
-      )
-        return invalidResponse();
+      if (id.length > 128) return invalidResponse("identifier_too_long");
+      if (!name) return invalidResponse("missing_name");
+      if (ids.has(id)) return invalidResponse("duplicate_identifier");
+      if (typeof row.isSubscribed !== "boolean")
+        return invalidResponse("expected_subscription_boolean");
       ids.add(id);
       return {
         id,

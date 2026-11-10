@@ -80,18 +80,18 @@ export function subscriptionDate(value: unknown): string | null {
 export function memberFlag(value: unknown): boolean {
   if (typeof value === "boolean") return value;
   if (value === 0 || value === 1) return value === 1;
-  return invalidResponse();
+  return invalidResponse("expected_flag");
 }
 
 export function memberName(value: unknown): string {
   if (typeof value !== "string" || /\p{Cc}/u.test(value))
-    return invalidResponse();
+    return invalidResponse("invalid_name");
   return value.trim();
 }
 
 export function storedContact(value: unknown): string | null {
   if (value === null) return null;
   if (typeof value !== "string" || /\p{Cc}/u.test(value))
-    return invalidResponse();
+    return invalidResponse("invalid_contact");
   return value.trim() || null;
 }

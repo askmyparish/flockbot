@@ -58,9 +58,10 @@ function searchFilter(value: unknown): string {
     input.dataType !== "text" ||
     input.allowMultiple !== false
   )
-    return invalidResponse();
+    return invalidResponse("search_filter_shape");
   const id = identifier(filter.filterID);
-  if (!/^[1-9]\d*$/.test(id)) return invalidResponse();
+  if (!/^[1-9]\d*$/.test(id))
+    return invalidResponse("search_filter_identifier");
   return id;
 }
 
@@ -128,22 +129,31 @@ export class MemberSearch {
     }).toString();
     const data = record(await context.query(`group/${groupId}/filter`, body));
     context.check();
-    if (data.success !== true) throw new FlockbotError("upstream_rejected");
+    if (data.success !== true)
+      throw new FlockbotError(
+        "upstream_rejected",
+        undefined,
+        undefined,
+        undefined,
+        data.success === false ? "success_false" : "expected_success",
+      );
+    if (!Array.isArray(data.results))
+      return invalidResponse("expected_results_array");
     if (
-      !Array.isArray(data.results) ||
       typeof data.resultCount !== "number" ||
       !Number.isSafeInteger(data.resultCount) ||
       data.resultCount < data.results.length
     )
-      return invalidResponse();
+      return invalidResponse("invalid_result_count");
     const ids = new Set<string>();
     const all = data.results.map((value): MemberCandidate => {
       const row = record(value);
       const id = identifier(row.userID);
       const firstName = memberName(row.fn);
       const lastName = memberName(row.ln);
-      if (id.length > 128 || ids.has(id) || (!firstName && !lastName))
-        return invalidResponse();
+      if (id.length > 128) return invalidResponse("identifier_too_long");
+      if (ids.has(id)) return invalidResponse("duplicate_identifier");
+      if (!firstName && !lastName) return invalidResponse("missing_name");
       ids.add(id);
       return {
         id,
