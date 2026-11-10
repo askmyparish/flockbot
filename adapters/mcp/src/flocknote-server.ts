@@ -8,9 +8,19 @@ import type { BrowserConnection, BrowserStatus } from "./browser-connection.js";
 import { BrowserConnectionError } from "./browser-runtime.js";
 import { MCP_VERSION } from "./version.js";
 import { UpdateChecker, type UpdateNotifications } from "./update-check.js";
+import { FailureLog } from "./failure-log.js";
+import {
+  runDiagnostic,
+  failureDiagnostic,
+  verboseDiagnostic,
+  diagnosticOperationId,
+  type VerboseDiagnostic,
+  type DiagnosticOperation,
+} from "./diagnostics.js";
 
 const INSTRUCTIONS =
   "Use these tools for the user's Flocknote parish requests. Trust the saved session and call the requested tool directly; no preliminary status or authentication check is needed. " +
+  "Enable verboseDiagnostics only when the user explicitly requests verbose diagnostic capture for this call. It saves bounded credential-redacted request/response data locally, including personal data, for this operation only. Never automatically enable it or replay a failed write for diagnostics. " +
   "Member IDs are internal: identify people to the user by name and distinguishing contact details, not numeric IDs. " +
   "If sign-in is needed, ask for the parish subdomain and call connect; the user signs in on Flocknote's real website. " +
   "The connect call waits briefly for sign-in. When it returns ready, continue the user's original request without asking them to say they are signed in. Sign-in alone does not finish their parish task. " +
@@ -166,6 +176,7 @@ export function createFlocknoteServer(
     signInWaitMs?: number;
     signInPollMs?: number;
     updates?: UpdateNotifications;
+    failureLog?: Pick<FailureLog, "save">;
   } = {},
 ) {
   // Leave headroom below Codex's documented default 60-second tool timeout.
@@ -192,36 +203,101 @@ export function createFlocknoteServer(
       return result(body, isError);
     }
   };
-  const guarded = async (work: () => Promise<Record<string, unknown>>) => {
+  const save = async (record: unknown): Promise<boolean> => {
+    const logging = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      options.updates?.touch();
-    } catch {
-      /* Optional update check. */
-    }
-    try {
-      return respond(await work());
-    } catch (error) {
-      const known =
-        error instanceof FlockbotError ||
-        error instanceof BrowserConnectionError;
-      const code =
-        known && MESSAGES[error.code] ? error.code : "connector_unavailable";
-      return respond(
-        {
-          ok: false,
-          code,
-          message:
-            MESSAGES[code] ??
-            "The local connector could not complete the operation.",
-          ...(error instanceof BrowserConnectionError && error.stage
-            ? { stage: error.stage }
-            : {}),
-          ...(known && error.outcome ? { outcome: error.outcome } : {}),
-        },
-        true,
+      return (
+        (await Promise.race([
+          options.failureLog?.save(record, logging.signal),
+          new Promise<false>((resolve) => {
+            timer = setTimeout(() => {
+              logging.abort();
+              resolve(false);
+            }, 1500);
+          }),
+        ])) === true
       );
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
     }
   };
+  const receipt = (record: VerboseDiagnostic | undefined, saved: boolean) => ({
+    operationId: diagnosticOperationId(),
+    traceSaved: saved,
+    available: record?.available ?? false,
+    truncated: record?.truncated ?? false,
+  });
+  const verboseDiagnostics = z
+    .boolean()
+    .optional()
+    .describe(
+      "Save bounded credential-redacted payloads locally for this call only, including personal data. Enable only on explicit user request; never retry a write to obtain diagnostics.",
+    );
+  const guarded = (
+    operation: DiagnosticOperation,
+    work: () => Promise<Record<string, unknown>>,
+    verbose = false,
+  ) =>
+    runDiagnostic(
+      operation,
+      async () => {
+        try {
+          options.updates?.touch();
+        } catch {
+          /* Optional update check. */
+        }
+        try {
+          const body = await work();
+          if (!verbose) return respond(body);
+          const record = verboseDiagnostic("success");
+          const saved = record ? await save(record) : false;
+          return respond({
+            ...body,
+            verboseDiagnostic: receipt(record, saved),
+          });
+        } catch (error) {
+          const known =
+            error instanceof FlockbotError ||
+            error instanceof BrowserConnectionError;
+          const code =
+            known && MESSAGES[error.code]
+              ? error.code
+              : "connector_unavailable";
+          const diagnostic = failureDiagnostic(error);
+          const record = verboseDiagnostic("failure", diagnostic);
+          diagnostic.traceSaved = await save(record ?? diagnostic);
+          return respond(
+            {
+              ok: false,
+              code,
+              message:
+                MESSAGES[code] ??
+                "The local connector could not complete the operation.",
+              ...(error instanceof BrowserConnectionError && error.stage
+                ? { stage: error.stage }
+                : {}),
+              ...(known && error.outcome ? { outcome: error.outcome } : {}),
+              diagnostic,
+              ...(verbose
+                ? {
+                    verboseDiagnostic: receipt(
+                      record,
+                      diagnostic.traceSaved && !!record,
+                    ),
+                  }
+                : {}),
+            },
+            true,
+          );
+        }
+      },
+      undefined,
+      false,
+      verbose,
+    );
   const groupId = z
     .string()
     .min(1)
@@ -233,17 +309,22 @@ export function createFlocknoteServer(
       title: "Check local Flocknote connection",
       description:
         "Report saved local connection state without opening a browser or making an authentication request. Use for connection questions or after sign-in; ordinary work needs no preliminary status call. Ready means sign-in previously completed, not a fresh live check.",
+      inputSchema: { verboseDiagnostics },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async (extra) =>
-      guarded(async () => {
-        const status = await connection.status({ signal: extra.signal });
-        return {
-          ok: true,
-          ...status,
-          message: statusMessage(status),
-        };
-      }),
+    async ({ verboseDiagnostics }, extra) =>
+      guarded(
+        "status",
+        async () => {
+          const status = await connection.status({ signal: extra.signal });
+          return {
+            ok: true,
+            ...status,
+            message: statusMessage(status),
+          };
+        },
+        verboseDiagnostics,
+      ),
   );
   server.registerTool(
     "connect",
@@ -252,6 +333,7 @@ export function createFlocknoteServer(
       description:
         "Use when sign-in is needed for the user's request, or to connect/reconnect. Opens Flocknote's real website in a dedicated local browser and waits briefly for sign-in. On ready, continue the original task without asking for a done message. If still pending, finish sign-in and check status later. Takes no credentials. Never repeat a write with unknown outcome.",
       inputSchema: {
+        verboseDiagnostics,
         subdomain: z
           .string()
           .min(1)
@@ -264,24 +346,28 @@ export function createFlocknoteServer(
         openWorldHint: true,
       },
     },
-    async ({ subdomain }, extra) =>
-      guarded(async () => {
-        const status = await connectForTurn(
-          connection,
-          subdomain,
-          extra.signal,
-          waitMs,
-          pollMs,
-        );
-        return {
-          ok: true,
-          ...status,
-          message:
-            status.state === "ready"
-              ? "Sign-in is complete. Continue the user's original request now without asking them to confirm sign-in. Never repeat a write with unknown outcome."
-              : statusMessage(status),
-        };
-      }),
+    async ({ subdomain, verboseDiagnostics }, extra) =>
+      guarded(
+        "connect",
+        async () => {
+          const status = await connectForTurn(
+            connection,
+            subdomain,
+            extra.signal,
+            waitMs,
+            pollMs,
+          );
+          return {
+            ok: true,
+            ...status,
+            message:
+              status.state === "ready"
+                ? "Sign-in is complete. Continue the user's original request now without asking them to confirm sign-in. Never repeat a write with unknown outcome."
+                : statusMessage(status),
+          };
+        },
+        verboseDiagnostics,
+      ),
   );
   server.registerTool(
     "groups",
@@ -289,17 +375,21 @@ export function createFlocknoteServer(
       title: "List parish groups",
       description:
         "Use when the group choice is unclear or to list parish groups. Reuses discovery for up to 60 seconds; refresh forces discovery. Trusts the saved session without a preflight check. Returns only identifiers, names and Everyone status.",
-      inputSchema: { refresh: z.boolean().optional() },
+      inputSchema: { refresh: z.boolean().optional(), verboseDiagnostics },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async ({ refresh }, extra) =>
-      guarded(async () => ({
-        ok: true,
-        groups: await connection.groups({
-          signal: extra.signal,
-          ...(refresh === undefined ? {} : { refresh }),
+    async ({ refresh, verboseDiagnostics }, extra) =>
+      guarded(
+        "groups",
+        async () => ({
+          ok: true,
+          groups: await connection.groups({
+            signal: extra.signal,
+            ...(refresh === undefined ? {} : { refresh }),
+          }),
         }),
-      })),
+        verboseDiagnostics,
+      ),
   );
   server.registerTool(
     "subscriber_count",
@@ -307,17 +397,21 @@ export function createFlocknoteServer(
       title: "Count subscribers in a group",
       description:
         "Use when the user asks how many subscribers a selected group has. Supply its identifier from groups. Fetches a current count without member records.",
-      inputSchema: { groupId },
+      inputSchema: { groupId, verboseDiagnostics },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async ({ groupId }, extra) =>
-      guarded(async () => ({
-        ok: true,
-        groupId,
-        subscriberCount: await connection.count(groupId, {
-          signal: extra.signal,
+    async ({ groupId, verboseDiagnostics }, extra) =>
+      guarded(
+        "subscriber_count",
+        async () => ({
+          ok: true,
+          groupId,
+          subscriberCount: await connection.count(groupId, {
+            signal: extra.signal,
+          }),
         }),
-      })),
+        verboseDiagnostics,
+      ),
   );
   server.registerTool(
     "find_members",
@@ -326,6 +420,7 @@ export function createFlocknoteServer(
       description:
         "Find existing active parish members by general text search. Select groupId or a unique groupName, or omit both to search dynamically discovered Everyone. Returns at most 50 identity candidates and scoped result counts; fields optionally selects email/mobilePhone/joinedOn. joinedOn is the reported subscription calendar date (YYYY-MM-DD or null) in the searched group; explicitly select the requested group for join-date questions. Continue directly only with exactMatchUserId from complete results (unique exact name or selected email). For ambiguous names, request email first and mobilePhone if needed, then clarify using distinguishing contacts. Member IDs are internal; do not ask users to choose numeric IDs. No preliminary status check and no automatic retry.",
       inputSchema: {
+        verboseDiagnostics,
         searchTerm: z.string().min(1).max(256),
         groupId: groupId.optional(),
         groupName: z.string().min(1).max(256).optional(),
@@ -337,11 +432,15 @@ export function createFlocknoteServer(
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async (input, extra) =>
-      guarded(async () => ({
-        ok: true,
-        ...(await connection.findMembers(input, { signal: extra.signal })),
-      })),
+    async ({ verboseDiagnostics, ...input }, extra) =>
+      guarded(
+        "find_members",
+        async () => ({
+          ok: true,
+          ...(await connection.findMembers(input, { signal: extra.signal })),
+        }),
+        verboseDiagnostics,
+      ),
   );
   server.registerTool(
     "member",
@@ -350,6 +449,7 @@ export function createFlocknoteServer(
       description:
         "Read one identified parish member by userId from a resolved search or known record. Returns only identity by default; fields optionally selects email and/or mobilePhone with stored-value status. Missing fields are unavailable; pending contacts never replace stored ones. A stored unverified or bad address does not establish delivery. Uses the saved session with no preliminary status check or automatic retry.",
       inputSchema: {
+        verboseDiagnostics,
         userId: groupId,
         fields: z
           .array(z.enum(["email", "mobilePhone"]))
@@ -358,13 +458,17 @@ export function createFlocknoteServer(
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async ({ userId, fields }, extra) =>
-      guarded(async () => ({
-        ok: true,
-        member: await connection.member(userId, fields, {
-          signal: extra.signal,
+    async ({ userId, fields, verboseDiagnostics }, extra) =>
+      guarded(
+        "member",
+        async () => ({
+          ok: true,
+          member: await connection.member(userId, fields, {
+            signal: extra.signal,
+          }),
         }),
-      })),
+        verboseDiagnostics,
+      ),
   );
   server.registerTool(
     "member_groups",
@@ -372,14 +476,18 @@ export function createFlocknoteServer(
       title: "List a member's group subscriptions",
       description:
         "Read a chosen user's explicitly subscribed groups, returning at most 50 IDs/names with observed/returned counts and truncation. A proxy-only relationship is not a subscription. Complete is false because this response does not establish an exhaustive view; absence is not proof of nonmembership. Takes a resolved userId, with no preliminary status check or automatic retry.",
-      inputSchema: { userId: groupId },
+      inputSchema: { userId: groupId, verboseDiagnostics },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async ({ userId }, extra) =>
-      guarded(async () => ({
-        ok: true,
-        ...(await connection.memberGroups(userId, { signal: extra.signal })),
-      })),
+    async ({ userId, verboseDiagnostics }, extra) =>
+      guarded(
+        "member_groups",
+        async () => ({
+          ok: true,
+          ...(await connection.memberGroups(userId, { signal: extra.signal })),
+        }),
+        verboseDiagnostics,
+      ),
   );
   server.registerTool(
     "group_members",
@@ -388,6 +496,7 @@ export function createFlocknoteServer(
       description:
         "List a group's subscribed members by groupId or a unique case-insensitive groupName, such as Youth Ministry. Returns one page of up to 100 names/internal IDs; fields optionally selects email/mobilePhone/joinedOn only when needed. For join-date questions request joinedOn, the selected group's reported subscription calendar date (YYYY-MM-DD or null). Omitted joinedOn means not requested; it does not mean no date exists. Start at offset 0. When hasMore is true, continue with nextOffset, the returned groupId and the same fields; do not call a partial page the whole group. Stop on repeated records or an error and report a partial list. Excludes pending and unsubscribed people; visibility is limited by the login. Uses the saved session with no preflight or automatic retry.",
       inputSchema: {
+        verboseDiagnostics,
         groupId: groupId.optional(),
         groupName: z.string().min(1).max(256).optional(),
         offset: z
@@ -403,11 +512,15 @@ export function createFlocknoteServer(
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async (input, extra) =>
-      guarded(async () => ({
-        ok: true,
-        ...(await connection.groupMembers(input, { signal: extra.signal })),
-      })),
+    async ({ verboseDiagnostics, ...input }, extra) =>
+      guarded(
+        "group_members",
+        async () => ({
+          ok: true,
+          ...(await connection.groupMembers(input, { signal: extra.signal })),
+        }),
+        verboseDiagnostics,
+      ),
   );
   server.registerTool(
     "member_communication_status",
@@ -416,6 +529,7 @@ export function createFlocknoteServer(
       description:
         "Explain observed email/SMS settings and contact concerns for one resolved userId and exactly one groupId or unique groupName. Returns membership, stored group preferences, contact availability/verification, bad-email and reported SMS STOP flags, warnings and limitations. Missing facts remain unknown, not false. Contact values are omitted unless fields selects email/mobilePhone. No suppression lookup or changes; settings and an empty warnings list never prove delivery. Separate reads are not an atomic snapshot. Uses the saved session without a preliminary status check or automatic retry.",
       inputSchema: {
+        verboseDiagnostics,
         userId: groupId,
         groupId: groupId.optional(),
         groupName: z.string().min(1).max(256).optional(),
@@ -426,13 +540,17 @@ export function createFlocknoteServer(
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async (input, extra) =>
-      guarded(async () => ({
-        ok: true,
-        ...(await connection.memberCommunicationStatus(input, {
-          signal: extra.signal,
-        })),
-      })),
+    async ({ verboseDiagnostics, ...input }, extra) =>
+      guarded(
+        "member_communication_status",
+        async () => ({
+          ok: true,
+          ...(await connection.memberCommunicationStatus(input, {
+            signal: extra.signal,
+          })),
+        }),
+        verboseDiagnostics,
+      ),
   );
   server.registerTool(
     "email_analytics",
@@ -442,6 +560,7 @@ export function createFlocknoteServer(
         "Read Flocknote's reported aggregate counts using exactly one emailId, groupId or unique groupName. An explicit ID may select an older email; a group selects the newest original send, not latest resend, independently of recipient inclusion. Unsupported or ambiguous group selection remains unknown without older fallback; separate reads are not atomic. Returns normalized selector, resolved group/email identity, raw publication timestamp, observation time and nine categories; missing categories are unknown, not zero. Counts do not establish unique recipients, delivery or human reading, and cannot be attributed to an individual resend. No derived rates, recipients, message content, preflight, automatic retries or writes. Explicit non-email notes return unsupported_email_type with no counts.",
       inputSchema: z
         .object({
+          verboseDiagnostics,
           emailId: groupId.optional(),
           groupId: groupId.optional(),
           groupName: z.string().min(1).max(256).optional(),
@@ -449,11 +568,15 @@ export function createFlocknoteServer(
         .strict(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async (input, extra) =>
-      guarded(async () => ({
-        ok: true,
-        ...(await connection.emailAnalytics(input, { signal: extra.signal })),
-      })),
+    async ({ verboseDiagnostics, ...input }, extra) =>
+      guarded(
+        "email_analytics",
+        async () => ({
+          ok: true,
+          ...(await connection.emailAnalytics(input, { signal: extra.signal })),
+        }),
+        verboseDiagnostics,
+      ),
   );
   server.registerTool(
     "member_latest_email_status",
@@ -462,19 +585,24 @@ export function createFlocknoteServer(
       description:
         "Check one resolved userId against the group's newest distinct originally sent email, using exactly one groupId or unique groupName. Resends do not change selection; never fall back to an older email addressed to the member. Returns recorded_open, reported_unopened or unknown with a reason, email ID and raw publication timestamp. Supports the observed ordinary-email feed; mixed, ambiguous or unsupported feeds and send histories remain unknown. A surname of at least three characters is required for the observed analytics search; matches use stable member IDs, not names. Missing matches never prove non-recipient status. Opens do not prove human reading or delivery, and separate reads are not atomic. No contacts, message content, preflight, automatic retry or writes.",
       inputSchema: {
+        verboseDiagnostics,
         userId: groupId,
         groupId: groupId.optional(),
         groupName: z.string().min(1).max(256).optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async (input, extra) =>
-      guarded(async () => ({
-        ok: true,
-        ...(await connection.memberLatestEmailStatus(input, {
-          signal: extra.signal,
-        })),
-      })),
+    async ({ verboseDiagnostics, ...input }, extra) =>
+      guarded(
+        "member_latest_email_status",
+        async () => ({
+          ok: true,
+          ...(await connection.memberLatestEmailStatus(input, {
+            signal: extra.signal,
+          })),
+        }),
+        verboseDiagnostics,
+      ),
   );
   server.registerTool(
     "is_member",
@@ -483,19 +611,24 @@ export function createFlocknoteServer(
       description:
         "Check one resolved userId against exactly one groupId or a unique case-insensitive groupName. Returns membership as member, not_member (explicit false/proxy-only relationship), or unknown (group absent from the authorized response). Errors are never negative membership. Checks all validated rows before list clipping, with no preliminary status check or automatic retry.",
       inputSchema: {
+        verboseDiagnostics,
         userId: groupId,
         groupId: groupId.optional(),
         groupName: z.string().min(1).max(256).optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async ({ userId, ...selector }, extra) =>
-      guarded(async () => ({
-        ok: true,
-        ...(await connection.isMember(userId, selector, {
-          signal: extra.signal,
-        })),
-      })),
+    async ({ userId, verboseDiagnostics, ...selector }, extra) =>
+      guarded(
+        "is_member",
+        async () => ({
+          ok: true,
+          ...(await connection.isMember(userId, selector, {
+            signal: extra.signal,
+          })),
+        }),
+        verboseDiagnostics,
+      ),
   );
   server.registerTool(
     "add_member",
@@ -504,6 +637,7 @@ export function createFlocknoteServer(
       description:
         "Use only for an explicitly requested membership addition. Supply exactly one of a known groupId or the user's groupName for a case-insensitive unique match; a unique name is resolved in this call without a separate group/status lookup. Can change membership and cause Flocknote notifications. Returns only success. Never automatically retry an unknown write outcome.",
       inputSchema: {
+        verboseDiagnostics,
         groupId: groupId.optional(),
         groupName: z.string().min(1).max(256).optional(),
         firstName: z.string().min(1).max(256),
@@ -518,19 +652,27 @@ export function createFlocknoteServer(
         openWorldHint: true,
       },
     },
-    async ({ groupId, groupName, ...member }, extra) =>
-      guarded(async () => {
-        if (Boolean(groupId) === Boolean(groupName))
-          throw new FlockbotError("invalid_input", undefined, "not_submitted");
-        const added = groupId
-          ? await connection.addMember(groupId, member, {
-              signal: extra.signal,
-            })
-          : await connection.addMemberByName(groupName ?? "", member, {
-              signal: extra.signal,
-            });
-        return { ok: true, ...added };
-      }),
+    async ({ groupId, groupName, verboseDiagnostics, ...member }, extra) =>
+      guarded(
+        "add_member",
+        async () => {
+          if (Boolean(groupId) === Boolean(groupName))
+            throw new FlockbotError(
+              "invalid_input",
+              undefined,
+              "not_submitted",
+            );
+          const added = groupId
+            ? await connection.addMember(groupId, member, {
+                signal: extra.signal,
+              })
+            : await connection.addMemberByName(groupName ?? "", member, {
+                signal: extra.signal,
+              });
+          return { ok: true, ...added };
+        },
+        verboseDiagnostics,
+      ),
   );
   server.server.onclose = () => {
     try {
@@ -548,6 +690,7 @@ export async function serveFlocknote(
 ): Promise<void> {
   const server = createFlocknoteServer(connection, {
     updates: new UpdateChecker(),
+    failureLog: new FailureLog(),
   });
   const close = async () => {
     await connection.close();

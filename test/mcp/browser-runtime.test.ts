@@ -1,6 +1,17 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  realpathSync,
+  writeFileSync,
+  existsSync,
+} from "node:fs";
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import net from "node:net";
+import { build } from "esbuild";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { chromium, type BrowserContext } from "playwright";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -17,6 +28,10 @@ import { profileResponse } from "../fixtures/member-profile.js";
 import { membershipResponse } from "../fixtures/member-groups.js";
 import { rosterPage, rosterRow } from "../fixtures/group-members.js";
 import { latestEmailResponses } from "../fixtures/latest-email.js";
+import { safeDiagnostic } from "../../adapters/mcp/src/diagnostics.js";
+import { FailureLog } from "../../adapters/mcp/src/failure-log.js";
+import { BrowserService } from "../../adapters/mcp/src/browser-broker.js";
+import { waitFor } from "./support.js";
 
 /** Every page/API request is fulfilled here. DNS is disabled in the browser too. */
 async function fixture({ onTestFinished, expect }: TestContext) {
@@ -31,9 +46,18 @@ async function fixture({ onTestFinished, expect }: TestContext) {
     rejectWrite: false,
     redirect: false,
     oversized: false,
+    countResponse: null as {
+      status: number;
+      contentType: string;
+      body: string;
+    } | null,
     external: 0,
     restoredParishPage: false,
     searchForms: [] as string[],
+    responses: {} as Record<
+      string,
+      { status: number; body: string; delayMs?: number }
+    >,
   };
   let context: BrowserContext;
   const factory: BrowserFactory = (options) =>
@@ -62,6 +86,19 @@ async function fixture({ onTestFinished, expect }: TestContext) {
         }
         const path = url.pathname.slice(1);
         visits.push({ path, method: request.method() });
+        const override = state.responses[path];
+        if (override) {
+          if (override.delayMs)
+            await new Promise((resolve) =>
+              setTimeout(resolve, override.delayMs),
+            );
+          await route.fulfill({
+            status: override.status,
+            body: override.body,
+            contentType: "application/json",
+          });
+          return;
+        }
         const json = (body: unknown) =>
           route.fulfill({
             contentType: "application/json",
@@ -175,7 +212,8 @@ async function fixture({ onTestFinished, expect }: TestContext) {
           );
           await json(response);
         } else if (path === "group/101/getSubscriberCount") {
-          if (state.redirect)
+          if (state.countResponse) await route.fulfill(state.countResponse);
+          else if (state.redirect)
             await route.fulfill({
               status: 302,
               headers: { Location: "https://outside.invalid/" },
@@ -228,6 +266,7 @@ async function fixture({ onTestFinished, expect }: TestContext) {
     visits,
     state,
     signIn,
+    emailResponses,
     context: () => context,
     origin,
   };
@@ -237,6 +276,641 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
   "real Chromium with offline Flocknote fixtures",
   { concurrent: true },
   () => {
+    it("runs verbose reads, writes and cancellation through MCP and a real Chromium broker process", {
+      concurrent: false,
+      timeout: 60_000,
+    }, async (context) => {
+      const { expect, onTestFinished } = context;
+      const profile = realpathSync(
+        mkdtempSync(join(tmpdir(), "flockbot-verbose-browser-")),
+      );
+      writeFileSync(
+        join(profile, "connection.json"),
+        JSON.stringify({
+          version: 1,
+          generation: randomUUID(),
+          parish: "example-parish",
+          userId: "201",
+          state: "ready",
+        }),
+        { mode: 0o600 },
+      );
+      const entry = join(profile, "worker.mjs");
+      const playwright = resolve("node_modules/playwright/index.mjs");
+      await build({
+        entryPoints: ["test/mcp/fixtures/verbose-browser-worker.ts"],
+        outfile: entry,
+        bundle: true,
+        platform: "node",
+        target: "node22",
+        format: "esm",
+        alias: { playwright },
+        external: [playwright],
+        logLevel: "silent",
+        banner: {
+          js: 'import {createRequire} from "node:module"; const require=createRequire(import.meta.url);',
+        },
+      });
+      // Permit only the disposable owner's authenticated Unix socket.
+      const blocked = vi
+        .mocked(net.Socket.prototype.connect)
+        .getMockImplementation();
+      vi.mocked(net.Socket.prototype.connect).mockRestore();
+      const native = net.Socket.prototype.connect;
+      const socket = vi
+        .spyOn(net.Socket.prototype, "connect")
+        .mockImplementation(function (this: net.Socket, ...args: unknown[]) {
+          const expected = JSON.parse(
+            readFileSync(join(profile, "broker.json"), "utf8"),
+          ).address;
+          if ((args[0] as { path?: string })?.path !== expected)
+            throw new Error("Unexpected test socket");
+          return Reflect.apply(native, this, args) as net.Socket;
+        });
+      const service = new BrowserService({
+        entry,
+        profile,
+        launch: () => {
+          spawn(process.execPath, [entry, profile], { stdio: "ignore" });
+        },
+      });
+      const log = new FailureLog({
+        directory: join(profile, "diagnostics-v2"),
+      });
+      const client = new Client({ name: "fictional-full-path", version: "1" });
+      onTestFinished(async () => {
+        rmSync(join(profile, "hold"), { force: true });
+        await client.close();
+        await service.shutdown();
+        await waitFor(() =>
+          expect(existsSync(join(profile, "broker.json"))).toBe(false),
+        );
+        socket.mockRestore();
+        if (blocked)
+          vi.spyOn(net.Socket.prototype, "connect").mockImplementation(blocked);
+        rmSync(profile, { recursive: true, force: true });
+      });
+      const server = createFlocknoteServer(service, { failureLog: log });
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      await server.connect(a);
+      await client.connect(b);
+      const reads = await Promise.all([
+        client.callTool({
+          name: "subscriber_count",
+          arguments: { groupId: "101", verboseDiagnostics: true },
+        }),
+        client.callTool({
+          name: "subscriber_count",
+          arguments: { groupId: "102" },
+        }),
+      ]);
+      expect(reads[0]?.structuredContent).toMatchObject({
+        code: "invalid_response",
+        verboseDiagnostic: { available: true, traceSaved: true },
+      });
+      expect(reads[1]?.structuredContent).toEqual({
+        ok: true,
+        groupId: "102",
+        subscriberCount: 9,
+      });
+      expect(JSON.stringify(reads)).not.toMatch(/1,23|alex@example|EXCLUDE_ME/);
+      const saved = () =>
+        JSON.parse(
+          readFileSync(join(profile, "diagnostics-v2/failures.jsonl"), "utf8")
+            .trim()
+            .split("\n")
+            .at(-1) ?? "null",
+        );
+      expect(
+        readFileSync(join(profile, "diagnostics-v2/failures.jsonl"), "utf8")
+          .trim()
+          .split("\n"),
+      ).toHaveLength(1);
+      expect(JSON.parse(saved().exchanges[0].response.json)).toEqual({
+        subscriberCount: "1,23",
+        email: "alex@example.test",
+        PHPSESSID: "[redacted]",
+      });
+      const args = {
+        groupId: "102",
+        firstName: "Alex",
+        lastName: "Example",
+        email: "alex@example.test",
+        verboseDiagnostics: true,
+      };
+      const written = await client.callTool({
+        name: "add_member",
+        arguments: args,
+      });
+      expect(written.structuredContent).toMatchObject({
+        ok: true,
+        verboseDiagnostic: { traceSaved: true, available: true },
+      });
+      const writeTrace = saved();
+      expect(writeTrace.exchanges).toHaveLength(1);
+      expect(JSON.parse(writeTrace.exchanges[0].request.json)).toMatchObject({
+        email: ["alex@example.test"],
+        fname: ["Alex"],
+      });
+      expect(JSON.stringify(writeTrace)).not.toContain("EXCLUDE_ME_73");
+      writeFileSync(join(profile, "reject-write"), "1");
+      const rejected = await client.callTool({
+        name: "add_member",
+        arguments: args,
+      });
+      expect(rejected.structuredContent).toMatchObject({
+        ok: false,
+        outcome: "unknown",
+        verboseDiagnostic: { traceSaved: true },
+      });
+      writeFileSync(join(profile, "hold"), "1");
+      const abort = new AbortController();
+      const pending = client.callTool(
+        {
+          name: "subscriber_count",
+          arguments: { groupId: "103", verboseDiagnostics: true },
+        },
+        undefined,
+        { signal: abort.signal },
+      );
+      const rejection = expect(pending).rejects.toThrow();
+      await waitFor(() =>
+        expect(readFileSync(join(profile, "events"), "utf8")).toContain(
+          "group/103/getSubscriberCount",
+        ),
+      );
+      abort.abort();
+      await rejection;
+      await waitFor(() =>
+        expect(saved()).toMatchObject({
+          outcome: "failure",
+          available: false,
+          diagnostic: { final: { code: "operation_cancelled" } },
+        }),
+      );
+      rmSync(join(profile, "hold"));
+      // A subsequent ordinary read cannot inherit capture from the cancelled call.
+      const after = await client.callTool({
+        name: "subscriber_count",
+        arguments: { groupId: "102" },
+      });
+      expect(after.structuredContent).toEqual({
+        ok: true,
+        groupId: "102",
+        subscriberCount: 9,
+      });
+      for (const verboseDiagnostics of [true, false]) {
+        const email = await client.callTool({
+          name: "member_latest_email_status",
+          arguments: { userId: "301", groupId: "101", verboseDiagnostics },
+        });
+        expect(email.structuredContent).toMatchObject({
+          ok: false,
+          code: "invalid_response",
+          diagnostic: {
+            failure: {
+              endpoint: "group/{id}/notes",
+              reason: "unexpected_html",
+            },
+            authentication: "authenticated",
+          },
+        });
+        expect(JSON.stringify(email)).not.toMatch(
+          /data-date|EXCLUDE_ME_73|Draft|Sent by/,
+        );
+        const trace = saved();
+        if (verboseDiagnostics) {
+          expect(trace.exchanges).toHaveLength(2);
+          expect(trace.exchanges[0].response).toMatchObject({
+            state: "captured",
+            format: "html",
+          });
+          const elements = JSON.parse(
+            trace.exchanges[0].response.json,
+          ).elements;
+          expect(
+            elements
+              .filter((element: { attributes: Record<string, string> }) =>
+                Object.hasOwn(element.attributes, "data-date"),
+              )
+              .map(
+                (element: { attributes: Record<string, string> }) =>
+                  element.attributes["data-date"],
+              ),
+          ).toEqual(["1800000000", "0"]);
+          expect(trace.exchanges[0].response.json).toContain("Draft");
+          expect(email.structuredContent).toMatchObject({
+            verboseDiagnostic: { traceSaved: true, available: true },
+          });
+        } else {
+          expect(trace.exchanges).toBeUndefined();
+          expect(JSON.stringify(trace)).not.toMatch(/data-date|Draft|Sent by/);
+        }
+      }
+      const visits = readFileSync(join(profile, "events"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(visits).toEqual([
+        { path: "group/101/getSubscriberCount", method: "GET" },
+        { path: "group/102/getSubscriberCount", method: "GET" },
+        { path: "group/102/addToGroupByAdmin", method: "POST" },
+        { path: "group/102/addToGroupByAdmin", method: "POST" },
+        { path: "group/103/getSubscriberCount", method: "GET" },
+        { path: "group/102/getSubscriberCount", method: "GET" },
+        { path: "group/101/notes", method: "GET" },
+        { path: "user/userData", method: "GET" },
+        { path: "group/101/notes", method: "GET" },
+        { path: "user/userData", method: "GET" },
+      ]);
+      expect(existsSync(join(profile, "external"))).toBe(false);
+      expect(
+        readFileSync(join(profile, "diagnostics-v2/failures.jsonl"), "utf8"),
+      ).not.toMatch(/EXCLUDE_ME_73|normal@example/);
+    });
+
+    it("captures rejected counts locally only when explicitly requested, without additional requests", async (context) => {
+      const { expect, onTestFinished } = context;
+      const f = await fixture(context);
+      await f.signIn();
+      const failureLog = new FailureLog({
+        directory: join(realpathSync(f.profile), "diagnostics-v2"),
+      });
+      const server = createFlocknoteServer(f.connection, { failureLog });
+      const client = new Client({ name: "fictional-verbose", version: "1" });
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      await server.connect(a);
+      await client.connect(b);
+      onTestFinished(() => client.close());
+      for (const [verboseDiagnostics, subscriberCount, expected] of [
+        [true, "1,23", null],
+        [false, "2,34", null],
+        [true, 7, 7],
+        [true, "4,716", 4716],
+      ] as const) {
+        f.state.countResponse = {
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            subscriberCount,
+            email: "alex@example.test",
+            credentials: { token: "CREDENTIAL_SENTINEL" },
+          }),
+        };
+        f.visits.length = 0;
+        const result = await client.callTool({
+          name: "subscriber_count",
+          arguments: { groupId: "101", verboseDiagnostics },
+        });
+        expect(result.structuredContent).toMatchObject(
+          expected !== null
+            ? { ok: true, subscriberCount: expected }
+            : {
+                ok: false,
+                code: "invalid_response",
+                diagnostic: { failure: { reason: "subscriber_count_invalid" } },
+              },
+        );
+        expect(JSON.stringify(result)).not.toMatch(
+          /alex@example|CREDENTIAL_SENTINEL|1,23|2,34|4,716/,
+        );
+        expect(f.visits).toEqual([
+          { path: "group/101/getSubscriberCount", method: "GET" },
+        ]);
+        const saved = JSON.parse(
+          (await failureLog.read())?.trim().split("\n").at(-1) ?? "null",
+        );
+        if (verboseDiagnostics) {
+          expect(saved).toMatchObject({
+            version: 2,
+            kind: "verbose",
+            traceSaved: true,
+            available: true,
+          });
+          expect(saved.exchanges).toHaveLength(1);
+          expect(JSON.parse(saved.exchanges[0].response.json)).toEqual({
+            subscriberCount,
+            email: "alex@example.test",
+            credentials: "[redacted]",
+          });
+          expect(result.structuredContent).toMatchObject({
+            verboseDiagnostic: {
+              operationId: saved.operationId,
+              traceSaved: true,
+            },
+          });
+        } else {
+          expect(saved.version).toBe(1);
+          expect(JSON.stringify(saved)).not.toMatch(/alex@example|2,34/);
+        }
+      }
+      f.state.countResponse = {
+        status: 200,
+        contentType: "text/html",
+        body: "<form>CREDENTIAL_SENTINEL</form>",
+      };
+      f.visits.length = 0;
+      await client.callTool({
+        name: "subscriber_count",
+        arguments: { groupId: "101", verboseDiagnostics: true },
+      });
+      const auth = JSON.parse(
+        (await failureLog.read())?.trim().split("\n").at(-1) ?? "null",
+      );
+      expect(
+        auth.exchanges.map((entry: { response: unknown }) => entry.response),
+      ).toEqual([
+        expect.objectContaining({ state: "captured", format: "html" }),
+        { state: "omitted", reason: "authentication" },
+      ]);
+      expect(JSON.stringify(auth)).not.toContain("CREDENTIAL_SENTINEL");
+      expect(f.visits.map((r) => r.path)).toEqual([
+        "group/101/getSubscriberCount",
+        "user/userData",
+      ]);
+      expect(f.state.external).toBe(0);
+    }, 60_000);
+
+    it("distinguishes transport, model and authentication failures without leaking or replaying", async (context) => {
+      const { expect, onTestFinished } = context;
+      const f = await fixture(context);
+      await f.signIn();
+      const failureLog = new FailureLog({
+        directory: join(realpathSync(f.profile), "diagnostics-v1"),
+      });
+      const server = createFlocknoteServer(f.connection, { failureLog });
+      const client = new Client({
+        name: "fictional-diagnostics",
+        version: "1",
+      });
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      await server.connect(a);
+      await client.connect(b);
+      onTestFinished(() => client.close());
+      for (const [body, contentType, status, reason, diagnosis] of [
+        [
+          '{"subscriberCount":"PRIVATE"}',
+          "application/json",
+          200,
+          "subscriber_count_invalid",
+          "not_attempted",
+        ],
+        [
+          '{"PRIVATE":',
+          "application/json",
+          200,
+          "invalid_json",
+          "not_attempted",
+        ],
+        ["", "application/json", 200, "empty_response", "not_attempted"],
+        ["PRIVATE", "text/plain", 503, "http_rejection", "not_attempted"],
+        [
+          '{"success":false}',
+          "application/json",
+          200,
+          "success_false",
+          "not_attempted",
+        ],
+        [
+          "<form>PRIVATE</form>",
+          "text/html",
+          200,
+          "unexpected_html",
+          "authenticated",
+        ],
+      ] as const) {
+        f.state.countResponse = { body, contentType, status };
+        f.visits.length = 0;
+        const result = await client.callTool({
+          name: "subscriber_count",
+          arguments: { groupId: "101" },
+        });
+        expect(result.isError).toBe(true);
+        const diagnostic = safeDiagnostic(
+          (result.structuredContent as Record<string, unknown> | undefined)
+            ?.diagnostic,
+        );
+        expect(diagnostic?.failure.reason).toBe(reason);
+        expect(diagnostic?.traceSaved).toBe(true);
+        const saved = (await failureLog.read())
+          ?.trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(saved?.at(-1)).toEqual(diagnostic);
+        const stage = [
+          "subscriber_count_invalid",
+          "unexpected_html",
+          "success_false",
+        ].includes(reason)
+          ? "validation"
+          : "transport";
+        expect(diagnostic?.failure).toMatchObject({
+          stage,
+          status,
+          endpoint: "group/{id}/getSubscriberCount",
+          method: "GET",
+        });
+        expect(diagnostic?.final.stage).toBe(stage);
+        expect(diagnostic?.authentication).toBe(diagnosis);
+        expect(diagnostic?.events[0]).toMatchObject({
+          endpoint: "group/{id}/getSubscriberCount",
+          method: "GET",
+          status,
+          contentType:
+            contentType === "application/json"
+              ? "json"
+              : contentType === "text/html"
+                ? "html"
+                : "text",
+        });
+        if (status === 200)
+          expect(diagnostic?.events[0]?.bytes).toBe(Buffer.byteLength(body));
+        expect(f.visits.map((r) => r.path)).toEqual(
+          diagnosis === "authenticated"
+            ? ["group/101/getSubscriberCount", "user/userData"]
+            : ["group/101/getSubscriberCount"],
+        );
+        expect(JSON.stringify(diagnostic)).not.toMatch(
+          /PRIVATE|example-parish|fictional-browser-session|group\/101/,
+        );
+      }
+      f.state.countResponse = null;
+      f.state.expired = true;
+      f.visits.length = 0;
+      const expired = await client.callTool({
+        name: "subscriber_count",
+        arguments: { groupId: "101" },
+      });
+      expect(expired.structuredContent).toMatchObject({
+        code: "authentication_required",
+        diagnostic: {
+          authentication: "sign_in_required",
+          failure: { code: "upstream_rejected", status: 401 },
+          final: { code: "authentication_required" },
+        },
+      });
+      expect(f.visits.map((r) => r.path)).toEqual([
+        "group/101/getSubscriberCount",
+        "user/userData",
+      ]);
+      expect(
+        JSON.parse(
+          (await failureLog.read())?.trim().split("\n").at(-1) ?? "null",
+        ),
+      ).toEqual(
+        (expired.structuredContent as Record<string, unknown>)?.diagnostic,
+      );
+      expect(f.state.external).toBe(0);
+    }, 60_000);
+
+    it("attributes parallel transport failures and delayed model validation to their actual responses", async (context) => {
+      const { expect, onTestFinished } = context;
+      const f = await fixture(context);
+      await f.signIn();
+      const server = createFlocknoteServer(f.connection);
+      const client = new Client({ name: "fictional-provenance", version: "1" });
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      await server.connect(a);
+      await client.connect(b);
+      onTestFinished(() => client.close());
+      for (const [
+        navigationStatus,
+        navigationBody,
+        metadataStatus,
+        metadataBody,
+        endpoint,
+        reason,
+        stage,
+      ] of [
+        [
+          500,
+          "{}",
+          200,
+          '{"everyoneGroupID":101}',
+          "navigation/groups",
+          "http_rejection",
+          "transport",
+        ],
+        [
+          500,
+          "{}",
+          502,
+          "{}",
+          "navigation/groups",
+          "http_rejection",
+          "transport",
+        ],
+        [
+          200,
+          '{"success":false}',
+          200,
+          '{"everyoneGroupID":101}',
+          "navigation/groups",
+          "success_false",
+          "validation",
+        ],
+        [
+          200,
+          '{"groups":"PRIVATE"}',
+          200,
+          '{"everyoneGroupID":101}',
+          "navigation/groups",
+          "navigation_groups_shape",
+          "validation",
+        ],
+        [
+          200,
+          '{"groups":[]}',
+          200,
+          '{"everyoneGroupID":false}',
+          "network/getMetadata",
+          "expected_text",
+          "validation",
+        ],
+      ] as const) {
+        f.state.responses["navigation/groups"] = {
+          status: navigationStatus,
+          body: navigationBody,
+        };
+        f.state.responses["network/getMetadata"] = {
+          status: metadataStatus,
+          body: metadataBody,
+          delayMs: 60,
+        };
+        f.visits.length = 0;
+        const result = await client.callTool({ name: "groups", arguments: {} });
+        expect(result.structuredContent).toMatchObject({
+          diagnostic: {
+            failure: {
+              endpoint,
+              reason,
+              stage,
+              status:
+                endpoint === "navigation/groups"
+                  ? navigationStatus
+                  : metadataStatus,
+            },
+            final: { stage },
+            authentication: "not_attempted",
+          },
+        });
+        expect(f.visits.map((r) => r.path).sort()).toEqual([
+          "dashboard",
+          "navigation/groups",
+          "network/getMetadata",
+        ]);
+      }
+      const summary = f.emailResponses["note/801/analyticsSummary?ajax"] as {
+        counts: unknown;
+      };
+      summary.counts = { total: -1 };
+      f.visits.length = 0;
+      const analytics = await client.callTool({
+        name: "email_analytics",
+        arguments: { groupId: "101" },
+      });
+      expect(analytics.structuredContent).toMatchObject({
+        diagnostic: {
+          failure: {
+            endpoint: "note/{id}/analyticsSummary",
+            stage: "validation",
+            reason: "analytics_count_invalid",
+            status: 200,
+          },
+        },
+      });
+      expect(f.visits.map((r) => r.path)).toEqual([
+        "group/101/notes",
+        "note/801/analyticsSummary",
+        "note/801/analytics2",
+      ]);
+      f.emailResponses["group/101/notes?ajax&more"] = {
+        groupID: 101,
+        notes: null,
+        more: true,
+      };
+      f.visits.length = 0;
+      const malformedListing = await client.callTool({
+        name: "email_analytics",
+        arguments: { groupId: "101" },
+      });
+      expect(malformedListing.structuredContent).toMatchObject({
+        ok: false,
+        diagnostic: {
+          failure: {
+            endpoint: "group/{id}/notes",
+            method: "GET",
+            stage: "validation",
+            reason: "expected_notes_array",
+            status: 200,
+          },
+          authentication: "not_attempted",
+        },
+      });
+      expect(f.visits).toEqual([{ path: "group/101/notes", method: "GET" }]);
+      expect(f.state.external).toBe(0);
+    }, 60_000);
+
     it("lists a named group across pages through browser fetch and MCP", async (context) => {
       const { expect, onTestFinished } = context;
       const f = await fixture(context);

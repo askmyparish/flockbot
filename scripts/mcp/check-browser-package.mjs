@@ -318,6 +318,34 @@ try {
     `Offline status failed with code: ${status.structuredContent.code ?? "unknown"}`,
   );
   assert.equal(JSON.stringify(status).includes(scratch), false);
+  phase = "checking offline failure attribution";
+  const failed = await client.callTool({
+    name: "subscriber_count",
+    arguments: { groupId: "101" },
+  });
+  assert.equal(failed.structuredContent.code, "not_configured");
+  const diagnostic = failed.structuredContent.diagnostic;
+  const fingerprint = createHash("sha256")
+    .update(await readFile(runtimeEntry))
+    .digest("hex");
+  assert.equal(diagnostic.runtime.fingerprint, fingerprint);
+  assert.equal(diagnostic.browserRuntime.fingerprint, fingerprint);
+  assert.equal(diagnostic.runtime.version, CODEX_VERSION);
+  assert.equal(JSON.stringify(diagnostic).includes(scratch), false);
+  assert.equal(diagnostic.traceSaved, true);
+  const exported = execFileSync(
+    process.execPath,
+    [runtimeEntry, "diagnostics"],
+    {
+      env: environment,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  )
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert.deepEqual(exported, [diagnostic]);
   phase = "checking plugin manifests";
   for (const name of ["flockbot-macos", "flockbot-windows"]) {
     const root = resolve("plugins", name);

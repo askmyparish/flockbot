@@ -7,6 +7,7 @@ import { profileResponse } from "../../fixtures/member-profile.js";
 import { membershipResponse } from "../../fixtures/member-groups.js";
 import { rosterPage, rosterRow } from "../../fixtures/group-members.js";
 import { latestEmailResponses } from "../../fixtures/latest-email.js";
+import { recordResponse } from "../../../adapters/mcp/src/diagnostics.js";
 import {
   BrowserService,
   runBrowserBroker,
@@ -28,52 +29,77 @@ if (role === "broker") {
         close: async () => {
           appendFileSync(join(profile, "events"), "close\n");
         },
-        request: async (path, method = "GET") => {
+        request: async (path, method = "GET", body) => {
           appendFileSync(join(profile, "events"), `${method} ${path}\n`);
-          switch (path) {
-            case "user/userData":
-              if (existsSync(join(profile, "signed-out")))
-                return { success: true, userID: null, authorized: false };
-              return { success: true, userID: 201 };
-            case "dashboard":
-              return '<div id="fnReactHolder"></div>';
-            case "navigation/groups":
-              return {
-                groups: [
-                  { ID: 102, name: "Volunteers", shortname: "volunteers" },
-                ],
-              };
-            case "network/getMetadata":
-              return { everyoneGroupID: 101 };
-            case "group/101/getSubscriberCount":
-              while (existsSync(join(profile, "hold-count"))) await delay(10);
-              return { subscriberCount: 7 };
-            case "group/101/people?ajax":
-              return searchMetadata();
-            case "group/101/filter":
-              return { success: true, results: [searchRow()], resultCount: 1 };
-            case "group/102/people?ajax":
-              return rosterPage(
-                Array.from({ length: 100 }, (_, i) =>
-                  rosterRow(301 + i, "Alex", `Example${i}`),
-                ),
-                true,
-              );
-            case "group/102/people/100?ajax&more":
-              return rosterPage([rosterRow(401)], false, null);
-            case "user/301/profile":
-              return profileResponse();
-            case "user/301/groups":
-              return membershipResponse();
-            case "group/102/addToGroupByAdmin":
-              while (existsSync(join(profile, "hold"))) await delay(10);
-              return { success: true };
-            default: {
-              const responses: Record<string, unknown> = latestEmailResponses();
-              if (Object.hasOwn(responses, path)) return responses[path];
-              throw new Error("Missing fictional fixture");
+          const data = await (async () => {
+            switch (path) {
+              case "user/userData":
+                if (existsSync(join(profile, "signed-out")))
+                  return { success: true, userID: null, authorized: false };
+                return { success: true, userID: 201 };
+              case "dashboard":
+                return '<div id="fnReactHolder"></div>';
+              case "navigation/groups":
+                return {
+                  groups: [
+                    { ID: 102, name: "Volunteers", shortname: "volunteers" },
+                  ],
+                };
+              case "network/getMetadata":
+                return { everyoneGroupID: 101 };
+              case "group/101/getSubscriberCount":
+                while (existsSync(join(profile, "hold-count"))) await delay(10);
+                return {
+                  subscriberCount: existsSync(join(profile, "invalid-count"))
+                    ? "1,23"
+                    : 7,
+                  email: "alex@example.test",
+                  token: "EXCLUDE_ME_73",
+                };
+              case "group/101/people?ajax":
+                return searchMetadata();
+              case "group/101/filter":
+                return {
+                  success: true,
+                  results: [searchRow()],
+                  resultCount: 1,
+                };
+              case "group/102/people?ajax":
+                return rosterPage(
+                  Array.from({ length: 100 }, (_, i) =>
+                    rosterRow(301 + i, "Alex", `Example${i}`),
+                  ),
+                  true,
+                );
+              case "group/102/people/100?ajax&more":
+                return rosterPage([rosterRow(401)], false, null);
+              case "user/301/profile":
+                return profileResponse();
+              case "user/301/groups":
+                return membershipResponse();
+              case "group/102/addToGroupByAdmin":
+                while (existsSync(join(profile, "hold"))) await delay(10);
+                return { success: true };
+              default: {
+                const responses: Record<string, unknown> =
+                  latestEmailResponses();
+                if (Object.hasOwn(responses, path)) return responses[path];
+                throw new Error("Missing fictional fixture");
+              }
             }
-          }
+          })();
+          recordResponse(
+            path,
+            method,
+            {
+              status: 200,
+              contentType: typeof data === "string" ? "html" : "json",
+              data,
+            },
+            1,
+            body,
+          );
+          return data;
         },
       };
     },

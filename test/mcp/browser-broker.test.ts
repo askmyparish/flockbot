@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -22,7 +23,22 @@ import {
   type TestContext,
 } from "vitest";
 import { BrowserService } from "../../adapters/mcp/src/browser-broker.js";
+import {
+  requestBroker,
+  decodeFrame,
+  encodeFrame,
+} from "../../adapters/mcp/src/browser-protocol.js";
+import { FlockbotError } from "../../src/errors.js";
 import { run, waitFor } from "./support.js";
+import {
+  runDiagnostic,
+  failureDiagnostic,
+  verboseDiagnostic,
+} from "../../adapters/mcp/src/diagnostics.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { createFlocknoteServer } from "../../adapters/mcp/src/flocknote-server.js";
+import { FailureLog } from "../../adapters/mcp/src/failure-log.js";
 
 const profiles = new Set<string>();
 // Only the private sockets published in these fictional profiles are permitted.
@@ -122,11 +138,169 @@ describe.skipIf(process.platform === "win32")(
   "shared local browser owner over private IPC",
   { concurrent: true },
   () => {
+    it.for([false, true])(
+      "keeps legacy/mixed owner identity separate through authenticated IPC (%s)",
+      async (metadata, context) => {
+        const { expect, onTestFinished } = context;
+        const profile = mkdtempSync(join(tmpdir(), "flockbot-legacy-ipc-"));
+        profiles.add(profile);
+        const descriptor = {
+          version: 1 as const,
+          runtime: "0".repeat(64),
+          address: `/tmp/fb-${randomBytes(16).toString("hex")}.sock`,
+          key: randomBytes(32).toString("hex"),
+        };
+        writeFileSync(join(profile, "broker.json"), JSON.stringify(descriptor));
+        const owner = net.createServer((socket) => {
+          socket.once("data", (bytes) => {
+            const frame = decodeFrame(
+              bytes.toString().trim(),
+              descriptor.key,
+            ) as { nonce: string; operationId: string };
+            const diagnostic = runDiagnostic(
+              "groups",
+              () => failureDiagnostic(new FlockbotError("invalid_response")),
+              frame.operationId,
+              true,
+            );
+            diagnostic.browserRuntime = {
+              version: "0.1.0",
+              fingerprint: "a".repeat(64),
+            };
+            socket.end(
+              encodeFrame(
+                {
+                  nonce: frame.nonce,
+                  error: { kind: "flockbot", code: "invalid_response" },
+                  ...(metadata ? { diagnostic } : {}),
+                },
+                descriptor.key,
+              ),
+            );
+          });
+        });
+        await new Promise<void>((resolve) =>
+          owner.listen(descriptor.address, resolve),
+        );
+        onTestFinished(async () => {
+          await new Promise<void>((resolve, reject) =>
+            owner.close((error) => (error ? reject(error) : resolve())),
+          );
+          profiles.delete(profile);
+          rmSync(profile, { recursive: true, force: true });
+        });
+        const result = await runDiagnostic(
+          "groups",
+          async () => {
+            try {
+              await requestBroker(descriptor, { action: "groups" });
+            } catch (error) {
+              expect(verboseDiagnostic("failure")).toMatchObject({
+                available: false,
+                exchanges: [],
+              });
+              return failureDiagnostic(error);
+            }
+            throw new Error("Expected owner failure");
+          },
+          undefined,
+          false,
+          true,
+        );
+        expect(result.browserRuntime).toEqual(
+          metadata ? { version: "0.1.0", fingerprint: "a".repeat(64) } : null,
+        );
+        expect(result.runtime.version).not.toBe("0.1.0");
+        expect(result.final.code).toBe("invalid_response");
+      },
+    );
+
+    it("carries explicit success/failure captures through MCP, owner IPC and disk without replay", async (context) => {
+      const { expect, onTestFinished } = context;
+      const f = await fixture(context);
+      const log = new FailureLog({
+        directory: join(realpathSync(f.profile), "diagnostics-v2"),
+      });
+      const server = createFlocknoteServer(f.service, { failureLog: log });
+      const client = new Client({
+        name: "fictional-verbose-ipc",
+        version: "1",
+      });
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      await server.connect(a);
+      await client.connect(b);
+      onTestFinished(() => client.close());
+      for (const invalid of [false, true]) {
+        if (invalid) writeFileSync(join(f.profile, "invalid-count"), "1");
+        const before = f.events().filter((e) => e.startsWith("GET ")).length;
+        const result = await client.callTool({
+          name: "subscriber_count",
+          arguments: { groupId: "101", verboseDiagnostics: true },
+        });
+        expect(result.structuredContent).toMatchObject({
+          ok: !invalid,
+          verboseDiagnostic: { available: true, traceSaved: true },
+        });
+        expect(JSON.stringify(result)).not.toMatch(
+          /EXCLUDE_ME_73|alex@example|1,23/,
+        );
+        const record = JSON.parse(
+          (await log.read())?.trim().split("\n").at(-1) ?? "null",
+        );
+        expect(record).toMatchObject({
+          kind: "verbose",
+          outcome: invalid ? "failure" : "success",
+          browserRuntime: { version: record.runtime.version },
+        });
+        expect(record.exchanges).toHaveLength(1);
+        expect(JSON.parse(record.exchanges[0].response.json)).toEqual({
+          subscriberCount: invalid ? "1,23" : 7,
+          email: "alex@example.test",
+          token: "[redacted]",
+        });
+        expect(
+          f
+            .events()
+            .filter((e) => e.startsWith("GET "))
+            .slice(before),
+        ).toEqual(["GET group/101/getSubscriberCount"]);
+      }
+    });
+
+    it("preserves safe model failure details through a real broker process", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
+      // This fixture provides search metadata, not a valid roster envelope.
+      const diagnostic = await runDiagnostic("group_members", async () => {
+        try {
+          await f.service.groupMembers({ groupId: "101" });
+        } catch (error) {
+          return failureDiagnostic(error);
+        }
+        throw new Error("Expected invalid roster");
+      });
+      expect(diagnostic).toMatchObject({
+        operation: "group_members",
+        failure: { reason: "expected_member_array", code: "invalid_response" },
+        final: { reason: "expected_member_array" },
+      });
+      expect(diagnostic.browserRuntime?.version).toBe(
+        diagnostic.runtime.version,
+      );
+      expect(f.events()).not.toContain("GET user/userData");
+      expect(JSON.stringify(diagnostic)).not.toMatch(
+        /example-parish|group\/101|peopleFilterInfo/,
+      );
+    });
+
     it("routes latest email engagement through the private broker", async (context) => {
       const { expect } = context;
       const f = await fixture(context);
       await expect(
         f.service.memberLatestEmailStatus({ userId: "301" }),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      await expect(
+        f.service.emailAnalytics({ groupId: "101", emailId: "801" }),
       ).rejects.toMatchObject({ code: "invalid_input" });
       expect(f.launches()).toBe(0);
       const result = await f.service.memberLatestEmailStatus({
@@ -372,10 +546,15 @@ describe.skipIf(process.platform === "win32")(
       const f = await fixture(context);
       writeFileSync(join(f.profile, "hold-count"), "fictional");
       const controller = new AbortController();
-      const pending = f.service.count("101", { signal: controller.signal });
-      const rejected = expect(pending).rejects.toMatchObject({
-        code: "operation_cancelled",
+      const pending = runDiagnostic("subscriber_count", async () => {
+        try {
+          await f.service.count("101", { signal: controller.signal });
+        } catch (error) {
+          return failureDiagnostic(error);
+        }
+        throw new Error("Expected cancellation");
       });
+      let result: Awaited<typeof pending>;
       try {
         await waitFor(() =>
           expect(f.events().includes("GET group/101/getSubscriberCount")).toBe(
@@ -383,11 +562,19 @@ describe.skipIf(process.platform === "win32")(
           ),
         );
         controller.abort();
-        await rejected;
+        result = await pending;
+        expect(result).toMatchObject({
+          browserRuntime: null,
+          events: [],
+          authentication: "not_attempted",
+          final: { code: "operation_cancelled" },
+        });
       } finally {
         rmSync(join(f.profile, "hold-count"), { force: true });
       }
+      const snapshot = JSON.stringify(result);
       expect(await f.service.count("101")).toBe(7);
+      expect(JSON.stringify(result)).toBe(snapshot);
       expect(f.launches()).toBe(1);
     });
 
@@ -532,7 +719,10 @@ describe.skipIf(process.platform === "win32")(
         });
       // Keep the writable half open until the response; an early FIN is cancellation.
       expect(await send(frame.replace(mac, "0".repeat(64)))).toBe("");
-      await send(frame);
+      // A pre-diagnostics client omits operationId and still receives its value.
+      expect(
+        decodeFrame((await send(frame)).trim(), descriptor.key),
+      ).toMatchObject({ value: 7 });
       const before = f.events().length;
       expect(await send(frame)).toBe("");
       const arbitrary = JSON.stringify({

@@ -50,6 +50,11 @@ import { ProcessLock, ProcessLockTimeoutError } from "./process-lock.js";
 import { connectionProfileDirectory } from "./profile.js";
 import { DpapiProtector } from "./dpapi.js";
 import { SerialCoordinator } from "./serial-coordinator.js";
+import {
+  runDiagnostic,
+  failureDiagnostic,
+  verboseDiagnostic,
+} from "./diagnostics.js";
 
 const PROTOCOL = 1;
 // MCP hosts often omit TMPDIR from the child's environment. All Unix clients
@@ -70,6 +75,9 @@ function safeError(error: unknown): NonNullable<BrokerReply["error"]> {
     return {
       kind: error instanceof FlockbotError ? "flockbot" : "browser",
       code: error.code,
+      ...(error instanceof FlockbotError
+        ? { status: error.status, reason: error.reason }
+        : {}),
       ...(error.outcome ? { outcome: error.outcome } : {}),
       ...(error instanceof BrowserConnectionError && error.stage
         ? { stage: error.stage }
@@ -235,6 +243,8 @@ export async function runBrowserBroker(options: BrokerOptions): Promise<void> {
           started = true;
           let nonce: string;
           let request: BrokerRequest;
+          let operationId: string | undefined;
+          let verbose = false;
           try {
             const decoded = decodeFrame(
               buffer.slice(0, end),
@@ -242,7 +252,11 @@ export async function runBrowserBroker(options: BrokerOptions): Promise<void> {
             ) as {
               nonce: string;
               request: unknown;
+              operationId?: string;
+              verboseDiagnostics?: boolean;
             };
+            operationId = decoded.operationId;
+            verbose = decoded.verboseDiagnostics === true;
             nonce = decoded.nonce;
             if (
               !/^[a-f0-9]{64}$/.test(nonce) ||
@@ -258,128 +272,152 @@ export async function runBrowserBroker(options: BrokerOptions): Promise<void> {
           }
           active++;
           if (idle) clearTimeout(idle);
-          void (async () => {
-            try {
-              if (stopping)
-                throw new BrowserConnectionError(
-                  "broker_unavailable",
-                  request.action === "add" ? "not_submitted" : undefined,
-                );
-              let value: unknown;
-              const signal = controller.signal;
-              switch (request.action) {
-                case "ping":
-                  value = { runtime: descriptor.runtime };
-                  break;
-                case "shutdown":
-                  await stop();
-                  value = { stopped: true };
-                  break;
-                case "status":
-                  value = await connection.status({ signal });
-                  break;
-                case "connect":
-                  value = await connection.connect(request.subdomain);
-                  break;
-                case "groups":
-                  value = await connection.groups({
-                    signal,
-                    ...(request.refresh === undefined
-                      ? {}
-                      : { refresh: request.refresh }),
-                  });
-                  break;
-                case "count":
-                  value = await connection.count(request.groupId, { signal });
-                  break;
-                case "find_members": {
-                  const { action: _, ...input } = request;
-                  value = await connection.findMembers(input, { signal });
-                  break;
-                }
-                case "member":
-                  value = await connection.member(
-                    request.userId,
-                    request.fields,
-                    { signal },
+          void runDiagnostic(
+            request.action === "count"
+              ? "subscriber_count"
+              : request.action === "add"
+                ? "add_member"
+                : request.action,
+            async () => {
+              try {
+                if (stopping)
+                  throw new BrowserConnectionError(
+                    "broker_unavailable",
+                    request.action === "add" ? "not_submitted" : undefined,
                   );
-                  break;
-                case "member_groups":
-                  value = await connection.memberGroups(request.userId, {
-                    signal,
-                  });
-                  break;
-                case "email_analytics": {
-                  const { action: _, ...input } = request;
-                  value = await connection.emailAnalytics(input, { signal });
-                  break;
-                }
-                case "member_latest_email_status": {
-                  const { action: _, ...input } = request;
-                  value = await connection.memberLatestEmailStatus(input, {
-                    signal,
-                  });
-                  break;
-                }
-                case "member_communication_status": {
-                  const { action: _, ...input } = request;
-                  value = await connection.memberCommunicationStatus(input, {
-                    signal,
-                  });
-                  break;
-                }
-                case "group_members": {
-                  const { action: _, ...input } = request;
-                  value = await connection.groupMembers(input, { signal });
-                  break;
-                }
-                case "is_member":
-                  value = await connection.isMember(request.userId, request, {
-                    signal,
-                  });
-                  break;
-                case "forget":
-                  await connection.forget();
-                  value = { forgotten: true };
-                  break;
-                case "add":
-                  if (Boolean(request.groupId) === Boolean(request.groupName))
-                    throw new FlockbotError(
-                      "invalid_input",
-                      undefined,
-                      "not_submitted",
+                let value: unknown;
+                const signal = controller.signal;
+                switch (request.action) {
+                  case "ping":
+                    value = { runtime: descriptor.runtime };
+                    break;
+                  case "shutdown":
+                    await stop();
+                    value = { stopped: true };
+                    break;
+                  case "status":
+                    value = await connection.status({ signal });
+                    break;
+                  case "connect":
+                    value = await connection.connect(request.subdomain);
+                    break;
+                  case "groups":
+                    value = await connection.groups({
+                      signal,
+                      ...(request.refresh === undefined
+                        ? {}
+                        : { refresh: request.refresh }),
+                    });
+                    break;
+                  case "count":
+                    value = await connection.count(request.groupId, { signal });
+                    break;
+                  case "find_members": {
+                    const { action: _, ...input } = request;
+                    value = await connection.findMembers(input, { signal });
+                    break;
+                  }
+                  case "member":
+                    value = await connection.member(
+                      request.userId,
+                      request.fields,
+                      { signal },
                     );
-                  value = request.groupId
-                    ? await connection.addMember(
-                        request.groupId,
-                        request.member,
-                        { signal },
-                      )
-                    : await connection.addMemberByName(
-                        request.groupName ?? "",
-                        request.member,
-                        { signal },
+                    break;
+                  case "member_groups":
+                    value = await connection.memberGroups(request.userId, {
+                      signal,
+                    });
+                    break;
+                  case "email_analytics": {
+                    const { action: _, ...input } = request;
+                    value = await connection.emailAnalytics(input, { signal });
+                    break;
+                  }
+                  case "member_latest_email_status": {
+                    const { action: _, ...input } = request;
+                    value = await connection.memberLatestEmailStatus(input, {
+                      signal,
+                    });
+                    break;
+                  }
+                  case "member_communication_status": {
+                    const { action: _, ...input } = request;
+                    value = await connection.memberCommunicationStatus(input, {
+                      signal,
+                    });
+                    break;
+                  }
+                  case "group_members": {
+                    const { action: _, ...input } = request;
+                    value = await connection.groupMembers(input, { signal });
+                    break;
+                  }
+                  case "is_member":
+                    value = await connection.isMember(request.userId, request, {
+                      signal,
+                    });
+                    break;
+                  case "forget":
+                    await connection.forget();
+                    value = { forgotten: true };
+                    break;
+                  case "add":
+                    if (Boolean(request.groupId) === Boolean(request.groupName))
+                      throw new FlockbotError(
+                        "invalid_input",
+                        undefined,
+                        "not_submitted",
                       );
-                  break;
+                    value = request.groupId
+                      ? await connection.addMember(
+                          request.groupId,
+                          request.member,
+                          { signal },
+                        )
+                      : await connection.addMemberByName(
+                          request.groupName ?? "",
+                          request.member,
+                          { signal },
+                        );
+                    break;
+                }
+                if (!socket.destroyed)
+                  socket.end(
+                    encodeFrame(
+                      {
+                        nonce,
+                        value,
+                        verboseDiagnostic: verboseDiagnostic("success"),
+                      },
+                      descriptor.key,
+                    ),
+                  );
+              } catch (error) {
+                if (!socket.destroyed)
+                  socket.end(
+                    encodeFrame(
+                      {
+                        nonce,
+                        error: safeError(error),
+                        diagnostic: failureDiagnostic(error),
+                        verboseDiagnostic: verboseDiagnostic("failure"),
+                      },
+                      descriptor.key,
+                    ),
+                  );
+              } finally {
+                active--;
+                // Rotate the owner's key before the replay ledger fills; never evict
+                // accepted nonces while that key is usable.
+                if (seen.size >= 4096 && active === 0) void stop();
+                else scheduleIdle();
               }
-              if (!socket.destroyed)
-                socket.end(encodeFrame({ nonce, value }, descriptor.key));
-            } catch (error) {
-              if (!socket.destroyed)
-                socket.end(
-                  encodeFrame(
-                    { nonce, error: safeError(error) },
-                    descriptor.key,
-                  ),
-                );
-            } finally {
-              active--;
-              // Rotate the owner's key before the replay ledger fills; never evict
-              // accepted nonces while that key is usable.
-              if (seen.size >= 4096 && active === 0) void stop();
-              else scheduleIdle();
-            }
-          })();
+            },
+            operationId,
+            true,
+            verbose,
+          );
         });
       });
       const onSignal = () => {

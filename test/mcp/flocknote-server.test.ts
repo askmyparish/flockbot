@@ -1,5 +1,11 @@
 import { SerialCoordinator } from "../../adapters/mcp/src/serial-coordinator.js";
-import { mkdtempSync, rmSync, realpathSync } from "node:fs";
+import {
+  mkdtempSync,
+  rmSync,
+  realpathSync,
+  existsSync,
+  readFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -13,6 +19,12 @@ import {
   type BrowserSession,
 } from "../../adapters/mcp/src/browser-runtime.js";
 import { waitFor } from "./support.js";
+import { FlockbotError } from "../../src/errors.js";
+import {
+  safeDiagnostic,
+  recordResponse,
+} from "../../adapters/mcp/src/diagnostics.js";
+import { FailureLog } from "../../adapters/mcp/src/failure-log.js";
 import {
   UpdateChecker,
   UPDATE_GUIDE,
@@ -30,6 +42,7 @@ async function fixture(
     signInWaitMs?: number;
     signInPollMs?: number;
     updates?: UpdateNotifications;
+    failureLog?: Pick<FailureLog, "save">;
   } = {},
 ) {
   const profile = mkdtempSync(join(tmpdir(), "flockbot-server-test-"));
@@ -44,7 +57,9 @@ async function fixture(
         throw new Error("fictional-secret-never-returned");
       }),
   });
-  const server = createFlocknoteServer(connection, options);
+  const logDirectory = join(realpathSync(profile), "diagnostics-v1");
+  const failureLog = new FailureLog({ directory: logDirectory });
+  const server = createFlocknoteServer(connection, { failureLog, ...options });
   const client = new Client({ name: "fictional-codex", version: "1" });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(a);
@@ -54,10 +69,271 @@ async function fixture(
     await connection.close();
     rmSync(profile, { recursive: true, force: true });
   });
-  return { client, connection };
+  return { client, connection, failureLog, logDirectory };
 }
 
 describe("Flocknote MCP contract", () => {
+  it("preserves successful and uncertain writes when verbose record assembly throws", async () => {
+    const f = await fixture();
+    const write = vi
+      .spyOn(f.connection, "addMember")
+      .mockResolvedValueOnce({ success: true })
+      .mockRejectedValueOnce(
+        new FlockbotError("transport_failed", undefined, "unknown"),
+      );
+    const original = JSON.stringify;
+    const stringify = vi
+      .spyOn(JSON, "stringify")
+      .mockImplementation((value) => {
+        if (value?.kind === "verbose")
+          throw new Error("fictional capture failure");
+        return original(value);
+      });
+    try {
+      const args = {
+        groupId: "101",
+        firstName: "Alex",
+        lastName: "Example",
+        email: "alex@example.test",
+        verboseDiagnostics: true,
+      };
+      const success = await f.client.callTool({
+        name: "add_member",
+        arguments: args,
+      });
+      expect(success.structuredContent).toMatchObject({
+        ok: true,
+        success: true,
+        verboseDiagnostic: { traceSaved: false, available: false },
+      });
+      const failure = await f.client.callTool({
+        name: "add_member",
+        arguments: args,
+      });
+      expect(failure.structuredContent).toMatchObject({
+        ok: false,
+        code: "transport_failed",
+        outcome: "unknown",
+        verboseDiagnostic: { traceSaved: false, available: false },
+      });
+      expect(write).toHaveBeenCalledTimes(2);
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
+  it.each([undefined, false, true])(
+    "uses one safe failure contract for every tool without sharing operation IDs (verbose %s)",
+    async (verboseDiagnostics) => {
+      const { client, connection, failureLog, logDirectory } = await fixture();
+      expect((await client.callTool({ name: "status" })).isError).not.toBe(
+        true,
+      );
+      expect(existsSync(logDirectory)).toBe(false);
+      const calls = [
+        ["status", "status", {}],
+        ["connect", "connect", { subdomain: "example-parish" }],
+        ["groups", "groups", {}],
+        ["subscriber_count", "count", { groupId: "101" }],
+        [
+          "find_members",
+          "findMembers",
+          { searchTerm: "Private Sentinel", groupId: "101" },
+        ],
+        ["member", "member", { userId: "301" }],
+        ["member_groups", "memberGroups", { userId: "301" }],
+        ["group_members", "groupMembers", { groupId: "101" }],
+        [
+          "member_communication_status",
+          "memberCommunicationStatus",
+          { userId: "301", groupId: "101" },
+        ],
+        ["email_analytics", "emailAnalytics", { emailId: "801" }],
+        [
+          "member_latest_email_status",
+          "memberLatestEmailStatus",
+          { userId: "301", groupId: "101" },
+        ],
+        ["is_member", "isMember", { userId: "301", groupId: "101" }],
+        [
+          "add_member",
+          "addMember",
+          {
+            groupId: "101",
+            firstName: "Private",
+            lastName: "Sentinel",
+            email: "private@example.test",
+          },
+        ],
+      ] as const;
+      const ids = new Set<string>();
+      for (const [name, method, args] of calls) {
+        const error =
+          name === "subscriber_count"
+            ? new FlockbotError(
+                "invalid_response",
+                200,
+                undefined,
+                undefined,
+                "subscriber_count_invalid",
+              )
+            : new Error(
+                "Private Sentinel password cookie private@example.test",
+              );
+        const spy = vi.spyOn(connection, method).mockRejectedValue(error);
+        const response = await client.callTool({
+          name,
+          arguments: {
+            ...args,
+            ...(verboseDiagnostics === undefined ? {} : { verboseDiagnostics }),
+          },
+        });
+        expect(response.isError).toBe(true);
+        const diagnostic = safeDiagnostic(
+          (response.structuredContent as Record<string, unknown> | undefined)
+            ?.diagnostic,
+        );
+        if (!diagnostic) throw new Error("Missing safe diagnostic");
+        expect(diagnostic).toMatchObject({
+          operation: name,
+          traceSaved: true,
+          browserRuntime: null,
+        });
+        expect(diagnostic?.failure).toMatchObject({
+          reason:
+            name === "subscriber_count"
+              ? "subscriber_count_invalid"
+              : "unknown_failure",
+        });
+        expect(JSON.stringify(response)).not.toMatch(
+          /Private|Sentinel|password|cookie|private@example/,
+        );
+        expect(diagnostic?.operationId).toBeTruthy();
+        expect(ids.has(diagnostic.operationId)).toBe(false);
+        ids.add(diagnostic.operationId);
+        expect(
+          (response.structuredContent as Record<string, unknown>)
+            .verboseDiagnostic,
+        ).toEqual(
+          verboseDiagnostics
+            ? {
+                operationId: diagnostic.operationId,
+                traceSaved: true,
+                available: true,
+                truncated: false,
+              }
+            : undefined,
+        );
+        spy.mockRestore();
+      }
+      expect(ids.size).toBe(13);
+      const stored = (await failureLog.read())
+        ?.trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(stored?.map((record) => record.operationId).sort()).toEqual(
+        [...ids].sort(),
+      );
+      expect(
+        stored?.every(
+          (record) => record.version === (verboseDiagnostics ? 2 : 1),
+        ),
+      ).toBe(true);
+      expect(
+        readFileSync(join(logDirectory, "failures.jsonl"), "utf8"),
+      ).not.toMatch(/Private|Sentinel|password|cookie|private@example/);
+    },
+  );
+
+  it.each([false, true])(
+    "saves payloads only for explicit successful calls and preserves results on storage failure (%s)",
+    async (loggingFails) => {
+      const f = await fixture(
+        loggingFails
+          ? {
+              failureLog: {
+                save: async () => {
+                  throw new Error("fictional disk error");
+                },
+              },
+            }
+          : {},
+      );
+      const count = vi
+        .spyOn(f.connection, "count")
+        .mockImplementation(async () => {
+          await Promise.resolve();
+          recordResponse(
+            "group/101/getSubscriberCount",
+            "GET",
+            {
+              contentType: "json",
+              data: {
+                subscriberCount: 7,
+                email: "alex@example.test",
+                token: "EXCLUDE_ME_73",
+              },
+            },
+            1,
+          );
+          return 7;
+        });
+      const results = await Promise.all(
+        [true, false, undefined].map((verboseDiagnostics) =>
+          f.client.callTool({
+            name: "subscriber_count",
+            arguments: {
+              groupId: "101",
+              ...(verboseDiagnostics === undefined
+                ? {}
+                : { verboseDiagnostics }),
+            },
+          }),
+        ),
+      );
+      for (const result of results) {
+        expect(result.structuredContent).toMatchObject({
+          ok: true,
+          subscriberCount: 7,
+        });
+        expect(JSON.stringify(result)).not.toMatch(
+          /alex@example|EXCLUDE_ME_73|exchanges/,
+        );
+      }
+      expect(results[0]?.structuredContent).toMatchObject({
+        verboseDiagnostic: { traceSaved: !loggingFails, available: true },
+      });
+      expect(results[1]?.structuredContent).not.toHaveProperty(
+        "verboseDiagnostic",
+      );
+      expect(results[2]?.structuredContent).not.toHaveProperty(
+        "verboseDiagnostic",
+      );
+      expect(count).toHaveBeenCalledTimes(3);
+      const text = await f.failureLog.read();
+      expect(text).not.toContain("EXCLUDE_ME_73");
+      if (loggingFails) expect(text).toBe("");
+      else {
+        const records = text
+          ?.trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(records).toHaveLength(1);
+        if (!results[0]) throw new Error("Missing tool result");
+        expect(records?.[0]).toMatchObject({
+          kind: "verbose",
+          outcome: "success",
+          operationId: (
+            results[0].structuredContent as {
+              verboseDiagnostic: { operationId: string };
+            }
+          ).verboseDiagnostic.operationId,
+        });
+        expect(text).toContain("alex@example.test");
+      }
+    },
+  );
+
   it("returns a parish result before release discovery finishes, then adds the cached notice on a later response", async () => {
     const folder = realpathSync(
       mkdtempSync(join(tmpdir(), "flockbot-update-mcp-")),
@@ -167,45 +443,71 @@ describe("Flocknote MCP contract", () => {
     expect(updates.touch).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves an unknown write outcome beside the notice and never replays the write", async () => {
-    const updates = {
-      touch: vi.fn(),
-      notice: () => ({
-        installedVersion: "0.2.0",
-        availableVersion: "0.3.0",
-        prerelease: false,
-        guideUrl: UPDATE_GUIDE,
-        message: "Update available",
-      }),
-      close: vi.fn(),
-    };
-    const { client, connection } = await fixture({ updates });
-    vi.spyOn(connection, "addMember").mockRejectedValue(
-      new BrowserConnectionError("broker_unavailable", "unknown"),
-    );
-    const result = await client.callTool({
-      name: "add_member",
-      arguments: {
-        groupId: "101",
-        firstName: "Alex",
-        lastName: "Example",
-        email: "alex@example.test",
-      },
-    });
-    expect(result.isError).toBe(true);
-    expect(result.structuredContent).toMatchObject({
-      ok: false,
-      code: "broker_unavailable",
-      outcome: "unknown",
-      update: { availableVersion: "0.3.0" },
-    });
-    expect(connection.addMember).toHaveBeenCalledTimes(1);
-    expect(client.getInstructions()).toMatch(/answer the parish request first/);
-    expect(client.getInstructions()).toMatch(
-      /not the older installed setup script/,
-    );
-    expect(JSON.stringify(result)).not.toContain("alex@");
-  });
+  it.each([false, true])(
+    "preserves an unknown write outcome with successful or failed logging (%s)",
+    async (loggingFails) => {
+      const updates = {
+        touch: vi.fn(),
+        notice: () => ({
+          installedVersion: "0.2.0",
+          availableVersion: "0.3.0",
+          prerelease: false,
+          guideUrl: UPDATE_GUIDE,
+          message: "Update available",
+        }),
+        close: vi.fn(),
+      };
+      const { client, connection, failureLog } = await fixture({
+        updates,
+        ...(loggingFails
+          ? {
+              failureLog: {
+                save: async () => {
+                  throw new Error("PRIVATE disk failure");
+                },
+              },
+            }
+          : {}),
+      });
+      vi.spyOn(connection, "addMember").mockRejectedValue(
+        new BrowserConnectionError("broker_unavailable", "unknown"),
+      );
+      const result = await client.callTool({
+        name: "add_member",
+        arguments: {
+          groupId: "101",
+          firstName: "Alex",
+          lastName: "Example",
+          email: "alex@example.test",
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        ok: false,
+        code: "broker_unavailable",
+        outcome: "unknown",
+        update: { availableVersion: "0.3.0" },
+        diagnostic: { traceSaved: !loggingFails, final: { stage: "broker" } },
+      });
+      if (!loggingFails) {
+        const records = (await failureLog.read())
+          ?.trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(records).toEqual([
+          (result.structuredContent as Record<string, unknown>).diagnostic,
+        ]);
+      }
+      expect(connection.addMember).toHaveBeenCalledTimes(1);
+      expect(client.getInstructions()).toMatch(
+        /answer the parish request first/,
+      );
+      expect(client.getInstructions()).toMatch(
+        /not the older installed setup script/,
+      );
+      expect(JSON.stringify(result)).not.toContain("alex@");
+    },
+  );
 
   it("ignores a broken optional notifier without changing the primary success or error", async () => {
     const updates = {
@@ -383,7 +685,7 @@ describe("Flocknote MCP contract", () => {
 
   it("cancels waiting without closing or forgetting the browser connection", async () => {
     const updates = { touch: vi.fn(), notice: () => undefined, close: vi.fn() };
-    const { client, connection } = await fixture({
+    const { client, connection, failureLog } = await fixture({
       signInWaitMs: 5000,
       signInPollMs: 5,
       updates,
@@ -417,6 +719,56 @@ describe("Flocknote MCP contract", () => {
     expect(close).not.toHaveBeenCalled();
     expect(updates.touch).toHaveBeenCalledTimes(1);
     finishStatus({ state: "ready", parish: "example-parish" });
+    await waitFor(async () => {
+      const saved = (await failureLog.read())
+        ?.trim()
+        .split("\n")
+        .filter(Boolean);
+      expect(saved).toHaveLength(1);
+      expect(JSON.parse(saved?.[0] ?? "null")).toMatchObject({
+        operation: "connect",
+        traceSaved: true,
+        final: { code: "operation_cancelled" },
+      });
+    });
+  });
+
+  it("returns the original cancellation when logging stalls and prevents a late save", async () => {
+    let finish = () => {};
+    let lateSave: Promise<boolean> | undefined;
+    const f = await fixture({
+      failureLog: {
+        save: async (record, signal) => {
+          await new Promise<void>((resolve) => {
+            finish = resolve;
+          });
+          lateSave = f.failureLog.save(record, signal);
+          return lateSave;
+        },
+      },
+    });
+    vi.spyOn(f.connection, "status").mockRejectedValue(
+      new FlockbotError("operation_cancelled"),
+    );
+    const result = await f.client.callTool(
+      { name: "status", arguments: { verboseDiagnostics: true } },
+      undefined,
+      {
+        timeout: 3000,
+      },
+    );
+    expect(result.structuredContent).toMatchObject({
+      ok: false,
+      code: "operation_cancelled",
+      diagnostic: {
+        traceSaved: false,
+        final: { code: "operation_cancelled" },
+      },
+    });
+    finish();
+    await waitFor(() => expect(lateSave).toBeDefined());
+    expect(await lateSave).toBe(false);
+    expect(await f.failureLog.read()).toBe("");
   });
 
   it("returns pending when the polling interval is interrupted by its wait deadline", async () => {
@@ -590,9 +942,12 @@ describe("Flocknote MCP contract", () => {
       "subscriber_count",
     ]);
     for (const tool of tools)
-      expect(JSON.stringify(tool.inputSchema)).not.toMatch(
-        /password|cookie|token|script|url|code/i,
-      );
+      expect(
+        JSON.stringify(tool.inputSchema).replaceAll(
+          '"description":',
+          '"documentation":',
+        ),
+      ).not.toMatch(/password|cookie|token|script|url|code/i);
     expect(
       tools.find(({ name }) => name === "add_member")?.annotations,
     ).toMatchObject({
