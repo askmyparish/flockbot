@@ -136,6 +136,34 @@ describe.skipIf(process.platform === "win32")(
       });
       expect(JSON.stringify(result)).not.toMatch(/Rivera|alex@|PRIVATE/);
       expect(f.events()).not.toContain("GET user/userData");
+      const aggregate = await f.service.emailAnalytics({ emailId: "801" });
+      expect(aggregate).toMatchObject({
+        email: { id: "801" },
+        counts: { opened: 17, complaint: 0 },
+      });
+      expect(JSON.stringify(aggregate)).not.toMatch(/Rivera|alex@|PRIVATE/);
+      expect(f.events()).not.toContain("GET user/userData");
+      for (const selector of [
+        { groupId: "101" },
+        { groupName: " EVERYONE " },
+      ]) {
+        const start = f.events().length;
+        const latest = await f.service.emailAnalytics(selector);
+        expect(latest).toMatchObject({
+          groupId: "101",
+          email: { id: "801" },
+          counts: { opened: 17, total: 31 },
+        });
+        const events = f.events().slice(start);
+        expect(events.slice(selector.groupName ? 3 : 0)).toEqual([
+          "GET group/101/notes?ajax&more",
+          "GET note/801/analyticsSummary?ajax",
+          "GET note/801/analytics2?ajax",
+        ]);
+        expect(JSON.stringify(latest)).not.toMatch(
+          /Rivera|alex@|PRIVATE|summaryCounts/,
+        );
+      }
     });
 
     it("lists every visible page of a named group through private IPC", async (context) => {

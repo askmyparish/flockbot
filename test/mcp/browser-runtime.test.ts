@@ -109,16 +109,11 @@ async function fixture() {
               body: "",
             });
         } else if (
-          url.search === "?ajax" &&
+          ["?ajax", "?ajax&more"].includes(url.search) &&
           Object.hasOwn(emailResponses, `${path}${url.search}`)
         ) {
           const value = emailResponses[`${path}${url.search}`];
-          if (path === "group/101") {
-            expect(request.method()).toBe("POST");
-            expect(request.postData()).toBe(
-              "preferredBoardUrl=&preferredPanelType=notes",
-            );
-          } else if (path.endsWith("searchAnalytics")) {
+          if (path.endsWith("searchAnalytics")) {
             expect(request.method()).toBe("POST");
             expect(request.postData()).toBe("s=Rivera");
           } else expect(request.method()).toBe("GET");
@@ -449,12 +444,53 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
         /PRIVATE|Rivera|alex@|other@/,
       );
       expect(f.visits.slice(-5)).toEqual([
-        { path: "group/101", method: "POST" },
+        { path: "group/101/notes", method: "GET" },
         { path: "note/801/analyticsSummary", method: "GET" },
         { path: "note/801/analytics2", method: "GET" },
         { path: "user/301/profile", method: "POST" },
         { path: "note/801/searchAnalytics", method: "POST" },
       ]);
+      const aggregate = await client.callTool({
+        name: "email_analytics",
+        arguments: { emailId: "801" },
+      });
+      expect(aggregate.structuredContent).toMatchObject({
+        ok: true,
+        email: { id: "801" },
+        counts: { opened: 17, unopened: 9, complaint: 0 },
+      });
+      expect(JSON.stringify(aggregate)).not.toMatch(
+        /PRIVATE|Rivera|alex@|other@/,
+      );
+      expect(f.visits.at(-1)).toEqual({
+        path: "note/801/analyticsSummary",
+        method: "GET",
+      });
+      for (const selector of [
+        { groupId: "101" },
+        { groupName: " EVERYONE " },
+      ]) {
+        const start = f.visits.length;
+        const latest = await client.callTool({
+          name: "email_analytics",
+          arguments: selector,
+        });
+        expect(latest.structuredContent).toMatchObject({
+          ok: true,
+          groupId: "101",
+          email: { id: "801" },
+          counts: { opened: 17, total: 31 },
+        });
+        // Group discovery is already warm in this scenario.
+        expect(f.visits.slice(start)).toEqual([
+          { path: "group/101/notes", method: "GET" },
+          { path: "note/801/analyticsSummary", method: "GET" },
+          { path: "note/801/analytics2", method: "GET" },
+        ]);
+        expect(JSON.stringify(latest)).not.toMatch(
+          /PRIVATE|Rivera|alex@|other@|summaryCounts/,
+        );
+      }
       expect(f.state.external).toBe(0);
       expect(f.state.launches).toBe(1);
     }, 60_000);

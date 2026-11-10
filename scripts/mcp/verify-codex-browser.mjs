@@ -115,6 +115,7 @@ try {
   assert.deepEqual(Object.keys(flocknote.tools).sort(), [
     "add_member",
     "connect",
+    "email_analytics",
     "find_members",
     "group_members",
     "groups",

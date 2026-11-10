@@ -36,6 +36,10 @@ import {
   type MemberLatestEmailInput,
 } from "../../../src/models/member-latest-email-status.js";
 import {
+  EmailAnalytics,
+  type EmailAnalyticsInput,
+} from "../../../src/models/email-analytics.js";
+import {
   MemberGroups,
   membershipGroupSelector,
   type GroupSelector,
@@ -660,6 +664,16 @@ export class BrowserConnection {
     const lookup = new MemberLatestEmailStatus(input);
     return this.#operate(options, (session, op, network) =>
       lookup.read(this.#resources(session, op), network),
+    );
+  }
+
+  async emailAnalytics(
+    input: EmailAnalyticsInput,
+    options: OperationOptions = {},
+  ) {
+    const analytics = new EmailAnalytics(input);
+    return this.#operate(options, (session, op, network) =>
+      analytics.read(this.#resources(session, op), network),
     );
   }
 

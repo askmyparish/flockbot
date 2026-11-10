@@ -101,6 +101,7 @@ export type FlocknoteConnection = Pick<
   | "memberGroups"
   | "memberCommunicationStatus"
   | "memberLatestEmailStatus"
+  | "emailAnalytics"
   | "groupMembers"
   | "isMember"
   | "addMember"
@@ -431,6 +432,27 @@ export function createFlocknoteServer(
         ...(await connection.memberCommunicationStatus(input, {
           signal: extra.signal,
         })),
+      })),
+  );
+  server.registerTool(
+    "email_analytics",
+    {
+      title: "Read an email's aggregate analytics",
+      description:
+        "Read Flocknote's reported aggregate counts using exactly one emailId, groupId or unique groupName. An explicit ID may select an older email; a group selects the newest original send, not latest resend, independently of recipient inclusion. Unsupported or ambiguous group selection remains unknown without older fallback; separate reads are not atomic. Returns normalized selector, resolved group/email identity, raw publication timestamp, observation time and nine categories; missing categories are unknown, not zero. Counts do not establish unique recipients, delivery or human reading, and cannot be attributed to an individual resend. No derived rates, recipients, message content, preflight, automatic retries or writes. Explicit non-email notes return unsupported_email_type with no counts.",
+      inputSchema: z
+        .object({
+          emailId: groupId.optional(),
+          groupId: groupId.optional(),
+          groupName: z.string().min(1).max(256).optional(),
+        })
+        .strict(),
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async (input, extra) =>
+      guarded(async () => ({
+        ok: true,
+        ...(await connection.emailAnalytics(input, { signal: extra.signal })),
       })),
   );
   server.registerTool(
