@@ -28,6 +28,7 @@ published by these changes.
 | `member_communication_status` | Read one member/group's email/SMS preferences and contact warnings without promising delivery |
 | `member_latest_email_status` | Check recorded engagement on the group's latest distinct sent email; unsupported cases remain unknown |
 | `email_analytics` | Read aggregate tracking categories for an explicit email ID or the latest group email without recipient records |
+| `group_notes` | Discover note IDs and titles on one bounded group page, with explicit continuation and unknown channel metadata |
 | `group_members` | List a named group's subscribed members in bounded pages, with names by default |
 | `is_member` | Check one chosen member/group relationship as `member`, `not_member`, or `unknown` |
 | `add_member` | Add once by `groupId` or case-insensitive unique `groupName`; return only success |
@@ -285,6 +286,31 @@ content. The operation reuses the saved session and coordinated deadline without
 preflight or automatic retries. Group-mode selection and aggregate counts have
 read-only live verification through the development runner; explicit-ID mode
 has offline coverage only. Codex Desktop use of this change remains unverified.
+
+### Recent group notes
+
+`group_notes` accepts exactly one `groupId` or unique `groupName`. It reads
+one JSON notes page and returns up to 50 note summaries in upstream order:
+ID, title, raw `publishedDate`, recognized publication `status`, and `type: null`
+because this listing does not establish the delivery channel. Missing or
+unsupported optional metadata remains null. Draft/scheduled rows are not skipped,
+and publication is not proof of sending or delivery. For definitive latest-email
+selection, use the existing analytics/engagement tools instead.
+
+`upstreamReturnedCount` describes the whole page and `returnedCount` the emitted
+summaries. `hasMore` preserves the server's continuation flag; `truncated` reports
+local row or title clipping. Titles are limited to 512 characters and individual
+`titleTruncated` flags identify clipped titles. Neither a false continuation flag
+nor an empty page establishes an exhaustive parish archive. Duplicate/malformed
+note identities fail, including identities beyond the output cap. No bodies,
+authors, recipients, automatic continuation or per-note enrichment is included.
+This tool has offline coverage only; live and installed Codex use are unverified.
+
+Retained listing observations establish IDs, titles, `publishedDate`, and
+`status: "published"`. The accepted `draft`, `scheduled`, and `autosaved` status
+labels are provisional for this endpoint, not observed listing values. Tests of
+those statuses, empty pages, clipping, and malformed rows are simulations; they
+verify parser policy rather than establish what the upstream listing returns.
 
 ## Develop and verify
 

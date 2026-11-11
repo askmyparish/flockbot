@@ -932,6 +932,7 @@ describe("Flocknote MCP contract", () => {
       "email_analytics",
       "find_members",
       "group_members",
+      "group_notes",
       "groups",
       "is_member",
       "member",

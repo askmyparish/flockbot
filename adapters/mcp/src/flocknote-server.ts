@@ -112,6 +112,7 @@ export type FlocknoteConnection = Pick<
   | "memberCommunicationStatus"
   | "memberLatestEmailStatus"
   | "emailAnalytics"
+  | "groupNotes"
   | "groupMembers"
   | "isMember"
   | "addMember"
@@ -548,6 +549,31 @@ export function createFlocknoteServer(
           ...(await connection.memberCommunicationStatus(input, {
             signal: extra.signal,
           })),
+        }),
+        verboseDiagnostics,
+      ),
+  );
+  server.registerTool(
+    "group_notes",
+    {
+      title: "List recent group notes",
+      description:
+        "Find note IDs and titles on one visible page for exactly one groupId or unique groupName. Returns at most 50 summaries in upstream order, raw publication dates and status, with unknown channel type. hasMore is upstream continuation; truncated is local row/title clipping. This is not exhaustive history or proof of sending, delivery, or latest-original-email selection; use member_latest_email_status for that engagement question. No bodies, recipients, pagination or per-note analytics requests.",
+      inputSchema: z
+        .object({
+          verboseDiagnostics,
+          groupId: groupId.optional(),
+          groupName: z.string().min(1).max(256).optional(),
+        })
+        .strict(),
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ verboseDiagnostics, ...input }, extra) =>
+      guarded(
+        "group_notes",
+        async () => ({
+          ok: true,
+          ...(await connection.groupNotes(input, { signal: extra.signal })),
         }),
         verboseDiagnostics,
       ),

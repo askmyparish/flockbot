@@ -39,6 +39,10 @@ _Avoid_: Password reset when referring to a one-time login code
 **Group**:
 A named collection of members within a parish network to which communications can be addressed.
 
+**Note**:
+A Flocknote communication, such as an email or SMS, distinct from remarks kept on a member's profile. A note may be a draft, scheduled, or published; finding it does not establish that it was sent or delivered.
+_Avoid_: Message when naming this resource; unqualified note for a member-profile remark
+
 **Latest group email**:
 The email with the newest original send time for a group. Resending an older email does not make it latest, and selection does not depend on whether a particular user was a recipient.
 

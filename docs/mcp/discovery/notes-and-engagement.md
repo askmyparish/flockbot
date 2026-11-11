@@ -54,6 +54,17 @@ Entry 32 returns `success: true`, `searchTerm`, `searchFilters`, `totalHits`, an
 `noteID`, `entityID`, `noteTitle`, `noteTargets`, `type`, `commentCount`, `date`,
 `author`, and `canViewUser`. Some also include `plainText` and `previewURL`.
 
+Offline reinspection of entry 32 establishes that `searchFilters` is an object
+with boolean values, not an array echo of `filters[]`. It includes the six
+requested keys plus `userDocument: true`. `searchTerm` exactly matches the
+submitted term. `totalHits` is a nonnegative integer and `searchResults` is an
+array. Each captured note has matching numeric `noteID` and `entityID`, a string
+`noteTitle`, a positive integer `date`, and an array of `noteTargets`. The numeric
+date alone does not establish its unit, timezone, or original-send semantics.
+Target records contain string `type` and `name`, numeric or string `entityID`,
+and sometimes numeric `groupID`; do not expose non-group target identities as
+group metadata.
+
 Observed `type` strings include `email`, `sms`, and `scheduled`. Do not treat
 this field as a pure delivery-channel enum: one observed value describes
 scheduling state. The capture does not establish whether a scheduled result has

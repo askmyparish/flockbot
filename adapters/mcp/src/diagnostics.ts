@@ -21,6 +21,7 @@ const operations = [
   "member",
   "member_groups",
   "email_analytics",
+  "group_notes",
   "member_latest_email_status",
   "member_communication_status",
   "group_members",

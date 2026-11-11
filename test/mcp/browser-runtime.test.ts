@@ -1157,6 +1157,27 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
         expect(JSON.stringify(latest)).not.toMatch(
           /PRIVATE|Rivera|alex@|other@|summaryCounts/,
         );
+        const listingStart = f.visits.length;
+        const listing = await client.callTool({
+          name: "group_notes",
+          arguments: selector,
+        });
+        expect(listing.structuredContent).toMatchObject({
+          ok: true,
+          groupId: "101",
+          returnedCount: 2,
+          hasMore: true,
+          notes: [
+            { id: "801", type: null },
+            { id: "800", type: null },
+          ],
+        });
+        expect(JSON.stringify(listing)).not.toMatch(
+          /Rivera|alex@|other@|summaryCounts|previewURL/,
+        );
+        expect(f.visits.slice(listingStart)).toEqual([
+          { path: "group/101/notes", method: "GET" },
+        ]);
       }
       expect(f.state.external).toBe(0);
       expect(f.state.launches).toBe(1);

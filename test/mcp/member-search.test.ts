@@ -112,6 +112,96 @@ async function fixture() {
   return { connection, client, factory, session, state };
 }
 
+describe("group note discovery MCP/connection boundary", () => {
+  it.each([{ groupId: "00101" }, { groupName: " EVERYONE " }])(
+    "lists one page for %j without enrichment",
+    async (input) => {
+      const f = await fixture();
+      for (const arguments_ of [
+        {},
+        { groupId: "101", groupName: "Everyone" },
+        { groupId: "101", offset: 50 },
+      ]) {
+        expect(
+          (
+            await f.client.callTool({
+              name: "group_notes",
+              arguments: arguments_,
+            })
+          ).isError,
+        ).toBe(true);
+      }
+      expect(f.factory).not.toHaveBeenCalled();
+      const result = await f.client.callTool({
+        name: "group_notes",
+        arguments: input,
+      });
+      expect(result.structuredContent).toMatchObject({
+        ok: true,
+        groupId: "101",
+        returnedCount: 2,
+        hasMore: true,
+        notes: [
+          { id: "801", type: null },
+          { id: "800", type: null },
+        ],
+      });
+      expect(
+        vi
+          .mocked(f.session.request)
+          .mock.calls.map(([path]) => path)
+          .slice(input.groupName ? 3 : 0),
+      ).toEqual(["group/101/notes?ajax&more"]);
+      const tools = await f.client.listTools();
+      expect(
+        tools.tools.find((t) => t.name === "group_notes")?.annotations
+          ?.readOnlyHint,
+      ).toBe(true);
+      f.state.latestEmail["group/101/notes?ajax&more"] = {
+        groupID: 999,
+        notes: [],
+        more: false,
+      };
+      const failed = await f.client.callTool({
+        name: "group_notes",
+        arguments: { groupId: "101" },
+      });
+      expect(failed.isError).toBe(true);
+      expect(failed.structuredContent).toMatchObject({
+        code: "invalid_response",
+        diagnostic: { operation: "group_notes" },
+      });
+      expect(failed.structuredContent).not.toHaveProperty("notes");
+      await expect(
+        f.connection.groupNotes(
+          { groupId: "101" },
+          { signal: AbortSignal.abort() },
+        ),
+      ).rejects.toMatchObject({ code: "operation_cancelled" });
+    },
+  );
+
+  it.each([false, true])(
+    "diagnoses unexpected HTML without replay (signedIn=%s)",
+    async (signedIn) => {
+      const f = await fixture();
+      f.state.latestEmail["group/101/notes?ajax&more"] =
+        "<form>HIDDEN LOGIN</form>";
+      f.state.verification = signedIn
+        ? { success: true, userID: 201 }
+        : { success: true, userID: null, authorized: false };
+      await expect(
+        f.connection.groupNotes({ groupId: "101" }),
+      ).rejects.toMatchObject({
+        code: signedIn ? "invalid_response" : "authentication_required",
+      });
+      expect(
+        vi.mocked(f.session.request).mock.calls.map(([path]) => path),
+      ).toEqual(["group/101/notes?ajax&more", "user/userData"]);
+    },
+  );
+});
+
 describe("aggregate email MCP/connection boundary", () => {
   it("validates before launch and returns only aggregate facts through MCP", async () => {
     const f = await fixture();

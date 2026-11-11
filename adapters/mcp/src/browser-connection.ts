@@ -39,6 +39,7 @@ import {
   EmailAnalytics,
   type EmailAnalyticsInput,
 } from "../../../src/models/email-analytics.js";
+import { GroupNotes } from "../../../src/models/group-notes.js";
 import {
   MemberGroups,
   membershipGroupSelector,
@@ -710,6 +711,13 @@ export class BrowserConnection {
     const analytics = new EmailAnalytics(input);
     return this.#operate(options, (session, op, network) =>
       analytics.read(this.#resources(session, op), network),
+    );
+  }
+
+  async groupNotes(input: GroupSelector, options: OperationOptions = {}) {
+    const notes = new GroupNotes(input);
+    return this.#operate(options, (session, op, network) =>
+      notes.list(this.#resources(session, op), network),
     );
   }
 
