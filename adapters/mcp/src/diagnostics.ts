@@ -30,6 +30,7 @@ const operations = [
   "group_members",
   "is_member",
   "add_member",
+  "create_email_draft",
   "forget",
   "ping",
   "shutdown",
@@ -86,6 +87,12 @@ const endpoints = [
   "network/getMetadata",
   "supersearch/query",
   "composer/editNote",
+  "composer/createNote",
+  "composer/save2",
+  "composer/saveModule",
+  "composer/saveSection",
+  "composer/saveLayout",
+  "network/{id}/writeNewNote",
   "group/{id}/getSubscriberCount",
   "group/{id}/addToGroupByAdmin",
   "group/{id}/notes",
@@ -255,7 +262,7 @@ function endpoint(path: string): (typeof endpoints)[number] {
     return path as (typeof endpoints)[number];
   // Only a complete known route is normalized. Never echo unknown path text.
   const normalized = path
-    .replace(/^(group|user|note)\/[A-Za-z0-9_-]+(?=\/|\?|$)/, "$1/{id}")
+    .replace(/^(group|user|note|network)\/[A-Za-z0-9_-]+(?=\/|\?|$)/, "$1/{id}")
     .replace(/\/people\/[1-9]\d{0,15}\?ajax&more$/, "/people/{offset}")
     .replace(/\/notes\?ajax&more$/, "/notes")
     .replace(/\?ajax$/, "");

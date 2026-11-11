@@ -20,6 +20,7 @@ import {
 } from "../../adapters/mcp/src/browser-runtime.js";
 import { waitFor } from "./support.js";
 import { FlockbotError } from "../../src/errors.js";
+import { draftInput, draftResponse } from "../fixtures/email-draft.js";
 import {
   safeDiagnostic,
   recordResponse,
@@ -73,6 +74,52 @@ async function fixture(
 }
 
 describe("Flocknote MCP contract", () => {
+  it("creates drafts through MCP and returns safe partial progress on failures", async () => {
+    let fail = false;
+    const f = await fixture({
+      factory: async () => ({
+        signIn: async () => {},
+        close: async () => {},
+        request: async (path, _method, body) => {
+          if (fail && path === "composer/saveModule")
+            throw new FlockbotError("transport_failed");
+          return draftResponse(path, body);
+        },
+      }),
+    });
+    await f.connection.connect("example-parish");
+    await waitFor(async () =>
+      expect(await f.connection.status()).toMatchObject({ state: "ready" }),
+    );
+    const success = await f.client.callTool({
+      name: "create_email_draft",
+      arguments: draftInput,
+    });
+    expect(success.structuredContent).toMatchObject({
+      ok: true,
+      noteId: "803",
+      verified: true,
+    });
+    fail = true;
+    const failure = await f.client.callTool({
+      name: "create_email_draft",
+      arguments: draftInput,
+    });
+    expect(failure.isError).toBe(true);
+    expect(failure.structuredContent).toMatchObject({
+      ok: false,
+      code: "transport_failed",
+      outcome: "unknown",
+      draftProgress: { stage: "module", autosaveId: "801" },
+    });
+    expect(JSON.stringify(failure)).not.toContain(draftInput.body);
+    const extra = await f.client.callTool({
+      name: "create_email_draft",
+      arguments: { ...draftInput, noteId: "803" },
+    });
+    expect(extra.isError).toBe(true);
+  });
+
   it("preserves successful and uncertain writes when verbose record assembly throws", async () => {
     const f = await fixture();
     const write = vi
@@ -934,6 +981,7 @@ describe("Flocknote MCP contract", () => {
     expect(tools.map(({ name }) => name).sort()).toEqual([
       "add_member",
       "connect",
+      "create_email_draft",
       "email_analytics",
       "email_recipients",
       "find_members",
@@ -962,6 +1010,13 @@ describe("Flocknote MCP contract", () => {
     ).toMatchObject({
       readOnlyHint: false,
       destructiveHint: true,
+      idempotentHint: false,
+    });
+    expect(
+      tools.find(({ name }) => name === "create_email_draft")?.annotations,
+    ).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
       idempotentHint: false,
     });
     expect(client.getInstructions()).toMatch(

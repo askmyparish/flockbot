@@ -66,7 +66,9 @@ const MESSAGES: Readonly<Record<string, string>> = {
     "More than one group has that name. List groups and select the intended identifier.",
   permission_denied: "Flocknote denied access to this parish or operation.",
   invalid_input:
-    "Check the group identifier, member names and contact details.",
+    "Check the tool arguments, including the selected group and required fields.",
+  request_not_sent:
+    "The request was not submitted. Check its arguments and transport-size diagnostic; content was not truncated.",
   invalid_configuration:
     "Supply only the parish subdomain, such as example-parish.",
   invalid_response:
@@ -116,6 +118,7 @@ export type FlocknoteConnection = Pick<
   | "groupNotes"
   | "findNotes"
   | "note"
+  | "createEmailDraft"
   | "groupMembers"
   | "isMember"
   | "addMember"
@@ -284,6 +287,9 @@ export function createFlocknoteServer(
                 ? { stage: error.stage }
                 : {}),
               ...(known && error.outcome ? { outcome: error.outcome } : {}),
+              ...(known && error.draftProgress
+                ? { draftProgress: error.draftProgress }
+                : {}),
               diagnostic,
               ...(verbose
                 ? {
@@ -768,6 +774,40 @@ export function createFlocknoteServer(
               });
           return { ok: true, ...added };
         },
+        verboseDiagnostics,
+      ),
+  );
+  server.registerTool(
+    "create_email_draft",
+    {
+      title: "Create an unsent email draft",
+      description:
+        "Save a new email draft only when the user requests it. Supply exactly one groupId or unique groupName, a nonblank single-line subject, and a plain-text body. HTML and Markdown remain literal text. Returns draft IDs only after verifying saved content, target and unscheduled draft status. Does not send or edit existing notes. On failure, draftProgress identifies known partial work; check Flocknote before resubmitting an unknown outcome. No application character caps; upstream and transport restrictions can still reject the request without truncation.",
+      inputSchema: z
+        .object({
+          verboseDiagnostics,
+          groupId: groupId.optional(),
+          groupName: z.string().min(1).max(256).optional(),
+          subject: z.string().min(1),
+          body: z.string().min(1),
+        })
+        .strict(),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({ verboseDiagnostics, ...input }, extra) =>
+      guarded(
+        "create_email_draft",
+        async () => ({
+          ok: true,
+          ...(await connection.createEmailDraft(input, {
+            signal: extra.signal,
+          })),
+        }),
         verboseDiagnostics,
       ),
   );

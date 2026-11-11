@@ -1,6 +1,25 @@
 import { upstreamResponse, type UpstreamResponse } from "./rejections.js";
 import { safeFailureReason, type FailureReason } from "./failure-reason.js";
 
+export const DRAFT_STAGES = [
+  "resolve_group",
+  "entry",
+  "initialize",
+  "autosave",
+  "module",
+  "section",
+  "layout",
+  "materialize",
+  "metadata",
+  "verify",
+] as const;
+export interface DraftProgress {
+  readonly stage: (typeof DRAFT_STAGES)[number];
+  readonly completedStages: readonly (typeof DRAFT_STAGES)[number][];
+  readonly autosaveId?: string | undefined;
+  readonly noteId?: string | undefined;
+}
+
 export type ErrorCode =
   | "group_not_found"
   | "everyone_not_found"
@@ -50,6 +69,7 @@ export class FlockbotError extends Error {
     outcome?: "not_submitted" | "unknown",
     response?: UpstreamResponse,
     reason?: FailureReason,
+    readonly draftProgress?: DraftProgress,
   ) {
     super(`Flockbot request failed (${code}).`);
     this.name = "FlockbotError";
