@@ -9,7 +9,8 @@ export function encodeDraftText(value: string): string {
 
 /** Shared authoring-link policy for HTML links and native URL buttons. */
 export function safeDraftUrl(value: string): boolean {
-  if (!/^https?:\/\//i.test(value) || /[\s\\\p{Cc}]/u.test(value)) return false;
+  if (!/^https?:\/\//i.test(value) || /[\s\\\p{Cc}\p{Cs}]/u.test(value))
+    return false;
   try {
     const url = new URL(value);
     return Boolean(url.hostname) && !url.username && !url.password;
