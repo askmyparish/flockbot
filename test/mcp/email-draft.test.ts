@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspect } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EmailDraft, FlockbotError, Network } from "../../src/index.js";
+import {
+  EmailDraft,
+  FlockbotError,
+  Network,
+  type EmailDraftInput,
+} from "../../src/index.js";
 import { BrowserConnection } from "../../adapters/mcp/src/browser-connection.js";
 import { SerialCoordinator } from "../../adapters/mcp/src/serial-coordinator.js";
 import {
@@ -13,6 +18,9 @@ import {
   draftInitialization,
   htmlDraftInput,
   htmlDraftStored,
+  blockDraftInput,
+  blockDraftStored,
+  blockDraftResponse,
 } from "../fixtures/email-draft.js";
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -88,6 +96,190 @@ const sequence = [
 ];
 
 describe("create-only email drafts", () => {
+  it.each([false, true])(
+    "preserves ordered blocks and isolates caller mutations (buttons only: %s)",
+    async (buttonsOnly) => {
+      const input = structuredClone(blockDraftInput);
+      const items = buttonsOnly
+        ? blockDraftStored.filter((x) => x.type === "button")
+        : blockDraftStored;
+      if (buttonsOnly)
+        input.content = input.content.filter((x) => x.type === "button");
+      const response = blockDraftResponse(items);
+      const f = fixture((path, body) => response(path, body));
+      const draft = new EmailDraft(input);
+      input.content.length = 0;
+      const snapshot = draft.toInput();
+      (snapshot.content as unknown[]).length = 0;
+      expect(
+        await draft.create(f.context, new Network("example-parish")),
+      ).toMatchObject({
+        verified: true,
+        noteId: "803",
+      });
+      const modules = f.requests
+        .filter((r) => r.path === "composer/saveModule")
+        .map((r) => new URLSearchParams(r.body));
+      expect(modules.map((m) => m.get("type"))).toEqual(
+        buttonsOnly
+          ? ["button", "button"]
+          : ["text", "button", "text", "button"],
+      );
+      const buttons = modules.filter((m) => m.get("type") === "button");
+      expect(
+        buttons.map((m) => [m.get("data[text]"), m.get("data[url]")]),
+      ).toEqual([
+        [
+          `Join <b> & "quoted" O'Neil café 🕊 &lt;`,
+          "https://example.test/register?a=1&b=2#part",
+        ],
+        ["More information", "http://example.test/info"],
+      ]);
+      expect(buttons[0]?.get("data[backgroundColor]")).toBe("336699");
+      const layout = new URLSearchParams(
+        f.requests.find((r) => r.path === "composer/saveLayout")?.body,
+      );
+      expect(layout.getAll("sections[0][modules][]")).toEqual(
+        buttonsOnly ? ["812", "814"] : ["811", "812", "813", "814"],
+      );
+      expect(
+        draft.progress.completedStages.filter((s) => s === "module"),
+      ).toHaveLength(1);
+      expect(JSON.stringify(draft)).not.toContain("Join");
+    },
+  );
+
+  it.each([
+    {},
+    { content: [] },
+    { content: [null] },
+    { content: new Array(1) },
+    { body: "text", content: blockDraftInput.content },
+    { bodyFormat: "text", content: blockDraftInput.content },
+    { content: [{ type: "video", url: "https://example.test" }] },
+    { content: [{ type: "text", body: " " }] },
+    { content: [{ type: "text", body: "x", bodyFormat: "markdown" }] },
+    { content: [{ type: "button", text: " ", url: "https://example.test" }] },
+    {
+      content: [
+        { type: "button", text: "\u200b", url: "https://example.test" },
+      ],
+    },
+    {
+      content: [
+        { type: "button", text: "line\nbreak", url: "https://example.test" },
+      ],
+    },
+    {
+      content: [
+        {
+          type: "button",
+          text: "Label",
+          url: "https://example.test",
+          style: "red",
+        },
+      ],
+    },
+    ...[
+      "javascript:alert(1)",
+      "//example.test",
+      "/relative",
+      "mailto:a@example.test",
+      "https://user:pass@example.test",
+      "https://example.test/\nx",
+      "https://example.test\\@other.test",
+    ].map((url) => ({ content: [{ type: "button", text: "Label", url }] })),
+  ])("rejects malformed ordered input before I/O: %j", async (payload) => {
+    const f = fixture();
+    await expect(
+      f.connection.createEmailDraft({
+        groupName: "Choir",
+        subject: "Test",
+        ...payload,
+      } as EmailDraftInput),
+    ).rejects.toMatchObject({
+      code: "invalid_input",
+      outcome: "not_submitted",
+    });
+    expect(f.requests).toEqual([]);
+  });
+
+  it.each([
+    "label",
+    "url",
+    "style",
+    "extra-style",
+    "type",
+    "id",
+    "missing",
+    "extra",
+    "order",
+  ])("fails closed on persisted block changes: %s", async (change) => {
+    const stored = structuredClone(blockDraftStored);
+    const button = stored[1]!;
+    if (change === "label") button.data.text = "Changed";
+    if (change === "url") button.data.url = "https://example.test/other";
+    if (change === "style") button.data.backgroundColor = "000000";
+    if (change === "extra-style")
+      Object.assign(button.data, { base64Gradient: "changed" });
+    if (change === "type") button.type = "text";
+    if (change === "id") button.data.ID = 999;
+    if (change === "missing") stored.pop();
+    if (change === "extra") stored.push(stored[0]!);
+    if (change === "order") stored.reverse();
+    const wire = blockDraftResponse(),
+      readback = blockDraftResponse(stored);
+    const f = fixture((p, b) =>
+      p === "composer/editNote" ? readback(p, b) : wire(p, b),
+    );
+    await expect(
+      f.connection.createEmailDraft(blockDraftInput),
+    ).rejects.toMatchObject({
+      reason: "draft_verification",
+      outcome: "unknown",
+      draftProgress: { stage: "verify", noteId: "803", autosaveId: "801" },
+    });
+    expect(
+      f.requests.filter((r) => r.path === "composer/saveModule"),
+    ).toHaveLength(4);
+    expect(f.requests.at(-1)?.path).toBe("composer/editNote");
+  });
+
+  it.each(["duplicate", "malformed", "transport"])(
+    "stops after a later module fails without replay: %s",
+    async (kind) => {
+      let count = 0;
+      const response = blockDraftResponse();
+      const f = fixture((p, b) => {
+        if (p === "composer/saveModule" && ++count === 2) {
+          if (kind === "transport") throw new FlockbotError("transport_failed");
+          return {
+            success: true,
+            itemID: kind === "duplicate" ? "811" : "bad",
+          };
+        }
+        return response(p, b);
+      });
+      await expect(
+        f.connection.createEmailDraft(blockDraftInput),
+      ).rejects.toMatchObject({
+        outcome: "unknown",
+        draftProgress: {
+          stage: "module",
+          autosaveId: "801",
+          completedStages: ["resolve_group", "entry", "initialize", "autosave"],
+        },
+        ...(kind === "duplicate"
+          ? { reason: "duplicate_identifier" }
+          : kind === "malformed"
+            ? { reason: "expected_identifier" }
+            : { code: "transport_failed" }),
+      });
+      expect(count).toBe(2);
+      expect(f.requests.at(-1)?.path).toBe("composer/saveModule");
+    },
+  );
+
   it("preserves supported HTML structure, entities and links through the shared writer", async () => {
     const f = fixture((path, _body, response) =>
       path === "composer/editNote"
@@ -263,7 +455,7 @@ describe("create-only email drafts", () => {
       ...htmlDraftInput,
       body: `<p>${"x".repeat(20001)}</p>`,
     });
-    expect(draft.toInput().body.length).toBe(20008);
+    expect(draft.toInput().body?.length).toBe(20008);
     expect(JSON.stringify(draft)).toBe('{"type":"EmailDraft"}');
   });
 
@@ -346,7 +538,7 @@ describe("create-only email drafts", () => {
     };
     const draft = new EmailDraft(input);
     input.body = "changed";
-    expect(draft.toInput().body.length).toBe(20001);
+    expect(draft.toInput().body?.length).toBe(20001);
     expect(draft.toInput().subject.length).toBe(201);
     expect(JSON.stringify(draft)).toBe('{"type":"EmailDraft"}');
     expect(inspect(draft)).toBe("EmailDraft {}");

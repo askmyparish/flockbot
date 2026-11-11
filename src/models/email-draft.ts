@@ -8,12 +8,25 @@ import {
 import type { Network } from "./network.js";
 import { invalidResponse, record, successful, text } from "./parsing.js";
 import type { ResourceQuery } from "./resource-read.js";
-import { encodeDraftText, htmlDraftBody } from "./email-draft-html.js";
+import {
+  encodeDraftText,
+  htmlDraftBody,
+  safeDraftUrl,
+} from "./email-draft-html.js";
+
+export type EmailDraftBlock =
+  | {
+      readonly type: "text";
+      readonly body: string;
+      readonly bodyFormat?: "text" | "html" | undefined;
+    }
+  | { readonly type: "button"; readonly text: string; readonly url: string };
 
 export interface EmailDraftInput extends GroupSelector {
   readonly subject: string;
-  readonly body: string;
+  readonly body?: string | undefined;
   readonly bodyFormat?: "text" | "html" | undefined;
+  readonly content?: readonly EmailDraftBlock[] | undefined;
 }
 export interface EmailDraftResult {
   readonly noteId: string;
@@ -26,6 +39,15 @@ export interface DraftContext extends ResourceQuery {
   /** Submit once. The caller owns authentication, coordination and diagnostics. */
   compose(path: string, body: string): Promise<unknown>;
 }
+
+const buttonStyle = {
+  fontFamily: "Arial",
+  fontSize: "16",
+  maxWidth: "300",
+  padding: "12",
+  backgroundColor: "336699",
+  textColor: "ffffff",
+};
 
 function form(value: Record<string, unknown>): string {
   const data = new URLSearchParams();
@@ -112,10 +134,16 @@ function persistedText(value: unknown): string {
 /** One create-only intent. Private content never appears in inspection/JSON output. */
 export class EmailDraft {
   readonly #input: EmailDraftInput;
-  readonly #htmlBody: ReturnType<typeof htmlDraftBody> | undefined;
+  readonly #modules: {
+    type: "text" | "button";
+    data: Record<string, string>;
+    signature?: string | undefined;
+    plainText?: string | undefined;
+  }[];
   #progress: DraftProgress = { stage: "resolve_group", completedStages: [] };
   #submitted = false;
   constructor(input: EmailDraftInput) {
+    let normalized: EmailDraftBlock[];
     try {
       if (
         !input ||
@@ -123,38 +151,117 @@ export class EmailDraft {
         Array.isArray(input) ||
         Object.keys(input).some(
           (k) =>
-            !["groupId", "groupName", "subject", "body", "bodyFormat"].includes(
-              k,
-            ),
+            ![
+              "groupId",
+              "groupName",
+              "subject",
+              "body",
+              "bodyFormat",
+              "content",
+            ].includes(k),
         ) ||
-        (input.bodyFormat !== undefined &&
-          input.bodyFormat !== "text" &&
-          input.bodyFormat !== "html") ||
         typeof input.subject !== "string" ||
         !input.subject.trim() ||
-        /[\r\n]/.test(input.subject) ||
-        typeof input.body !== "string" ||
-        !input.body.trim()
+        /[\r\n]/.test(input.subject)
       )
         throw new Error();
+      const ordered = input.content !== undefined;
+      if (ordered && ("body" in input || "bodyFormat" in input))
+        throw new Error();
+      const blocks: unknown = ordered
+        ? input.content
+        : [{ type: "text", body: input.body, bodyFormat: input.bodyFormat }];
+      if (!Array.isArray(blocks) || !blocks.length) throw new Error();
+      normalized = Array.from(blocks, (value: unknown): EmailDraftBlock => {
+        if (!value || typeof value !== "object" || Array.isArray(value))
+          throw new Error();
+        const block = value as Record<string, unknown>;
+        if (block.type === "button") {
+          if (
+            Object.keys(block).some(
+              (k) => !["type", "text", "url"].includes(k),
+            ) ||
+            typeof block.text !== "string" ||
+            !block.text.replace(/\p{Cf}/gu, "").trim() ||
+            /[\r\n\u2028\u2029\p{Cc}]/u.test(block.text) ||
+            typeof block.url !== "string" ||
+            !safeDraftUrl(block.url)
+          )
+            throw new Error();
+          return Object.freeze({
+            type: "button",
+            text: block.text,
+            url: block.url,
+          });
+        }
+        if (
+          block.type !== "text" ||
+          Object.keys(block).some(
+            (k) => !["type", "body", "bodyFormat"].includes(k),
+          ) ||
+          typeof block.body !== "string" ||
+          !block.body.trim() ||
+          (block.bodyFormat !== undefined &&
+            block.bodyFormat !== "text" &&
+            block.bodyFormat !== "html")
+        )
+          throw new Error();
+        return Object.freeze({
+          type: "text",
+          body: block.body.replace(/\r\n?/g, "\n"),
+          ...(block.bodyFormat === undefined
+            ? {}
+            : { bodyFormat: block.bodyFormat }),
+        });
+      });
+      const first = normalized[0];
       this.#input = Object.freeze({
         ...membershipGroupSelector(input),
         subject: input.subject.trim(),
-        body: input.body.replace(/\r\n?/g, "\n"),
-        ...(input.bodyFormat === undefined
-          ? {}
-          : { bodyFormat: input.bodyFormat }),
+        ...(!ordered && first?.type === "text"
+          ? {
+              body: first.body,
+              ...(first.bodyFormat === undefined
+                ? {}
+                : { bodyFormat: first.bodyFormat }),
+            }
+          : { content: Object.freeze(normalized) }),
       });
     } catch {
       throw new FlockbotError("invalid_input", undefined, "not_submitted");
     }
-    this.#htmlBody =
-      this.#input.bodyFormat === "html"
-        ? htmlDraftBody(this.#input.body)
-        : undefined;
+    this.#modules = normalized.map((block) => {
+      if (block.type === "button")
+        return {
+          type: "button",
+          data: {
+            type: "url",
+            text: block.text,
+            url: block.url,
+            ...buttonStyle,
+          },
+        };
+      const html =
+        block.bodyFormat === "html" ? htmlDraftBody(block.body) : undefined;
+      return {
+        type: "text",
+        data: {
+          html:
+            html?.html ??
+            `<div>${encodeDraftText(block.body).replaceAll("\n", "<br>")}</div>`,
+        },
+        signature: html?.signature,
+        plainText: block.body,
+      };
+    });
   }
   toInput(): EmailDraftInput {
-    return { ...this.#input };
+    return {
+      ...this.#input,
+      ...(this.#input.content
+        ? { content: this.#input.content.map((block) => ({ ...block })) }
+        : {}),
+    };
   }
   toJSON(): object {
     return { type: "EmailDraft" };
@@ -303,19 +410,22 @@ export class EmailDraft {
     if (autosave.ID != null || autosave.newNote !== false)
       return invalidResponse("draft_initialization");
     done();
-    const html =
-      this.#htmlBody?.html ??
-      `<div>${encodeDraftText(input.body).replaceAll("\n", "<br>")}</div>`;
-    const module = successful(
-      await request("module", "composer/saveModule", {
-        noteID: autosaveId,
-        noteType: "email",
-        type: "text",
-        column: 1,
-        data: { html },
-      }),
-    );
-    const moduleId = id(module.itemID);
+    const moduleIds: string[] = [];
+    for (const block of this.#modules) {
+      const module = successful(
+        await request("module", "composer/saveModule", {
+          noteID: autosaveId,
+          noteType: "email",
+          column: 1,
+          type: block.type,
+          data: block.data,
+        }),
+      );
+      const moduleId = id(module.itemID);
+      if (moduleIds.includes(moduleId))
+        return invalidResponse("duplicate_identifier");
+      moduleIds.push(moduleId);
+    }
     done();
     const section = successful(
       await request("section", "composer/saveSection", {
@@ -330,7 +440,7 @@ export class EmailDraft {
     successful(
       await request("layout", "composer/saveLayout", {
         noteID: autosaveId,
-        sections: [{ sectionID: sectionId, modules: [moduleId] }],
+        sections: [{ sectionID: sectionId, modules: moduleIds }],
       }),
     );
     done();
@@ -393,22 +503,42 @@ export class EmailDraft {
     const first = record(layout.col1);
     if (
       !Array.isArray(first.items) ||
-      first.items.length !== 1 ||
+      first.items.length !== this.#modules.length ||
       (layout.col2 != null &&
         (!Array.isArray(record(layout.col2).items) ||
           (record(layout.col2).items as unknown[]).length))
     )
       return invalidResponse("draft_verification");
-    const item = record(first.items[0]);
-    const storedHtml = record(item.data).html;
-    if (
-      item.type !== "text" ||
-      typeof storedHtml !== "string" ||
-      (this.#htmlBody
-        ? htmlDraftBody(storedHtml, true).signature !== this.#htmlBody.signature
-        : persistedText(storedHtml) !== input.body)
-    )
-      return invalidResponse("draft_verification");
+    for (const [index, expected] of this.#modules.entries()) {
+      const item = record(first.items[index]);
+      const data = record(item.data);
+      if (item.type !== expected.type || id(data.ID) !== moduleIds[index])
+        return invalidResponse("draft_verification");
+      if (expected.type === "button") {
+        if (
+          Object.entries(expected.data).some(
+            ([key, value]) => data[key] !== value,
+          ) ||
+          Object.keys(data).some(
+            (key) =>
+              ![
+                ...Object.keys(expected.data),
+                "ID",
+                "noteID",
+                "networkID",
+                "noteType",
+              ].includes(key),
+          )
+        )
+          return invalidResponse("draft_verification");
+      } else if (
+        typeof data.html !== "string" ||
+        (expected.signature !== undefined
+          ? htmlDraftBody(data.html, true).signature !== expected.signature
+          : persistedText(data.html) !== expected.plainText)
+      )
+        return invalidResponse("draft_verification");
+    }
     done();
     return { noteId, autosaveId, groupId, status: "draft", verified: true };
   }

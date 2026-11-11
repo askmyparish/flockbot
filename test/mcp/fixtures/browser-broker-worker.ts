@@ -10,7 +10,11 @@ import { latestEmailResponses } from "../../fixtures/latest-email.js";
 import { noteSearchResponse } from "../../fixtures/note-search.js";
 import { noteResponse } from "../../fixtures/note.js";
 import { recipientPage } from "../../fixtures/email-recipients.js";
-import { draftResponse, htmlDraftStored } from "../../fixtures/email-draft.js";
+import {
+  draftResponse,
+  htmlDraftStored,
+  blockDraftResponse,
+} from "../../fixtures/email-draft.js";
 import { recordResponse } from "../../../adapters/mcp/src/diagnostics.js";
 import {
   BrowserService,
@@ -28,6 +32,7 @@ if (role === "broker") {
     idleMs: Number(process.argv[4] ?? 1500),
     factory: async () => {
       appendFileSync(join(profile, "events"), "launch\n");
+      const blocks = blockDraftResponse();
       return {
         signIn: async () => undefined,
         close: async () => {
@@ -42,6 +47,8 @@ if (role === "broker") {
                 path === "composer/saveModule"
               )
                 return { success: false };
+              if (existsSync(join(profile, "draft-blocks")))
+                return blocks(path, body);
               return draftResponse(
                 path,
                 body,

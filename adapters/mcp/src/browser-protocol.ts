@@ -20,6 +20,27 @@ import {
 
 export const MAX_REQUEST = 16 * 1024;
 export const MAX_RESPONSE = 2 * 1024 * 1024;
+export const draftContentSchema = z
+  .array(
+    z.union([
+      z
+        .object({
+          type: z.literal("text"),
+          body: z.string().min(1),
+          bodyFormat: z.enum(["text", "html"]).optional(),
+        })
+        .strict(),
+      z
+        .object({
+          type: z.literal("button"),
+          text: z.string().min(1),
+          url: z.string().min(1),
+        })
+        .strict(),
+    ]),
+  )
+  .min(1)
+  .readonly();
 const draftProgressSchema = z
   .object({
     stage: z.enum(DRAFT_STAGES),
@@ -178,8 +199,9 @@ export const brokerRequestSchema = z.discriminatedUnion("action", [
       groupId: z.string().min(1).max(128).optional(),
       groupName: z.string().min(1).max(256).optional(),
       subject: z.string().min(1),
-      body: z.string().min(1),
+      body: z.string().min(1).optional(),
       bodyFormat: z.enum(["text", "html"]).optional(),
+      content: draftContentSchema.optional(),
     })
     .strict(),
 ]);
