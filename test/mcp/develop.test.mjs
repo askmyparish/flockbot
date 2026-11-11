@@ -83,7 +83,7 @@ describe("explicit read-only development runner", () => {
   it("defaults offline and rejects writes, lifecycle tools and missing live consent", () => {
     expect(parseDevelopmentArgs([])).toEqual({ mode: "offline" });
     expect(parseDevelopmentArgs(["--help"])).toEqual({ mode: "help" });
-    for (const tool of ["group_notes", "find_notes"]) {
+    for (const tool of ["group_notes", "find_notes", "note"]) {
       expect(() => parseDevelopmentArgs(["--tool", tool])).toThrow();
       expect(
         parseDevelopmentArgs([

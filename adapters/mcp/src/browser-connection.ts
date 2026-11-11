@@ -40,6 +40,7 @@ import {
   type EmailAnalyticsInput,
 } from "../../../src/models/email-analytics.js";
 import { GroupNotes } from "../../../src/models/group-notes.js";
+import { Note, type NoteInput } from "../../../src/models/note.js";
 import {
   NoteSearch,
   type NoteSearchInput,
@@ -662,10 +663,14 @@ export class BrowserConnection {
     };
   }
 
-  async findNotes(
-    input: NoteSearchInput,
-    options: OperationOptions = {},
-  ) {
+  async note(input: NoteInput, options: OperationOptions = {}) {
+    const note = new Note(input);
+    return this.#operate(options, (session, op) =>
+      note.read(this.#resources(session, op)),
+    );
+  }
+
+  async findNotes(input: NoteSearchInput, options: OperationOptions = {}) {
     const search = new NoteSearch(input);
     return this.#operate(options, (session, op) =>
       search.find(this.#resources(session, op)),
@@ -729,9 +734,9 @@ export class BrowserConnection {
   }
 
   async groupNotes(input: GroupSelector, options: OperationOptions = {}) {
-    const notes = new GroupNotes(input);
+    const messages = new GroupNotes(input);
     return this.#operate(options, (session, op, network) =>
-      notes.list(this.#resources(session, op), network),
+      messages.list(this.#resources(session, op), network),
     );
   }
 

@@ -940,6 +940,7 @@ describe("Flocknote MCP contract", () => {
       "member_communication_status",
       "member_groups",
       "member_latest_email_status",
+      "note",
       "status",
       "subscriber_count",
     ]);

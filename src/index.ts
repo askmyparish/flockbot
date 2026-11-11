@@ -61,6 +61,7 @@ export {
   type GroupNoteSummary,
   type GroupNotesResult,
 } from "./models/group-notes.js";
+export { Note, type NoteInput, type NoteResult } from "./models/note.js";
 export {
   NoteSearch,
   type NoteSearchInput,

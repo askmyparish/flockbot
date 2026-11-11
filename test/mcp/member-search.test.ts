@@ -15,6 +15,7 @@ import { profileResponse } from "../fixtures/member-profile.js";
 import { membershipResponse } from "../fixtures/member-groups.js";
 import { latestEmailResponses } from "../fixtures/latest-email.js";
 import { noteSearchResponse } from "../fixtures/note-search.js";
+import { noteResponse } from "../fixtures/note.js";
 import { FlockbotError } from "../../src/errors.js";
 import { waitFor } from "./support.js";
 
@@ -44,6 +45,7 @@ async function fixture() {
     memberships: unknown;
     navigation: unknown;
     notes: unknown;
+    note: unknown;
     latestEmail: Record<string, unknown>;
   } = {
     response: { success: true, results: [searchRow()], resultCount: 1 },
@@ -53,6 +55,7 @@ async function fixture() {
     memberships: membershipResponse(),
     navigation: { groups: [] },
     notes: noteSearchResponse(),
+    note: noteResponse(),
     latestEmail: latestEmailResponses(),
   };
   const session: BrowserSession = {
@@ -71,6 +74,10 @@ async function fixture() {
       if (path === "supersearch/query?ajax") {
         if (state.notes instanceof Error) throw state.notes;
         return state.notes;
+      }
+      if (path === "composer/editNote") {
+        if (state.note instanceof Error) throw state.note;
+        return state.note;
       }
       if (path === "group/101/people?ajax") return searchMetadata();
       if (path === "group/101/filter") {
@@ -124,7 +131,93 @@ async function fixture() {
   return { connection, client, factory, session, state };
 }
 
-describe("note search MCP/connection boundary", () => {
+describe("note MCP reader", () => {
+  it("validates strict inputs before I/O, then projects one read with safe annotations", async () => {
+    const f = await fixture();
+    for (const input of [
+      { noteId: "../801" },
+      { noteId: "801", save: true },
+      { noteId: 801 },
+      {},
+    ]) {
+      expect(
+        (await f.client.callTool({ name: "note", arguments: input })).isError,
+      ).toBe(true);
+      if (input.noteId !== "../801")
+        expect(
+          brokerRequestSchema.safeParse({ action: "note", ...input }).success,
+        ).toBe(false);
+    }
+    expect(f.factory).not.toHaveBeenCalled();
+    const r = await f.client.callTool({
+      name: "note",
+      arguments: { noteId: "00801" },
+    });
+    expect(r.structuredContent).toMatchObject({
+      ok: true,
+      noteId: "801",
+      completeness: "complete",
+    });
+    expect(JSON.stringify(r)).not.toContain("HIDDEN_");
+    expect(f.session.request).toHaveBeenCalledExactlyOnceWith(
+      "composer/editNote",
+      "POST",
+      "noteID=801&fromComposer=1",
+    );
+    const tools = (await f.client.listTools()).tools;
+    expect(tools.find((t) => t.name === "note")?.annotations).toMatchObject({
+      readOnlyHint: true,
+    });
+    expect(
+      tools.some((t) => ["group_messages", "find_messages"].includes(t.name)),
+    ).toBe(false);
+  });
+
+  it("reports validation and permission errors without replay or content in default diagnostics", async () => {
+    const f = await fixture();
+    f.state.note = { ...noteResponse(), noteInfo: { ID: 802 } };
+    expect(
+      (await f.client.callTool({ name: "note", arguments: { noteId: "801" } }))
+        .structuredContent,
+    ).toMatchObject({
+      code: "invalid_response",
+      diagnostic: {
+        operation: "note",
+        failure: {
+          reason: "note_identity_mismatch",
+        },
+      },
+    });
+    f.state.note = new FlockbotError("permission_denied");
+    expect(
+      (await f.client.callTool({ name: "note", arguments: { noteId: "801" } }))
+        .structuredContent,
+    ).toMatchObject({ code: "permission_denied" });
+    expect(
+      vi.mocked(f.session.request).mock.calls.map(([path]) => path),
+    ).toEqual(["composer/editNote", "composer/editNote"]);
+  });
+
+  it("diagnoses an HTML sign-in response once and never replays the note request", async () => {
+    const f = await fixture();
+    f.state.note = "<form>HIDDEN_LOGIN</form>";
+    f.state.verification = { success: true, userID: null, authorized: false };
+    await expect(f.connection.note({ noteId: "801" })).rejects.toMatchObject({
+      code: "authentication_required",
+    });
+    expect(
+      vi.mocked(f.session.request).mock.calls.map(([path]) => path),
+    ).toEqual(["composer/editNote", "user/userData"]);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      f.connection.note({ noteId: "801" }, { signal: controller.signal }),
+    ).rejects.toMatchObject({ code: "operation_cancelled" });
+    expect(f.session.request).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("message search MCP/connection boundary", () => {
   it("validates before launch and returns only selected summaries without preflight or enrichment", async () => {
     const f = await fixture();
     for (const arguments_ of [
@@ -209,7 +302,7 @@ describe("note search MCP/connection boundary", () => {
   });
 });
 
-describe("group note discovery MCP/connection boundary", () => {
+describe("group message discovery MCP/connection boundary", () => {
   it.each([{ groupId: "00101" }, { groupName: " EVERYONE " }])(
     "lists one page for %j without enrichment",
     async (input) => {

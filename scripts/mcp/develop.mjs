@@ -21,6 +21,7 @@ const tools = new Set([
   "group_members",
   "group_notes",
   "find_notes",
+  "note",
   "is_member",
 ]);
 class DevelopmentError extends Error {}
@@ -197,6 +198,7 @@ Tool results can contain personal data. Do not put credentials in input files.`)
         "test/email-analytics.test.ts",
         "test/group-notes.test.ts",
         "test/note-search.test.ts",
+        "test/note.test.ts",
       ],
       { cwd: root, stdio: "inherit" },
     );

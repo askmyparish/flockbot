@@ -8,6 +8,7 @@ import { membershipResponse } from "../../fixtures/member-groups.js";
 import { rosterPage, rosterRow } from "../../fixtures/group-members.js";
 import { latestEmailResponses } from "../../fixtures/latest-email.js";
 import { noteSearchResponse } from "../../fixtures/note-search.js";
+import { noteResponse } from "../../fixtures/note.js";
 import { recordResponse } from "../../../adapters/mcp/src/diagnostics.js";
 import {
   BrowserService,
@@ -48,6 +49,10 @@ if (role === "broker") {
                 };
               case "network/getMetadata":
                 return { success: true, networkID: 201, everyoneGroupID: 101 };
+              case "composer/editNote":
+                if (body !== "noteID=801&fromComposer=1")
+                  throw new Error("Unexpected note input");
+                return noteResponse();
               case "supersearch/query?ajax":
                 return noteSearchResponse(
                   new URLSearchParams(body).get("searchTerm") ?? "",
