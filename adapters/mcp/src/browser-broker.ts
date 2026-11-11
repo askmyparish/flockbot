@@ -33,6 +33,7 @@ import {
   EmailAnalytics,
   GroupNotes,
   NoteSearch,
+  Note,
   GroupMembers,
   membershipGroupSelector,
   type GroupSelector,
@@ -313,6 +314,12 @@ export async function runBrowserBroker(options: BrokerOptions): Promise<void> {
                     break;
                   case "count":
                     value = await connection.count(request.groupId, { signal });
+                    break;
+                  case "note":
+                    value = await connection.note(
+                      { noteId: request.noteId },
+                      { signal },
+                    );
                     break;
                   case "find_notes": {
                     const { action: _, ...input } = request;
@@ -666,6 +673,16 @@ export class BrowserService {
       { action: "count", groupId },
       options.signal,
     )) as number;
+  }
+  async note(
+    input: Parameters<BrowserConnection["note"]>[0],
+    options: OperationOptions = {},
+  ) {
+    const prepared = new Note(input).toInput();
+    return (await this.#call(
+      { ...prepared, action: "note" },
+      options.signal,
+    )) as Awaited<ReturnType<BrowserConnection["note"]>>;
   }
   async findNotes(
     input: Parameters<BrowserConnection["findNotes"]>[0],

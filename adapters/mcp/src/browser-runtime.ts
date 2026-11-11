@@ -68,7 +68,11 @@ function allowed(path: string, method: string): boolean {
     );
   return (
     method === "POST" &&
-    (["network/getMetadata", "supersearch/query?ajax"].includes(path) ||
+    ([
+      "network/getMetadata",
+      "supersearch/query?ajax",
+      "composer/editNote",
+    ].includes(path) ||
       /^group\/[A-Za-z0-9_-]+\/addToGroupByAdmin$/.test(path) ||
       /^note\/[A-Za-z0-9_-]+\/searchAnalytics\?ajax$/.test(path) ||
       /^group\/[A-Za-z0-9_-]+\/(?:people\?ajax|filter)$/.test(path) ||

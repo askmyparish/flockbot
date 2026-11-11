@@ -36,6 +36,9 @@ export const brokerRequestSchema = z.discriminatedUnion("action", [
     .object({ action: z.literal("count"), groupId: z.string().min(1).max(128) })
     .strict(),
   z
+    .object({ action: z.literal("note"), noteId: z.string().min(1).max(128) })
+    .strict(),
+  z
     .object({
       action: z.literal("find_notes"),
       searchTerm: z.string().min(1).max(256),

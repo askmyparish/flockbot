@@ -287,7 +287,27 @@ describe.skipIf(process.platform === "win32")(
       );
     });
 
-    it("routes parish note search through private IPC without enrichment", async (context) => {
+    it("reads note content through private IPC without browser launch on invalid input", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
+      await expect(f.service.note({ noteId: "../801" })).rejects.toMatchObject({
+        code: "invalid_input",
+      });
+      expect(f.launches()).toBe(0);
+      const r = await f.service.note({ noteId: "00801" });
+      expect(r).toMatchObject({
+        noteId: "801",
+        completeness: "complete",
+        status: "published",
+      });
+      expect(r.markdown).toContain("## Rehearsal");
+      expect(JSON.stringify(r)).not.toContain("HIDDEN_");
+      expect(f.events().filter((event) => /^(GET|POST) /.test(event))).toEqual([
+        "POST composer/editNote",
+      ]);
+    });
+
+    it("routes parish message search through private IPC without enrichment", async (context) => {
       const { expect } = context;
       const f = await fixture(context);
       await expect(

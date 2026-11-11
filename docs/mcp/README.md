@@ -30,6 +30,7 @@ published by these changes.
 | `email_analytics` | Read aggregate tracking categories for an explicit email ID or the latest group email without recipient records |
 | `group_notes` | Discover note IDs and titles on one bounded group page, with explicit continuation and unknown channel metadata |
 | `find_notes` | Find note summaries by parish-wide keyword search, without confusing broad hit counts with note totals |
+| `note` | Read one identified email/SMS note as bounded Markdown, with explicit unavailable/partial results |
 | `group_members` | List a named group's subscribed members in bounded pages, with names by default |
 | `is_member` | Check one chosen member/group relationship as `member`, `not_member`, or `unknown` |
 | `add_member` | Add once by `groupId` or case-insensitive unique `groupName`; return only success |
@@ -291,7 +292,7 @@ has offline coverage only. Codex Desktop use of this change remains unverified.
 ### Recent group notes
 
 `group_notes` accepts exactly one `groupId` or unique `groupName`. It reads
-one JSON notes page and returns up to 50 note summaries in upstream order:
+one JSON notes page and returns up to 50 summaries in `notes`, in upstream order:
 ID, title, raw `publishedDate`, recognized publication `status`, and `type: null`
 because this listing does not establish the delivery channel. Missing or
 unsupported optional metadata remains null. Draft/scheduled rows are not skipped,
@@ -321,7 +322,7 @@ JSON search page with the observed note/event/file/user/group/comment filters.
 There is no group/date filter, continuation, automatic retry, or per-result
 enrichment. Results retain upstream order, not chronological order.
 
-Up to 50 note summaries include normalized ID, optional title, raw `date`,
+Up to 50 summaries in `notes` include normalized ID, optional title, raw `date`,
 recognized `type` (`email`, `sms`, `scheduled`, otherwise null), and established
 group targets. Scheduled does not mean sent; date units and original-send meaning
 are unestablished. Only targets with `type: "group"` and an explicit `groupID`
@@ -346,6 +347,46 @@ echo including `userDocument`, and email/SMS/scheduled note results with group/u
 targets. Empty, mixed-entity, clipped and malformed pages are simulated policies.
 This implementation has offline coverage only; live and installed Codex use are
 unverified.
+
+### Read a note's content
+
+`note` accepts one explicit `noteId` from discovery. It makes one form-encoded
+POST to `composer/editNote` with `noteID` and `fromComposer=1`, reusing the saved
+session without preflight or retry. Despite its name, this endpoint supplied
+existing content without observed changes in controlled test-parish probes.
+Flockbot never invokes preview, save, send, schedule or delete for this read.
+Different permissions and concurrent edits remain unverified.
+
+The reader checks success, identity, `newNote`, `duplicate`, autosave ambiguity,
+type and status before returning content. Only `email`/`sms` and `published`/`draft`
+are supported. Deleted notes can still have content upstream: their result is
+`unavailable` with `markdown: null`, as are unsupported states/types or ambiguous
+identity flags. Missing/mismatched identity and malformed envelopes are errors.
+Publication is not proof of sending or delivery.
+
+Text, quote and URL-button modules become Markdown with paragraphs, headings,
+emphasis, lists and HTTP(S) links. SMS text keeps line breaks. Raw HTML, scripts,
+hidden controls and embedded resources are not emitted or fetched. Unsafe links
+keep their labels without targets. Authored content is untrusted data, not agent
+instructions. Only note metadata and content are projected, never composer
+configuration, targets or session data. Existing diagnostic sanitization remains
+centralized, metadata-only by default and explicitly verbose per call.
+
+`completeness` is `complete`, `partial`, or `unavailable`.
+`omissions` gives fixed reasons for unsupported modules/markup/layout, invalid
+content, unsafe links or limits. Supported content remains readable when other
+modules are unsupported. Sections are flattened in order, col1 then col2;
+populated second columns are partial because visual reading order is unverified.
+An established empty section list is a complete empty body; missing content is not.
+Limits are 100 sections/modules, 256 KiB authored text, 8,192 parsed nodes,
+64 HTML levels and 32,000 Markdown characters. Clipping is partial and
+`truncated`; title clipping at 512 characters is also partial, with `titleTruncated`
+distinguishing it from body clipping.
+
+Discovery remains summary-only. `group_notes`/`find_notes` and their `notes`
+result fields replace the unreleased message-named interfaces without aliases.
+Email analytics and engagement tool names stay unchanged. The reader has offline
+coverage; installed Codex use remains unverified.
 
 ## Develop and verify
 

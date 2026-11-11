@@ -29,6 +29,7 @@ import { membershipResponse } from "../fixtures/member-groups.js";
 import { rosterPage, rosterRow } from "../fixtures/group-members.js";
 import { latestEmailResponses } from "../fixtures/latest-email.js";
 import { noteSearchResponse } from "../fixtures/note-search.js";
+import { noteResponse } from "../fixtures/note.js";
 import { safeDiagnostic } from "../../adapters/mcp/src/diagnostics.js";
 import { FailureLog } from "../../adapters/mcp/src/failure-log.js";
 import { BrowserService } from "../../adapters/mcp/src/browser-broker.js";
@@ -169,6 +170,10 @@ async function fixture() {
           });
         } else if (path === "network/getMetadata") {
           await json({ success: true, networkID: 201, everyoneGroupID: 101 });
+        } else if (path === "composer/editNote") {
+          expect(request.method()).toBe("POST");
+          expect(request.postData()).toBe("noteID=801&fromComposer=1");
+          await json(noteResponse());
         } else if (path === "supersearch/query" && url.search === "?ajax") {
           expect(request.method()).toBe("POST");
           const form = new URLSearchParams(request.postData() ?? "");
@@ -1194,12 +1199,69 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
           { path: "group/101/notes", method: "GET" },
         ]);
       }
+      const noteStart = f.visits.length;
+      const content = await client.callTool({
+        name: "note",
+        arguments: { noteId: "801" },
+      });
+      expect(content.structuredContent).toMatchObject({
+        ok: true,
+        noteId: "801",
+        completeness: "complete",
+        status: "published",
+      });
+      expect(content.structuredContent).toMatchObject({
+        markdown: expect.stringContaining("## Rehearsal"),
+      });
+      expect(JSON.stringify(content)).not.toContain("HIDDEN_");
+      const deleted = noteResponse();
+      deleted.noteInfo.status = "deleted";
+      f.state.responses["composer/editNote"] = {
+        status: 200,
+        body: JSON.stringify(deleted),
+      };
+      const unavailable = await client.callTool({
+        name: "note",
+        arguments: { noteId: "801" },
+      });
+      expect(unavailable.structuredContent).toMatchObject({
+        completeness: "unavailable",
+        reason: "deleted",
+        markdown: null,
+      });
+      deleted.noteInfo.ID = 802;
+      f.state.responses["composer/editNote"] = {
+        status: 200,
+        body: JSON.stringify(deleted),
+      };
+      const mismatch = await client.callTool({
+        name: "note",
+        arguments: { noteId: "801" },
+      });
+      expect(mismatch.structuredContent).toMatchObject({
+        code: "invalid_response",
+        diagnostic: {
+          operation: "note",
+          failure: {
+            endpoint: "composer/editNote",
+            reason: "note_identity_mismatch",
+          },
+        },
+      });
+      expect(JSON.stringify(mismatch)).not.toMatch(
+        /HIDDEN_|Rehearsal|Sing together/,
+      );
+      expect(f.visits.slice(noteStart)).toEqual([
+        { path: "composer/editNote", method: "POST" },
+        { path: "composer/editNote", method: "POST" },
+        { path: "composer/editNote", method: "POST" },
+      ]);
       const searchStart = f.visits.length;
-      const notes = await client.callTool({
+      const messages = await client.callTool({
         name: "find_notes",
         arguments: { searchTerm: "choir + plans" },
       });
-      expect(notes.structuredContent).toMatchObject({
+      expect(messages.structuredContent).toMatchObject({
         ok: true,
         totalHits: 12,
         returnedCount: 3,
@@ -1209,7 +1271,7 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
           { id: "802", type: "sms" },
         ],
       });
-      expect(JSON.stringify(notes)).not.toContain("HIDDEN_");
+      expect(JSON.stringify(messages)).not.toContain("HIDDEN_");
       expect(f.visits.slice(searchStart)).toEqual([
         { path: "network/getMetadata", method: "POST" },
         { path: "supersearch/query", method: "POST" },
