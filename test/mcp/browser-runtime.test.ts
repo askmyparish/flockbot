@@ -28,6 +28,7 @@ import { profileResponse } from "../fixtures/member-profile.js";
 import { membershipResponse } from "../fixtures/member-groups.js";
 import { rosterPage, rosterRow } from "../fixtures/group-members.js";
 import { latestEmailResponses } from "../fixtures/latest-email.js";
+import { noteSearchResponse } from "../fixtures/note-search.js";
 import { safeDiagnostic } from "../../adapters/mcp/src/diagnostics.js";
 import { FailureLog } from "../../adapters/mcp/src/failure-log.js";
 import { BrowserService } from "../../adapters/mcp/src/browser-broker.js";
@@ -167,7 +168,21 @@ async function fixture() {
             groups: [{ ID: 102, name: "Volunteers", shortname: "volunteers" }],
           });
         } else if (path === "network/getMetadata") {
-          await json({ everyoneGroupID: 101 });
+          await json({ success: true, networkID: 201, everyoneGroupID: 101 });
+        } else if (path === "supersearch/query" && url.search === "?ajax") {
+          expect(request.method()).toBe("POST");
+          const form = new URLSearchParams(request.postData() ?? "");
+          expect(form.getAll("filters[]")).toEqual([
+            "note",
+            "event",
+            "file",
+            "user",
+            "group",
+            "comment",
+          ]);
+          expect(form.get("networkID")).toBe("201");
+          expect(form.get("searchTerm")).toBe("choir + plans");
+          await json(noteSearchResponse());
         } else if (
           (path === "group/101/people" || path === "group/102/people") &&
           url.search === "?ajax" &&
@@ -1179,6 +1194,44 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
           { path: "group/101/notes", method: "GET" },
         ]);
       }
+      const searchStart = f.visits.length;
+      const notes = await client.callTool({
+        name: "find_notes",
+        arguments: { searchTerm: "choir + plans" },
+      });
+      expect(notes.structuredContent).toMatchObject({
+        ok: true,
+        totalHits: 12,
+        returnedCount: 3,
+        notes: [
+          { id: "803", type: "scheduled" },
+          { id: "801", type: "email" },
+          { id: "802", type: "sms" },
+        ],
+      });
+      expect(JSON.stringify(notes)).not.toContain("HIDDEN_");
+      expect(f.visits.slice(searchStart)).toEqual([
+        { path: "network/getMetadata", method: "POST" },
+        { path: "supersearch/query", method: "POST" },
+      ]);
+      f.state.responses["supersearch/query"] = {
+        status: 200,
+        body: JSON.stringify(noteSearchResponse("wrong echo")),
+      };
+      const failure = await client.callTool({
+        name: "find_notes",
+        arguments: { searchTerm: "choir + plans" },
+      });
+      expect(failure.structuredContent).toMatchObject({
+        code: "invalid_response",
+        diagnostic: {
+          operation: "find_notes",
+          failure: {
+            endpoint: "supersearch/query",
+            reason: "search_echo_mismatch",
+          },
+        },
+      });
       expect(f.state.external).toBe(0);
       expect(f.state.launches).toBe(1);
     }, 60_000);

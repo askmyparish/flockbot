@@ -26,6 +26,7 @@ export const FLOCKNOTE_TOOLS = [
   "connect",
   "email_analytics",
   "find_members",
+  "find_notes",
   "group_members",
   "group_notes",
   "groups",

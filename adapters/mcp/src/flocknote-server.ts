@@ -113,6 +113,7 @@ export type FlocknoteConnection = Pick<
   | "memberLatestEmailStatus"
   | "emailAnalytics"
   | "groupNotes"
+  | "findNotes"
   | "groupMembers"
   | "isMember"
   | "addMember"
@@ -549,6 +550,27 @@ export function createFlocknoteServer(
           ...(await connection.memberCommunicationStatus(input, {
             signal: extra.signal,
           })),
+        }),
+        verboseDiagnostics,
+      ),
+  );
+  server.registerTool(
+    "find_notes",
+    {
+      title: "Find parish notes",
+      description:
+        "Find note IDs and titles by keyword across the current parish. Returns up to 50 summaries from one broad JSON search page, including email/SMS/scheduled and unknown types. totalHits covers all entity kinds, not just notes; omittedNonNoteCount and clippedNoteCount explain filtering and local limits. Search order is not chronology, scheduled does not mean sent, and empty results do not prove absence. Only established group targets are returned, never bodies, authors or recipients. Use group_notes for one group's recent page. No group/date filters, pagination or enrichment.",
+      inputSchema: z
+        .object({ verboseDiagnostics, searchTerm: z.string().min(1).max(256) })
+        .strict(),
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ verboseDiagnostics, ...input }, extra) =>
+      guarded(
+        "find_notes",
+        async () => ({
+          ok: true,
+          ...(await connection.findNotes(input, { signal: extra.signal })),
         }),
         verboseDiagnostics,
       ),

@@ -7,6 +7,7 @@ import { profileResponse } from "../../fixtures/member-profile.js";
 import { membershipResponse } from "../../fixtures/member-groups.js";
 import { rosterPage, rosterRow } from "../../fixtures/group-members.js";
 import { latestEmailResponses } from "../../fixtures/latest-email.js";
+import { noteSearchResponse } from "../../fixtures/note-search.js";
 import { recordResponse } from "../../../adapters/mcp/src/diagnostics.js";
 import {
   BrowserService,
@@ -46,7 +47,11 @@ if (role === "broker") {
                   ],
                 };
               case "network/getMetadata":
-                return { everyoneGroupID: 101 };
+                return { success: true, networkID: 201, everyoneGroupID: 101 };
+              case "supersearch/query?ajax":
+                return noteSearchResponse(
+                  new URLSearchParams(body).get("searchTerm") ?? "",
+                );
               case "group/101/getSubscriberCount":
                 while (existsSync(join(profile, "hold-count"))) await delay(10);
                 return {

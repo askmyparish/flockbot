@@ -32,6 +32,7 @@ export const FAILURE_REASONS = [
   "expected_notes_array",
   "invalid_result_count",
   "search_echo_mismatch",
+  "note_identity_mismatch",
   "email_identity_shape",
   "missing_analytics_counts",
   "analytics_count_invalid",

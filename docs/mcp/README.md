@@ -29,6 +29,7 @@ published by these changes.
 | `member_latest_email_status` | Check recorded engagement on the group's latest distinct sent email; unsupported cases remain unknown |
 | `email_analytics` | Read aggregate tracking categories for an explicit email ID or the latest group email without recipient records |
 | `group_notes` | Discover note IDs and titles on one bounded group page, with explicit continuation and unknown channel metadata |
+| `find_notes` | Find note summaries by parish-wide keyword search, without confusing broad hit counts with note totals |
 | `group_members` | List a named group's subscribed members in bounded pages, with names by default |
 | `is_member` | Check one chosen member/group relationship as `member`, `not_member`, or `unknown` |
 | `add_member` | Add once by `groupId` or case-insensitive unique `groupName`; return only success |
@@ -311,6 +312,40 @@ Retained listing observations establish IDs, titles, `publishedDate`, and
 labels are provisional for this endpoint, not observed listing values. Tests of
 those statuses, empty pages, clipping, and malformed rows are simulations; they
 verify parser policy rather than establish what the upstream listing returns.
+
+### Parish note search
+
+`find_notes` accepts only `searchTerm` (nonblank, at most 256 characters),
+plus the shared diagnostic option. It reads network metadata, then one broad
+JSON search page with the observed note/event/file/user/group/comment filters.
+There is no group/date filter, continuation, automatic retry, or per-result
+enrichment. Results retain upstream order, not chronological order.
+
+Up to 50 note summaries include normalized ID, optional title, raw `date`,
+recognized `type` (`email`, `sms`, `scheduled`, otherwise null), and established
+group targets. Scheduled does not mean sent; date units and original-send meaning
+are unestablished. Only targets with `type: "group"` and an explicit `groupID`
+are returned; a target's generic `entityID` is never substituted. Missing or
+malformed optional target metadata becomes null. An empty group-target list is
+not evidence of no recipients. Bodies, previews, authors, person targets and
+unrelated entity payloads are excluded.
+
+`totalHits` is the broad upstream count, not a note-only total.
+`upstreamReturnedCount`, `returnedCount`, `omittedNonNoteCount`, and
+`clippedNoteCount` distinguish the received page from emitted notes.
+`completeness` is `partial` when more broad hits or clipped notes exist,
+otherwise `unknown`; even zero hits do not establish exhaustive absence.
+`truncated` reports local clipping: notes at 50, titles at 512 UTF-16 code units, group-target
+names at 256, and 10 targets per note. Per-title/name/target clipping flags
+identify these limits. Required note identities and duplicates are validated
+even beyond the output cap; search echo/envelope failures are errors, not empty
+results.
+
+Retained capture observations establish the search envelope, object-shaped filter
+echo including `userDocument`, and email/SMS/scheduled note results with group/user
+targets. Empty, mixed-entity, clipped and malformed pages are simulated policies.
+This implementation has offline coverage only; live and installed Codex use are
+unverified.
 
 ## Develop and verify
 
