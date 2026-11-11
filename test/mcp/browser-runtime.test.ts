@@ -31,7 +31,12 @@ import { latestEmailResponses } from "../fixtures/latest-email.js";
 import { noteSearchResponse } from "../fixtures/note-search.js";
 import { noteResponse } from "../fixtures/note.js";
 import { recipientPage } from "../fixtures/email-recipients.js";
-import { draftInput, draftResponse } from "../fixtures/email-draft.js";
+import {
+  draftInput,
+  draftResponse,
+  htmlDraftInput,
+  htmlDraftStored,
+} from "../fixtures/email-draft.js";
 import { safeDiagnostic } from "../../adapters/mcp/src/diagnostics.js";
 import { FailureLog } from "../../adapters/mcp/src/failure-log.js";
 import { BrowserService } from "../../adapters/mcp/src/browser-broker.js";
@@ -45,6 +50,7 @@ async function fixture({ onTestFinished, expect }: TestContext) {
   const emailResponses: Record<string, unknown> = latestEmailResponses();
   const state = {
     draft: false,
+    draftHtml: undefined as string | undefined,
     launches: 0,
     expired: false,
     authFailure: "http401",
@@ -161,6 +167,7 @@ async function fixture({ onTestFinished, expect }: TestContext) {
           const value = draftResponse(
             `${path}${url.search}`,
             request.postData() ?? undefined,
+            state.draftHtml,
           );
           if (typeof value === "string")
             await route.fulfill({ contentType: "text/html", body: value });
@@ -314,32 +321,36 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
   "real Chromium with offline Flocknote fixtures",
   { concurrent: true },
   () => {
-    it("creates an unscheduled draft through the actual browser fetch allowlist", async (context) => {
-      const { expect } = context;
-      const f = await fixture(context);
-      await f.signIn();
-      f.state.draft = true;
-      const start = f.visits.length;
-      expect(await f.connection.createEmailDraft(draftInput)).toMatchObject({
-        noteId: "803",
-        verified: true,
-        status: "draft",
-      });
-      expect(f.visits.slice(start).map((v) => v.path)).toEqual([
-        "dashboard",
-        "network/getMetadata",
-        "network/501/writeNewNote",
-        "composer/createNote",
-        "composer/save2",
-        "composer/saveModule",
-        "composer/saveSection",
-        "composer/saveLayout",
-        "composer/save2",
-        "composer/save2",
-        "composer/editNote",
-      ]);
-      expect(f.state.external).toBe(0);
-    });
+    it.for([draftInput, htmlDraftInput])(
+      "creates an unscheduled draft through the actual browser fetch allowlist: $bodyFormat",
+      async (input, context) => {
+        const { expect } = context;
+        const f = await fixture(context);
+        await f.signIn();
+        f.state.draft = true;
+        f.state.draftHtml = "bodyFormat" in input ? htmlDraftStored : undefined;
+        const start = f.visits.length;
+        expect(await f.connection.createEmailDraft(input)).toMatchObject({
+          noteId: "803",
+          verified: true,
+          status: "draft",
+        });
+        expect(f.visits.slice(start).map((v) => v.path)).toEqual([
+          "dashboard",
+          "network/getMetadata",
+          "network/501/writeNewNote",
+          "composer/createNote",
+          "composer/save2",
+          "composer/saveModule",
+          "composer/saveSection",
+          "composer/saveLayout",
+          "composer/save2",
+          "composer/save2",
+          "composer/editNote",
+        ]);
+        expect(f.state.external).toBe(0);
+      },
+    );
     it("runs verbose reads, writes and cancellation through MCP and a real Chromium broker process", {
       concurrent: false,
       timeout: 60_000,

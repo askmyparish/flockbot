@@ -37,6 +37,13 @@ export const draftInput = {
 };
 export const draftHtml =
   "<div>A &#60;b&#62; &#38;lt; &#34;hi&#34;<br><br>**literal** café 🕊<br></div>";
+export const htmlDraftInput = {
+  ...draftInput,
+  bodyFormat: "html" as const,
+  body: '<h1>One</h1><h2>Two</h2><h3>Three</h3><h4>Four</h4><h5>Five</h5><h6>Six</h6>\n<div><p>A <strong>bold</strong> <b>alias</b> <em>emphasis</em> <i>italic</i><br/>Literal &lt;b&gt; &amp;lt; &quot; &#39; café 🕊</p><ul><li>First</li><li><ol><li>Nested</li></ol></li></ul><blockquote><p>Quote</p></blockquote><a href="https://example.test/?a=1&amp;b=2#part">A &amp; B</a></div>',
+};
+export const htmlDraftStored =
+  '<h1>One</h1><h2>Two</h2><h3>Three</h3><h4>Four</h4><h5>Five</h5><h6>Six</h6> <div><div>A <strong>bold</strong> <b>alias</b> <em>emphasis</em> <i>italic</i><br>Literal &#60;b&#62; &#38;lt; &#34; &#39; café 🕊</div><ul><li>First</li><li><ol><li>Nested</li></ol></li></ul><blockquote><div>Quote</div></blockquote><a href="https://example.test/?a=1&#38;b=2#part">A &#38; B</a></div>';
 export function draftReadback() {
   return {
     success: true,
@@ -57,7 +64,11 @@ export function draftReadback() {
     },
   };
 }
-export function draftResponse(path: string, body?: string): unknown {
+export function draftResponse(
+  path: string,
+  body?: string,
+  html = draftHtml,
+): unknown {
   const form = new URLSearchParams(body);
   switch (path) {
     case "user/userData":
@@ -93,7 +104,18 @@ export function draftResponse(path: string, body?: string): unknown {
     case "composer/saveLayout":
       return { success: true, layoutID: "831" };
     case "composer/editNote":
-      return draftReadback();
+      return {
+        ...draftReadback(),
+        noteInfo: {
+          ...draftReadback().noteInfo,
+          sections: [
+            {
+              col1: { items: [{ type: "text", data: { html } }] },
+              col2: { items: [] },
+            },
+          ],
+        },
+      };
     default:
       throw Error(`Unexpected fictional endpoint ${path}`);
   }

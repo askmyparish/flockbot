@@ -782,7 +782,7 @@ export function createFlocknoteServer(
     {
       title: "Create an unsent email draft",
       description:
-        "Save a new email draft only when the user requests it. Supply exactly one groupId or unique groupName, a nonblank single-line subject, and a plain-text body. HTML and Markdown remain literal text. Returns draft IDs only after verifying saved content, target and unscheduled draft status. Does not send or edit existing notes. On failure, draftProgress identifies known partial work; check Flocknote before resubmitting an unknown outcome. No application character caps; upstream and transport restrictions can still reject the request without truncation.",
+        "Save a new email draft only when the user requests it. Supply exactly one groupId or unique groupName, a nonblank single-line subject, and body. bodyFormat defaults to text (HTML/Markdown remain literal); html accepts balanced fragments with p/div/br, h1–h6, strong/b, em/i, ul/ol/li, blockquote and a[href]. Only absolute HTTP(S) links without credentials; no other attributes, CSS, images or tables. Unsupported markup is rejected, not stripped. Paragraphs become Flocknote div blocks; HTML source newlines become spaces. Returns draft IDs only after verifying content, links, target and unscheduled status. Does not send or edit existing notes. On failure, draftProgress identifies known partial work; check Flocknote before resubmitting an unknown outcome. No application character caps; transport limits may reject without truncation.",
       inputSchema: z
         .object({
           verboseDiagnostics,
@@ -790,6 +790,7 @@ export function createFlocknoteServer(
           groupName: z.string().min(1).max(256).optional(),
           subject: z.string().min(1),
           body: z.string().min(1),
+          bodyFormat: z.enum(["text", "html"]).optional(),
         })
         .strict(),
       annotations: {

@@ -32,7 +32,7 @@ published by these changes.
 | `group_notes` | Discover note IDs and titles on one bounded group page, with explicit continuation and unknown channel metadata |
 | `find_notes` | Find note summaries by parish-wide keyword search, without confusing broad hit counts with note totals |
 | `note` | Read one identified email/SMS note as bounded Markdown, with explicit unavailable/partial results |
-| `create_email_draft` | Create a plain-text email draft for one explicit group, then verify its persisted content and unscheduled state |
+| `create_email_draft` | Create a text or basic-HTML email draft for one explicit group, then verify its persisted content and unscheduled state |
 | `group_members` | List a named group's subscribed members in bounded pages, with names by default |
 | `is_member` | Check one chosen member/group relationship as `member`, `not_member`, or `unknown` |
 | `add_member` | Add once by `groupId` or case-insensitive unique `groupName`; return only success |
@@ -427,11 +427,33 @@ coverage; installed Codex use remains unverified.
 
 `create_email_draft` requires exactly one explicit `groupId` or case-insensitive
 unique `groupName`, a nonblank single-line `subject`, and a nonblank plain-text
-`body`. It never defaults to Everyone. Subject whitespace is trimmed; body line
+`body` by default. It never defaults to Everyone. Subject whitespace is trimmed; body line
 endings become LF. Literal markup remains text. No subject/body character cap
 is imposed, and input is never truncated. The existing local broker's 16 KiB
 JSON request-frame limit still applies: an oversized request fails before
 submission with `request_not_sent`, `request_too_large`, and `not_submitted`.
+
+Set `bodyFormat: "html"` for basic formatting; omit it or use `"text"` for literal
+text. HTML accepts `p`, `div`, `br`, `h1`–`h6`, `strong`/`b`, `em`/`i`, `ul`, `ol`,
+`li`, `blockquote` and `a`. The only attribute is a required `href` on `a`, with an
+absolute HTTP(S) URL without embedded credentials. Links are never fetched.
+Every non-void element must have a matching closing tag. Parser repairs, comments,
+full documents, unsupported elements/attributes and bodies without visible text
+are rejected before requests, not silently sanitized. CSS, images, tables,
+scripts, embeds, templates and mailto/tel links are not supported.
+Lists contain only list items and whitespace; list items require a list parent.
+Headings, paragraphs and emphasis contain inline content, not nested blocks.
+
+Flocknote stores `p` as `div` blocks, so browser-default paragraph margins are not
+preserved. HTML source newlines become spaces; use `<br>` or block elements for
+line breaks. Outer HTML whitespace is removed before saving; interior spaces,
+tabs and empty blocks are retained. Read-back verification compares text, structure and link destinations
+after these characterized normalizations, not the lossy Markdown reader's output.
+Changed or unsupported persisted content remains an unverified partial write.
+Validation reasons are `draft_html_malformed` (use balanced fragments),
+`draft_html_unsupported` (use only the vocabulary above), `draft_html_unsafe_link`
+(use an absolute HTTP(S) URL without credentials/whitespace) and `draft_html_empty`
+(include visible text). Errors do not echo authored content.
 
 The writer uses the saved connection, checks the composer entry's readiness and
 billing branches, and inherits Flocknote's sender/theme. It saves a new email-only,

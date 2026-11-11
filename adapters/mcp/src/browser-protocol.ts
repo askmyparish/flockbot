@@ -179,6 +179,7 @@ export const brokerRequestSchema = z.discriminatedUnion("action", [
       groupName: z.string().min(1).max(256).optional(),
       subject: z.string().min(1),
       body: z.string().min(1),
+      bodyFormat: z.enum(["text", "html"]).optional(),
     })
     .strict(),
 ]);

@@ -348,6 +348,31 @@ blank lines, Markdown punctuation, a URL, and literal entity-looking strings
 such as `&lt;`, `&#60;`, `&amp;`, `&copy;`, and `&not;`. No supplied markup became
 an element. This verifies persisted JSON content, not sent-email rendering.
 
+### Basic HTML fragment persistence
+
+A disposable JSON composer probe preserved heading levels 1–6, `strong`/`b`,
+`em`/`i`, nested ordered/unordered lists, list items, blockquotes, breaks and links.
+The same escaped-numeric transport encoding applies to parsed text and attribute
+values, not the entire fragment. An HTTP(S) href with query ampersands, percent
+encoding and a fragment reopened with the same decoded destination. Literal
+tag-looking text and entity-looking text remained text rather than new elements.
+
+The observed server rewrote `p` to `div` and source newlines to spaces. Paragraph
+blocks therefore do not promise browser-default `p` margins. All other supported
+structure, text and destinations must match after read-back. Balanced fragment
+validation rejects parser repair and discarded source tokens before saving;
+unsupported attributes are rejected, not stripped. This evidence concerns stored
+draft HTML only, not rendering in delivered emails. Both disposable records were
+deleted with identity/status read-back. The user's existing drafts were untouched.
+
+A second disposable probe included indentation, repeated spaces, a text tab,
+whitespace-only nodes inside a list, leading/trailing whitespace and an empty
+paragraph. The server trimmed outer whitespace, retained all interior runs and
+the tab, and kept the empty paragraph as an empty `div`. The initial strict
+comparison correctly reported an unverified partial write. Remove only outer
+HTML whitespace before submitting; do not collapse interior text or omit empty
+blocks. The probe's owned records were deleted and verified deleted.
+
 ### Cleanup and remaining limits
 
 The experiment deleted only its owned draft B and autosave A with

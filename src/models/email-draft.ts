@@ -8,10 +8,12 @@ import {
 import type { Network } from "./network.js";
 import { invalidResponse, record, successful, text } from "./parsing.js";
 import type { ResourceQuery } from "./resource-read.js";
+import { encodeDraftText, htmlDraftBody } from "./email-draft-html.js";
 
 export interface EmailDraftInput extends GroupSelector {
   readonly subject: string;
   readonly body: string;
+  readonly bodyFormat?: "text" | "html" | undefined;
 }
 export interface EmailDraftResult {
   readonly noteId: string;
@@ -110,6 +112,7 @@ function persistedText(value: unknown): string {
 /** One create-only intent. Private content never appears in inspection/JSON output. */
 export class EmailDraft {
   readonly #input: EmailDraftInput;
+  readonly #htmlBody: ReturnType<typeof htmlDraftBody> | undefined;
   #progress: DraftProgress = { stage: "resolve_group", completedStages: [] };
   #submitted = false;
   constructor(input: EmailDraftInput) {
@@ -119,8 +122,14 @@ export class EmailDraft {
         typeof input !== "object" ||
         Array.isArray(input) ||
         Object.keys(input).some(
-          (k) => !["groupId", "groupName", "subject", "body"].includes(k),
+          (k) =>
+            !["groupId", "groupName", "subject", "body", "bodyFormat"].includes(
+              k,
+            ),
         ) ||
+        (input.bodyFormat !== undefined &&
+          input.bodyFormat !== "text" &&
+          input.bodyFormat !== "html") ||
         typeof input.subject !== "string" ||
         !input.subject.trim() ||
         /[\r\n]/.test(input.subject) ||
@@ -132,10 +141,17 @@ export class EmailDraft {
         ...membershipGroupSelector(input),
         subject: input.subject.trim(),
         body: input.body.replace(/\r\n?/g, "\n"),
+        ...(input.bodyFormat === undefined
+          ? {}
+          : { bodyFormat: input.bodyFormat }),
       });
     } catch {
       throw new FlockbotError("invalid_input", undefined, "not_submitted");
     }
+    this.#htmlBody =
+      this.#input.bodyFormat === "html"
+        ? htmlDraftBody(this.#input.body)
+        : undefined;
   }
   toInput(): EmailDraftInput {
     return { ...this.#input };
@@ -287,9 +303,9 @@ export class EmailDraft {
     if (autosave.ID != null || autosave.newNote !== false)
       return invalidResponse("draft_initialization");
     done();
-    // Flocknote decodes ordinary named entities in this protocol. Numeric references
-    // with an escaped ampersand survive the save/read path as literal text.
-    const html = `<div>${input.body.replace(/[&<>"']/g, (c) => `&amp;#${c.codePointAt(0)};`).replaceAll("\n", "<br>")}</div>`;
+    const html =
+      this.#htmlBody?.html ??
+      `<div>${encodeDraftText(input.body).replaceAll("\n", "<br>")}</div>`;
     const module = successful(
       await request("module", "composer/saveModule", {
         noteID: autosaveId,
@@ -384,9 +400,13 @@ export class EmailDraft {
     )
       return invalidResponse("draft_verification");
     const item = record(first.items[0]);
+    const storedHtml = record(item.data).html;
     if (
       item.type !== "text" ||
-      persistedText(record(item.data).html) !== input.body
+      typeof storedHtml !== "string" ||
+      (this.#htmlBody
+        ? htmlDraftBody(storedHtml, true).signature !== this.#htmlBody.signature
+        : persistedText(storedHtml) !== input.body)
     )
       return invalidResponse("draft_verification");
     done();
