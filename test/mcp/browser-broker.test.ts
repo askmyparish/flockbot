@@ -293,6 +293,30 @@ describe.skipIf(process.platform === "win32")(
       );
     });
 
+    it("reads one recipient page through private IPC with opt-in addresses", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
+      await expect(
+        f.service.emailRecipients({ emailId: "../801", category: "opened" }),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      expect(f.launches()).toBe(0);
+      const r = await f.service.emailRecipients({
+        emailId: "00801",
+        category: "unopened",
+        fields: ["address"],
+      });
+      expect(r).toMatchObject({
+        requested: { emailId: "801", category: "unopened" },
+        recipients: [{ userId: "301", address: "alex@example.test" }],
+        hasMore: null,
+        completeness: "unknown",
+      });
+      expect(f.events().filter((event) => /^(GET|POST) /.test(event))).toEqual([
+        "GET note/801/analyticsSummary?ajax",
+        "POST note/801/detailedAnalytics?ajax",
+      ]);
+    });
+
     it("reads note content through private IPC without browser launch on invalid input", async (context) => {
       const { expect } = context;
       const f = await fixture(context);

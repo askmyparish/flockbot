@@ -16,6 +16,7 @@ import { membershipResponse } from "../fixtures/member-groups.js";
 import { latestEmailResponses } from "../fixtures/latest-email.js";
 import { noteSearchResponse } from "../fixtures/note-search.js";
 import { noteResponse } from "../fixtures/note.js";
+import { recipientPage } from "../fixtures/email-recipients.js";
 import { FlockbotError } from "../../src/errors.js";
 import { waitFor } from "./support.js";
 
@@ -46,6 +47,7 @@ async function fixture() {
     navigation: unknown;
     notes: unknown;
     note: unknown;
+    recipients: unknown;
     latestEmail: Record<string, unknown>;
   } = {
     response: { success: true, results: [searchRow()], resultCount: 1 },
@@ -56,6 +58,7 @@ async function fixture() {
     navigation: { groups: [] },
     notes: noteSearchResponse(),
     note: noteResponse(),
+    recipients: recipientPage(),
     latestEmail: latestEmailResponses(),
   };
   const session: BrowserSession = {
@@ -78,6 +81,10 @@ async function fixture() {
       if (path === "composer/editNote") {
         if (state.note instanceof Error) throw state.note;
         return state.note;
+      }
+      if (path === "note/801/detailedAnalytics?ajax") {
+        if (state.recipients instanceof Error) throw state.recipients;
+        return state.recipients;
       }
       if (path === "group/101/people?ajax") return searchMetadata();
       if (path === "group/101/filter") {
@@ -130,6 +137,113 @@ async function fixture() {
   });
   return { connection, client, factory, session, state };
 }
+
+describe("specific-email recipient MCP boundary", () => {
+  it("rejects unsupported inputs without I/O and returns only requested fields", async () => {
+    const f = await fixture();
+    for (const input of [
+      { emailId: "../801", category: "opened" },
+      { emailId: "801", category: "clicked" },
+      { emailId: "801", category: "opened", page: 2 },
+      { emailId: "801", category: "opened", fields: ["email"] },
+      { groupId: "101", category: "opened" },
+    ]) {
+      expect(
+        (
+          await f.client.callTool({
+            name: "email_recipients",
+            arguments: input,
+          })
+        ).isError,
+      ).toBe(true);
+      if (input.emailId !== "../801")
+        expect(
+          brokerRequestSchema.safeParse({
+            action: "email_recipients",
+            ...input,
+          }).success,
+        ).toBe(false);
+    }
+    expect(f.factory).not.toHaveBeenCalled();
+    for (const category of ["opened", "unopened"]) {
+      f.state.recipients = recipientPage(category);
+      const r = await f.client.callTool({
+        name: "email_recipients",
+        arguments: { emailId: "00801", category },
+      });
+      expect(r.structuredContent).toMatchObject({
+        ok: true,
+        requested: { emailId: "801", category },
+        recipients: [{ userId: "301", firstName: "Alex" }],
+        completeness: "unknown",
+        hasMore: null,
+      });
+      expect(JSON.stringify(r)).not.toContain("alex@example.test");
+    }
+    expect(vi.mocked(f.session.request).mock.calls).toEqual([
+      ["note/801/analyticsSummary?ajax", "GET", undefined],
+      ["note/801/detailedAnalytics?ajax", "POST", "type=opened&page=1"],
+      ["note/801/analyticsSummary?ajax", "GET", undefined],
+      ["note/801/detailedAnalytics?ajax", "POST", "type=unopened&page=1"],
+    ]);
+    const r = await f.client.callTool({
+      name: "email_recipients",
+      arguments: { emailId: "801", category: "unopened", fields: ["address"] },
+    });
+    expect(r.structuredContent).toMatchObject({
+      recipients: [{ address: "alex@example.test" }],
+    });
+    expect(
+      (await f.client.listTools()).tools.find(
+        (t) => t.name === "email_recipients",
+      )?.annotations,
+    ).toMatchObject({ readOnlyHint: true });
+  });
+
+  it("keeps permission errors private and diagnoses sign-in once without replay", async () => {
+    const f = await fixture();
+    f.state.recipients = new FlockbotError("permission_denied");
+    expect(
+      (
+        await f.client.callTool({
+          name: "email_recipients",
+          arguments: { emailId: "801", category: "opened" },
+        })
+      ).structuredContent,
+    ).toMatchObject({
+      code: "permission_denied",
+      diagnostic: { operation: "email_recipients" },
+    });
+    f.state.recipients = "<form>PRIVATE_LOGIN</form>";
+    f.state.verification = { success: true, userID: null, authorized: false };
+    const r = await f.client.callTool({
+      name: "email_recipients",
+      arguments: { emailId: "801", category: "opened" },
+    });
+    expect(r.structuredContent).toMatchObject({
+      code: "authentication_required",
+    });
+    expect(JSON.stringify(r)).not.toContain("PRIVATE_LOGIN");
+    expect(
+      vi.mocked(f.session.request).mock.calls.map(([path]) => path),
+    ).toEqual([
+      "note/801/analyticsSummary?ajax",
+      "note/801/detailedAnalytics?ajax",
+      "note/801/analyticsSummary?ajax",
+      "note/801/detailedAnalytics?ajax",
+      "user/userData",
+    ]);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      f.connection.emailRecipients(
+        { emailId: "801", category: "opened" },
+        { signal: controller.signal },
+      ),
+    ).rejects.toMatchObject({ code: "operation_cancelled" });
+    expect(f.session.request).toHaveBeenCalledTimes(5);
+  });
+});
 
 describe("note MCP reader", () => {
   it("validates strict inputs before I/O, then projects one read with safe annotations", async () => {

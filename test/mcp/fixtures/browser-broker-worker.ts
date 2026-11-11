@@ -9,6 +9,7 @@ import { rosterPage, rosterRow } from "../../fixtures/group-members.js";
 import { latestEmailResponses } from "../../fixtures/latest-email.js";
 import { noteSearchResponse } from "../../fixtures/note-search.js";
 import { noteResponse } from "../../fixtures/note.js";
+import { recipientPage } from "../../fixtures/email-recipients.js";
 import { recordResponse } from "../../../adapters/mcp/src/diagnostics.js";
 import {
   BrowserService,
@@ -56,6 +57,10 @@ if (role === "broker") {
               case "supersearch/query?ajax":
                 return noteSearchResponse(
                   new URLSearchParams(body).get("searchTerm") ?? "",
+                );
+              case "note/801/detailedAnalytics?ajax":
+                return recipientPage(
+                  new URLSearchParams(body).get("type") ?? "",
                 );
               case "group/101/getSubscriberCount":
                 while (existsSync(join(profile, "hold-count"))) await delay(10);

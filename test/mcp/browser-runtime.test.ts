@@ -30,6 +30,7 @@ import { rosterPage, rosterRow } from "../fixtures/group-members.js";
 import { latestEmailResponses } from "../fixtures/latest-email.js";
 import { noteSearchResponse } from "../fixtures/note-search.js";
 import { noteResponse } from "../fixtures/note.js";
+import { recipientPage } from "../fixtures/email-recipients.js";
 import { safeDiagnostic } from "../../adapters/mcp/src/diagnostics.js";
 import { FailureLog } from "../../adapters/mcp/src/failure-log.js";
 import { BrowserService } from "../../adapters/mcp/src/browser-broker.js";
@@ -165,6 +166,13 @@ async function fixture({ onTestFinished, expect }: TestContext) {
           });
         } else if (path === "network/getMetadata") {
           await json({ success: true, networkID: 201, everyoneGroupID: 101 });
+        } else if (
+          path === "note/801/detailedAnalytics" &&
+          url.search === "?ajax"
+        ) {
+          expect(request.method()).toBe("POST");
+          expect(request.postData()).toBe("type=opened&page=1");
+          await json(recipientPage());
         } else if (path === "composer/editNote") {
           expect(request.method()).toBe("POST");
           expect(request.postData()).toBe("noteID=801&fromComposer=1");
@@ -1204,6 +1212,23 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
           { path: "group/101/notes", method: "GET" },
         ]);
       }
+      const recipientStart = f.visits.length;
+      const recipients = await client.callTool({
+        name: "email_recipients",
+        arguments: { emailId: "801", category: "opened" },
+      });
+      expect(recipients.structuredContent).toMatchObject({
+        ok: true,
+        returnedCount: 1,
+        recipients: [{ userId: "301", firstName: "Alex" }],
+        hasMore: null,
+        completeness: "unknown",
+      });
+      expect(JSON.stringify(recipients)).not.toContain("alex@example.test");
+      expect(f.visits.slice(recipientStart)).toEqual([
+        { path: "note/801/analyticsSummary", method: "GET" },
+        { path: "note/801/detailedAnalytics", method: "POST" },
+      ]);
       const noteStart = f.visits.length;
       const content = await client.callTool({
         name: "note",

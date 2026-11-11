@@ -39,6 +39,10 @@ import {
   EmailAnalytics,
   type EmailAnalyticsInput,
 } from "../../../src/models/email-analytics.js";
+import {
+  EmailRecipients,
+  type EmailRecipientsInput,
+} from "../../../src/models/email-recipients.js";
 import { GroupNotes } from "../../../src/models/group-notes.js";
 import { Note, type NoteInput } from "../../../src/models/note.js";
 import {
@@ -737,6 +741,16 @@ export class BrowserConnection {
     const messages = new GroupNotes(input);
     return this.#operate(options, (session, op, network) =>
       messages.list(this.#resources(session, op), network),
+    );
+  }
+
+  async emailRecipients(
+    input: EmailRecipientsInput,
+    options: OperationOptions = {},
+  ) {
+    const lookup = new EmailRecipients(input);
+    return this.#operate(options, (session, op) =>
+      lookup.read(this.#resources(session, op)),
     );
   }
 

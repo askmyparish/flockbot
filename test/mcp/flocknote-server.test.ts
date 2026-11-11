@@ -150,6 +150,11 @@ describe("Flocknote MCP contract", () => {
         ],
         ["email_analytics", "emailAnalytics", { emailId: "801" }],
         [
+          "email_recipients",
+          "emailRecipients",
+          { emailId: "801", category: "opened" },
+        ],
+        [
           "member_latest_email_status",
           "memberLatestEmailStatus",
           { userId: "301", groupId: "101" },
@@ -226,7 +231,7 @@ describe("Flocknote MCP contract", () => {
         );
         spy.mockRestore();
       }
-      expect(ids.size).toBe(13);
+      expect(ids.size).toBe(14);
       const stored = (await failureLog.read())
         ?.trim()
         .split("\n")
@@ -930,6 +935,7 @@ describe("Flocknote MCP contract", () => {
       "add_member",
       "connect",
       "email_analytics",
+      "email_recipients",
       "find_members",
       "find_notes",
       "group_members",

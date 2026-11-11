@@ -112,6 +112,7 @@ export type FlocknoteConnection = Pick<
   | "memberCommunicationStatus"
   | "memberLatestEmailStatus"
   | "emailAnalytics"
+  | "emailRecipients"
   | "groupNotes"
   | "findNotes"
   | "note"
@@ -642,6 +643,34 @@ export function createFlocknoteServer(
         async () => ({
           ok: true,
           ...(await connection.emailAnalytics(input, { signal: extra.signal })),
+        }),
+        verboseDiagnostics,
+      ),
+  );
+  server.registerTool(
+    "email_recipients",
+    {
+      title: "List an email's opened or unopened recipients",
+      description:
+        'List names and member IDs reported in one opened or unopened category page for a specific email, including older emails. Verifies email identity/type, then reads page 1; at most 50 rows, no automatic pagination or per-person lookups. Addresses are omitted unless fields:["address"] is requested. Unsupported records are omitted with omittedCount; repeated member IDs remain separate records. hasMore and completeness remain unknown, even for empty results. These records do not prove delivery or human reading. Use email_analytics for counts without identities. No writes or automatic retries.',
+      inputSchema: z
+        .object({
+          emailId: groupId,
+          category: z.enum(["opened", "unopened"]),
+          fields: z.array(z.literal("address")).max(1).optional(),
+          verboseDiagnostics,
+        })
+        .strict(),
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ verboseDiagnostics, ...input }, extra) =>
+      guarded(
+        "email_recipients",
+        async () => ({
+          ok: true,
+          ...(await connection.emailRecipients(input, {
+            signal: extra.signal,
+          })),
         }),
         verboseDiagnostics,
       ),
