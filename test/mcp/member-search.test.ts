@@ -14,6 +14,8 @@ import { searchMetadata, searchRow } from "../fixtures/member-search.js";
 import { profileResponse } from "../fixtures/member-profile.js";
 import { membershipResponse } from "../fixtures/member-groups.js";
 import { latestEmailResponses } from "../fixtures/latest-email.js";
+import { noteSearchResponse } from "../fixtures/note-search.js";
+import { FlockbotError } from "../../src/errors.js";
 import { waitFor } from "./support.js";
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -41,6 +43,7 @@ async function fixture() {
     profile: unknown;
     memberships: unknown;
     navigation: unknown;
+    notes: unknown;
     latestEmail: Record<string, unknown>;
   } = {
     response: { success: true, results: [searchRow()], resultCount: 1 },
@@ -49,6 +52,7 @@ async function fixture() {
     profile: profileResponse(),
     memberships: membershipResponse(),
     navigation: { groups: [] },
+    notes: noteSearchResponse(),
     latestEmail: latestEmailResponses(),
   };
   const session: BrowserSession = {
@@ -59,7 +63,15 @@ async function fixture() {
       if (path === "dashboard") return '<div id="fnReactHolder"></div>';
       if (path === "navigation/groups") return state.navigation;
       if (path === "network/getMetadata")
-        return { everyoneGroupID: state.everyoneGroupID };
+        return {
+          success: true,
+          networkID: 201,
+          everyoneGroupID: state.everyoneGroupID,
+        };
+      if (path === "supersearch/query?ajax") {
+        if (state.notes instanceof Error) throw state.notes;
+        return state.notes;
+      }
       if (path === "group/101/people?ajax") return searchMetadata();
       if (path === "group/101/filter") {
         if (state.response instanceof Error) throw state.response;
@@ -111,6 +123,91 @@ async function fixture() {
   });
   return { connection, client, factory, session, state };
 }
+
+describe("note search MCP/connection boundary", () => {
+  it("validates before launch and returns only selected summaries without preflight or enrichment", async () => {
+    const f = await fixture();
+    for (const arguments_ of [
+      { searchTerm: " " },
+      { searchTerm: "choir", groupId: "101" },
+      { searchTerm: "choir", networkID: 201 },
+    ]) {
+      expect(
+        (
+          await f.client.callTool({
+            name: "find_notes",
+            arguments: arguments_,
+          })
+        ).isError,
+      ).toBe(true);
+    }
+    expect(f.factory).not.toHaveBeenCalled();
+    const result = await f.client.callTool({
+      name: "find_notes",
+      arguments: { searchTerm: " choir + plans " },
+    });
+    expect(result.structuredContent).toMatchObject({
+      ok: true,
+      totalHits: 12,
+      returnedCount: 3,
+      omittedNonNoteCount: 1,
+      notes: [
+        { id: "803", type: "scheduled" },
+        { id: "801", type: "email" },
+        { id: "802", type: "sms" },
+      ],
+    });
+    expect(JSON.stringify(result)).not.toContain("HIDDEN_");
+    expect(
+      vi
+        .mocked(f.session.request)
+        .mock.calls.map(([path, method]) => [path, method]),
+    ).toEqual([
+      ["network/getMetadata", "POST"],
+      ["supersearch/query?ajax", "POST"],
+    ]);
+    expect(
+      (await f.client.listTools()).tools.find((t) => t.name === "find_notes")
+        ?.annotations?.readOnlyHint,
+    ).toBe(true);
+    for (const code of ["permission_denied", "transport_failed"] as const) {
+      f.state.notes = new FlockbotError(code);
+      const failure = await f.client.callTool({
+        name: "find_notes",
+        arguments: { searchTerm: "choir + plans" },
+      });
+      expect(failure.structuredContent).toMatchObject({
+        code,
+        diagnostic: { operation: "find_notes" },
+      });
+      expect(failure.structuredContent).not.toHaveProperty("notes");
+    }
+    const before = vi.mocked(f.session.request).mock.calls.length;
+    await expect(
+      f.connection.findNotes(
+        { searchTerm: "choir" },
+        { signal: AbortSignal.abort() },
+      ),
+    ).rejects.toMatchObject({ code: "operation_cancelled" });
+    expect(vi.mocked(f.session.request).mock.calls).toHaveLength(before);
+  });
+
+  it("runs failure-driven diagnosis once without replaying a signed-out search", async () => {
+    const f = await fixture();
+    f.state.notes = "<form>HIDDEN LOGIN</form>";
+    f.state.verification = { success: true, userID: null, authorized: false };
+    await expect(
+      f.connection.findNotes({ searchTerm: "choir" }),
+    ).rejects.toMatchObject({ code: "authentication_required" });
+    expect(
+      vi.mocked(f.session.request).mock.calls.map(([path]) => path),
+    ).toEqual([
+      "network/getMetadata",
+      "supersearch/query?ajax",
+      "user/userData",
+    ]);
+  });
+});
 
 describe("group note discovery MCP/connection boundary", () => {
   it.each([{ groupId: "00101" }, { groupName: " EVERYONE " }])(

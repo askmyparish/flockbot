@@ -41,6 +41,10 @@ import {
 } from "../../../src/models/email-analytics.js";
 import { GroupNotes } from "../../../src/models/group-notes.js";
 import {
+  NoteSearch,
+  type NoteSearchInput,
+} from "../../../src/models/note-search.js";
+import {
   MemberGroups,
   membershipGroupSelector,
   type GroupSelector,
@@ -656,6 +660,16 @@ export class BrowserConnection {
       check: () => op.check(),
       validationSource,
     };
+  }
+
+  async findNotes(
+    input: NoteSearchInput,
+    options: OperationOptions = {},
+  ) {
+    const search = new NoteSearch(input);
+    return this.#operate(options, (session, op) =>
+      search.find(this.#resources(session, op)),
+    );
   }
 
   async findMembers(input: MemberSearchInput, options: OperationOptions = {}) {

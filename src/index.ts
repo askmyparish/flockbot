@@ -62,6 +62,12 @@ export {
   type GroupNotesResult,
 } from "./models/group-notes.js";
 export {
+  NoteSearch,
+  type NoteSearchInput,
+  type NoteSearchSummary,
+  type NoteSearchResult,
+} from "./models/note-search.js";
+export {
   MemberGroups,
   membershipGroupSelector,
   type GroupSelector,

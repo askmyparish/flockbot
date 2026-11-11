@@ -32,6 +32,7 @@ import {
   MemberLatestEmailStatus,
   EmailAnalytics,
   GroupNotes,
+  NoteSearch,
   GroupMembers,
   membershipGroupSelector,
   type GroupSelector,
@@ -313,6 +314,11 @@ export async function runBrowserBroker(options: BrokerOptions): Promise<void> {
                   case "count":
                     value = await connection.count(request.groupId, { signal });
                     break;
+                  case "find_notes": {
+                    const { action: _, ...input } = request;
+                    value = await connection.findNotes(input, { signal });
+                    break;
+                  }
                   case "find_members": {
                     const { action: _, ...input } = request;
                     value = await connection.findMembers(input, { signal });
@@ -660,6 +666,16 @@ export class BrowserService {
       { action: "count", groupId },
       options.signal,
     )) as number;
+  }
+  async findNotes(
+    input: Parameters<BrowserConnection["findNotes"]>[0],
+    options: OperationOptions = {},
+  ) {
+    const prepared = new NoteSearch(input).toInput();
+    return (await this.#call(
+      { ...prepared, action: "find_notes" },
+      options.signal,
+    )) as Awaited<ReturnType<BrowserConnection["findNotes"]>>;
   }
   async findMembers(
     input: Parameters<BrowserConnection["findMembers"]>[0],

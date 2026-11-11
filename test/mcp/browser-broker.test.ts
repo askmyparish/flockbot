@@ -293,6 +293,34 @@ describe.skipIf(process.platform === "win32")(
       );
     });
 
+    it("routes parish note search through private IPC without enrichment", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
+      await expect(
+        f.service.findNotes({ searchTerm: " " }),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      expect(f.launches()).toBe(0);
+      expect(
+        await f.service.findNotes({ searchTerm: "choir + plans" }),
+      ).toMatchObject({
+        returnedCount: 3,
+        totalHits: 12,
+        omittedNonNoteCount: 1,
+        notes: [
+          { id: "803", type: "scheduled" },
+          { id: "801", type: "email" },
+          { id: "802", type: "sms" },
+        ],
+      });
+      expect(
+        f
+          .events()
+          .filter(
+            (event) => event.startsWith("GET ") || event.startsWith("POST "),
+          ),
+      ).toEqual(["POST network/getMetadata", "POST supersearch/query?ajax"]);
+    });
+
     it("routes latest email engagement through the private broker", async (context) => {
       const { expect } = context;
       const f = await fixture(context);

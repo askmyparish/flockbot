@@ -101,6 +101,85 @@ structured content endpoint. Do not return or execute the full `mainHTML` or
 load its asset scripts as an MCP result. Search `plainText` is an optional preview,
 not proof of complete note content.
 
+### Follow-up: structured editor content
+
+A separate, authorized test-parish investigation on 2026-11-10 examined the
+public `js/startComposer.js` Edit handler and exercised its request without
+running the editor:
+
+```text
+POST /composer/editNote
+Content-Type: application/x-www-form-urlencoded
+noteID=<existing-note-id>&fromComposer=1
+```
+
+For one existing published email containing a single text module, the response
+had `success: true` and `noteInfo` with the matching `ID`, `type: email`,
+`status: published`, `newNote: false`, and `duplicate: false`. `autosaveID` was
+absent. `noteInfo.sections[]` contained ordered `col1.items[]` and `col2.items[]`;
+the text item had `type: text` and `data.html`, plus module/note/network IDs.
+The response also contained unrelated composer configuration, available groups,
+targets and user context that a content reader must not expose.
+
+This is structured content layout, not HTML-free content: the observed text
+module still requires HTML-to-Markdown conversion. Its normalized readable text
+matched the ordinary note view's `.email_sections` content. The ordinary view
+had one `.page_note[data-noteid]` matching the requested identity and a
+`.note_type_email` class; comments, author information and controls were outside
+the email body container.
+
+Across two editor-entry requests, the published listing's ID, edit date,
+autosave reference and status remained unchanged. On the second request the
+ordinary note-view HTML was also identical before and after. No editor scripts,
+save, preview, send, duplicate or delete operations were executed.
+
+**These checks do not establish a generally read-only endpoint.** They cover
+one published text-only email, not drafts, SMS, rich modules, alternate
+permissions, hidden server state or concurrent editing. The editor-entry route
+is a candidate JSON source, not yet a validated replacement for the ordinary
+note view in a read-only MCP tool. A successful response or an unchanged listing
+must not be treated as proof that no other state changed.
+
+### Follow-up: disposable email and SMS drafts
+
+A second authorized test-parish experiment created two unsent, unscheduled drafts:
+an email with two sections containing text, quote, button and text modules, and
+an SMS with one text module. Initialization, autosave, module/section/layout saves
+and preview materialization used the composer flow documented in
+[email drafting](email-drafting.md). Preview supplied a distinct draft ID for
+each autosave ID. The public SMS composer source also uses text modules with
+`data.html`; that field is not exclusive to email HTML.
+
+After closing and reopening the browser connection, two `editNote` calls per
+draft returned matching IDs and channel types, `status: draft`, `newNote: false`,
+`duplicate: false`, and scheduling disabled. Section and module order matched
+the saved content. Text, quote author/text, button text/URL and submitted button
+style fields matched; text comparison used decoded, whitespace-normalized text.
+The server changed email paragraph tags from `p` to `div` and encoded text
+entities. Returned headings, emphasis, list items and the text-module link
+remained present. SMS retained its text in a text module, without HTML tags.
+
+The two editor responses agreed on identity, title, status, options and the
+projected section/module data. Preview and editor response objects were not
+byte-identical: preview text-module data included `noteType`, which was absent
+from editor data. Do not use whole-envelope equality as the content contract.
+The ordinary `POST /note/{noteId}?ajax` draft responses were HTML strings without
+the published note's JSON `mainHTML` envelope or a `.page_note` root. They were
+not used as content sources, and no returned scripts were executed.
+
+Cleanup deleted both draft IDs and both autosave IDs. Read-back through
+`editNote` reported `status: deleted` for all four, while still returning
+`success: true` and content. **A successful editor response does not establish
+that a note is available.** A content reader must validate identity and status
+before exposing a body; deleted content needs an explicit policy rather than
+being silently returned as an ordinary note.
+
+No send, scheduled-publication or forwarding endpoint was called. These tests
+establish the observed draft content contracts and repeatability, not universal
+absence of server-side effects. Alternate permissions, scheduled notes, other
+module types, populated second columns, concurrent edits and hidden state remain
+unverified.
+
 ## Per-note analytics
 
 ### Compact analytics summary
