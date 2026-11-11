@@ -10,6 +10,7 @@ import { latestEmailResponses } from "../../fixtures/latest-email.js";
 import { noteSearchResponse } from "../../fixtures/note-search.js";
 import { noteResponse } from "../../fixtures/note.js";
 import { recipientPage } from "../../fixtures/email-recipients.js";
+import { draftResponse } from "../../fixtures/email-draft.js";
 import { recordResponse } from "../../../adapters/mcp/src/diagnostics.js";
 import {
   BrowserService,
@@ -35,6 +36,14 @@ if (role === "broker") {
         request: async (path, method = "GET", body) => {
           appendFileSync(join(profile, "events"), `${method} ${path}\n`);
           const data = await (async () => {
+            if (existsSync(join(profile, "draft"))) {
+              if (
+                existsSync(join(profile, "draft-failure")) &&
+                path === "composer/saveModule"
+              )
+                return { success: false };
+              return draftResponse(path, body);
+            }
             switch (path) {
               case "user/userData":
                 if (existsSync(join(profile, "signed-out")))

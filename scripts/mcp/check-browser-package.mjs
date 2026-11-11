@@ -24,6 +24,7 @@ import { CODEX_VERSION } from "./browser-build.mjs";
 export const FLOCKNOTE_TOOLS = [
   "add_member",
   "connect",
+  "create_email_draft",
   "email_analytics",
   "email_recipients",
   "find_members",

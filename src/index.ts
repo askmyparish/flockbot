@@ -69,6 +69,13 @@ export {
 } from "./models/group-notes.js";
 export { Note, type NoteInput, type NoteResult } from "./models/note.js";
 export {
+  EmailDraft,
+  type EmailDraftInput,
+  type EmailDraftResult,
+  type DraftContext,
+} from "./models/email-draft.js";
+export type { DraftProgress } from "./errors.js";
+export {
   NoteSearch,
   type NoteSearchInput,
   type NoteSearchSummary,

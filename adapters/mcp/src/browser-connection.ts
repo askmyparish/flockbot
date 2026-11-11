@@ -46,6 +46,10 @@ import {
 import { GroupNotes } from "../../../src/models/group-notes.js";
 import { Note, type NoteInput } from "../../../src/models/note.js";
 import {
+  EmailDraft,
+  type EmailDraftInput,
+} from "../../../src/models/email-draft.js";
+import {
   NoteSearch,
   type NoteSearchInput,
 } from "../../../src/models/note-search.js";
@@ -133,7 +137,11 @@ export interface BrowserStatus {
   readonly setupStage?: SetupStage;
 }
 
-function accepted(data: unknown, allowHtml = false): unknown {
+function accepted(
+  data: unknown,
+  allowHtml = false,
+  entryCheck = false,
+): unknown {
   if (
     (typeof data === "object" &&
       data !== null &&
@@ -149,7 +157,8 @@ function accepted(data: unknown, allowHtml = false): unknown {
     typeof data === "object" &&
     data !== null &&
     "success" in data &&
-    data.success === false
+    data.success === false &&
+    !entryCheck
   )
     throw new FlockbotError(
       "upstream_rejected",
@@ -672,6 +681,50 @@ export class BrowserConnection {
     return this.#operate(options, (session, op) =>
       note.read(this.#resources(session, op)),
     );
+  }
+
+  async createEmailDraft(
+    input: EmailDraftInput,
+    options: OperationOptions = {},
+  ) {
+    const draft = new EmailDraft(input);
+    try {
+      return await this.#operate(options, (session, op, network) =>
+        draft.create(
+          {
+            ...this.#resources(session, op),
+            compose: async (path, body) => {
+              op.check();
+              const data = await session.request(path, "POST", body);
+              validationSource(path);
+              return accepted(
+                data,
+                false,
+                /^network\/\d+\/writeNewNote\?ajax$/.test(path),
+              );
+            },
+          },
+          network,
+        ),
+      );
+    } catch (error) {
+      const outcome = draft.submitted ? "unknown" : "not_submitted";
+      if (error instanceof BrowserConnectionError)
+        throw new BrowserConnectionError(
+          error.code,
+          outcome,
+          error.stage,
+          draft.progress,
+        );
+      throw new FlockbotError(
+        error instanceof FlockbotError ? error.code : "operation_failed",
+        error instanceof FlockbotError ? error.status : undefined,
+        outcome,
+        error instanceof FlockbotError ? error.response : undefined,
+        error instanceof FlockbotError ? error.reason : undefined,
+        draft.progress,
+      );
+    }
   }
 
   async findNotes(input: NoteSearchInput, options: OperationOptions = {}) {

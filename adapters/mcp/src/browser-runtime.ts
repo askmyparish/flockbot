@@ -1,4 +1,7 @@
-import { AuthenticationSuspectedError as BrowserAuthenticationError } from "../../../src/errors.js";
+import {
+  AuthenticationSuspectedError as BrowserAuthenticationError,
+  type DraftProgress,
+} from "../../../src/errors.js";
 import type { chromium, BrowserContext, Page } from "playwright";
 import { FlockbotError } from "../../../src/index.js";
 import { safeFailureReason } from "../../../src/failure-reason.js";
@@ -44,6 +47,7 @@ export class BrowserConnectionError extends Error {
       | "broker_unavailable",
     readonly outcome?: "not_submitted" | "unknown",
     readonly stage?: "launch" | "request_context" | "sign_in" | "close",
+    readonly draftProgress?: DraftProgress,
   ) {
     super(code);
     this.name = "BrowserConnectionError";
@@ -72,7 +76,13 @@ function allowed(path: string, method: string): boolean {
       "network/getMetadata",
       "supersearch/query?ajax",
       "composer/editNote",
+      "composer/createNote",
+      "composer/save2",
+      "composer/saveModule",
+      "composer/saveSection",
+      "composer/saveLayout",
     ].includes(path) ||
+      /^network\/\d+\/writeNewNote\?ajax$/.test(path) ||
       /^group\/[A-Za-z0-9_-]+\/addToGroupByAdmin$/.test(path) ||
       /^note\/[A-Za-z0-9_-]+\/(?:searchAnalytics|detailedAnalytics)\?ajax$/.test(
         path,

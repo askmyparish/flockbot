@@ -290,3 +290,75 @@ the later composer operations have `success: true`.
 - Scheduling timezone/validation and actual queued-publication behavior.
 - Sending, test sends, delivery outcomes, deletion, and scheduled-send cancellation.
   None is established by this draft-only capture.
+
+## Disposable-draft follow-up: explicit save and literal text
+
+An authorized test-parish investigation on 2026-11-10 extended the HAR evidence
+with JSON-response calls and Flocknote's public composer JavaScript. No send,
+test-delivery, scheduling, SMS, or voice operation was requested. The following
+findings describe this experiment, not an implemented draft-creation tool.
+
+### Entry and explicit draft save
+
+`handleWriteNewNoteResponse` in `https://static.flocknote.com/js/all.js` explains
+why the entry response can contain `success:false` without blocking composition.
+The UI branches on missing network settings, billing lockout, unverified billing,
+admin billing requirements, pending card charges, a legacy `billingInfoNeeded`
+value, and `clickSelectorToExecute`; it does not gate on `success`. A connector
+must stop for unsupported branches, not execute selectors or bypass checks. The
+test response had clear blocking flags and `openComposerAfter:true`.
+
+`saveDraft` in
+`https://static.flocknote.com/assets/composer2/js/email.js` drains the module queue
+and calls `saveNote(true, true)`. This sets `autosaved=0`,
+`explicitSaveClick=true`, and an empty `schedule`, then posts to `composer/save2`.
+The experiment confirmed this path exposes a distinct draft ID without calling
+`composer/preview`.
+
+The tested sequence initialized one email and target, saved metadata to obtain
+autosave ID A, saved a text module and section, linked their layout to A, then
+explicitly saved the draft to obtain ID B. Reopening B through
+`composer/editNote` confirmed draft status, email type, subject, target and
+disabled scheduling, alternate routing and voice options. The inherited sender
+name was initially returned as null. A subsequent explicit metadata save with
+both A and B restored it; a fresh read confirmed the inherited sender and theme.
+Do not assume the first successful save preserved every metadata field.
+
+### HTML entities need a transport-specific encoding
+
+Ordinary HTML escaping did not preserve literal text through the observed
+save/read path. Submitted `&lt;b&gt;X&lt;/b&gt;` reopened as `<b>X</b>`.
+An additional ampersand escape, `&amp;lt;b&amp;gt;`, also reopened as tags.
+The effect occurred on the autosave reader too, before a final explicit save.
+These observations do not locate the transformation within the upstream server.
+
+A bounded encoding comparison found that escaped numeric references preserved
+the intended text: submit `&amp;#60;` for a literal `<`, which reopened as
+`&#60;`. The verified representation replaces each user-supplied `&`, `<`, `>`,
+double quote and apostrophe with `&amp;#N;`, using that character's decimal code
+point. Only the connector's wrapping `<div>` and newline `<br>` elements remain
+markup. This is specific to the observed composer protocol, not a replacement
+for ordinary HTML escaping elsewhere.
+
+After saving a replacement module, relinking the layout and explicitly saving
+the same owned draft, a fresh browser connection confirmed exact decoded text
+and only `div`/`br` elements. Cases included literal `<b>` and `<script>` strings,
+ampersands, quotes, apostrophes, accented text, an emoji, single and multiple
+blank lines, Markdown punctuation, a URL, and literal entity-looking strings
+such as `&lt;`, `&#60;`, `&amp;`, `&copy;`, and `&not;`. No supplied markup became
+an element. This verifies persisted JSON content, not sent-email rendering.
+
+### Cleanup and remaining limits
+
+The experiment deleted only its owned draft B and autosave A with
+`GET /note/{id}/deleteNote`, then reopened each and verified matching identity
+and `status:deleted`. Despite its GET method, this endpoint is a write; it must
+not enter a read-only allowlist. Deletion is experiment cleanup, not a proposed
+automatic rollback for a user-facing draft tool.
+
+The experiment proves a staged path to verified content and metadata, including
+correction of its own disposable content. A clean single-pass client sequence,
+input bounds, rejection/cancellation behavior, and partial-write reporting still
+need implementation verification. Other group target shapes and arbitrary
+composer options remain unsupported by this evidence. The reader's confirmed
+status is required; HTTP 200 or `success:true` alone is insufficient.

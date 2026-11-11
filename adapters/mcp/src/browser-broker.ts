@@ -4,6 +4,7 @@ import {
   encodeFrame,
   decodeFrame,
   requestBroker,
+  isWriteRequest,
   type BrokerRequest,
   type BrokerDescriptor,
   type BrokerReply,
@@ -32,6 +33,7 @@ import {
   MemberLatestEmailStatus,
   EmailAnalytics,
   EmailRecipients,
+  EmailDraft,
   GroupNotes,
   NoteSearch,
   Note,
@@ -83,6 +85,7 @@ function safeError(error: unknown): NonNullable<BrokerReply["error"]> {
         ? { status: error.status, reason: error.reason }
         : {}),
       ...(error.outcome ? { outcome: error.outcome } : {}),
+      ...(error.draftProgress ? { draftProgress: error.draftProgress } : {}),
       ...(error instanceof BrowserConnectionError && error.stage
         ? { stage: error.stage }
         : {}),
@@ -287,7 +290,7 @@ export async function runBrowserBroker(options: BrokerOptions): Promise<void> {
                 if (stopping)
                   throw new BrowserConnectionError(
                     "broker_unavailable",
-                    request.action === "add" ? "not_submitted" : undefined,
+                    isWriteRequest(request) ? "not_submitted" : undefined,
                   );
                 let value: unknown;
                 const signal = controller.signal;
@@ -387,6 +390,13 @@ export async function runBrowserBroker(options: BrokerOptions): Promise<void> {
                     await connection.forget();
                     value = { forgotten: true };
                     break;
+                  case "create_email_draft": {
+                    const { action: _, ...input } = request;
+                    value = await connection.createEmailDraft(input, {
+                      signal,
+                    });
+                    break;
+                  }
                   case "add":
                     if (Boolean(request.groupId) === Boolean(request.groupName))
                       throw new FlockbotError(
@@ -600,7 +610,7 @@ export class BrowserService {
       throw new FlockbotError(
         "operation_cancelled",
         undefined,
-        request.action === "add" ? "not_submitted" : undefined,
+        isWriteRequest(request) ? "not_submitted" : undefined,
       );
     let owner: BrokerDescriptor;
     try {
@@ -620,7 +630,7 @@ export class BrowserService {
         }
       }
     } catch (error) {
-      if (request.action === "add") {
+      if (isWriteRequest(request)) {
         if (error instanceof FlockbotError)
           throw new FlockbotError(error.code, undefined, "not_submitted");
         throw new BrowserConnectionError(
@@ -636,7 +646,7 @@ export class BrowserService {
       throw new FlockbotError(
         "operation_cancelled",
         undefined,
-        request.action === "add" ? "not_submitted" : undefined,
+        isWriteRequest(request) ? "not_submitted" : undefined,
       );
     try {
       return await requestBroker(owner, request, signal);
@@ -828,6 +838,16 @@ export class BrowserService {
       { action: "add", groupId, member: wireMember(member) },
       options.signal,
     )) as { success: true };
+  }
+  async createEmailDraft(
+    input: Parameters<BrowserConnection["createEmailDraft"]>[0],
+    options: OperationOptions = {},
+  ) {
+    const prepared = new EmailDraft(input).toInput();
+    return (await this.#call(
+      { ...prepared, action: "create_email_draft" },
+      options.signal,
+    )) as Awaited<ReturnType<BrowserConnection["createEmailDraft"]>>;
   }
   async addMemberByName(
     groupName: string,

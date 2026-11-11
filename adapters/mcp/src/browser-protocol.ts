@@ -3,6 +3,7 @@ import { AsyncResource } from "node:async_hooks";
 import net from "node:net";
 import { z } from "zod";
 import { FlockbotError } from "../../../src/index.js";
+import { DRAFT_STAGES, type DraftProgress } from "../../../src/errors.js";
 import { BrowserConnectionError } from "./browser-runtime.js";
 import {
   diagnosticOperationId,
@@ -19,6 +20,20 @@ import {
 
 export const MAX_REQUEST = 16 * 1024;
 export const MAX_RESPONSE = 2 * 1024 * 1024;
+const draftProgressSchema = z
+  .object({
+    stage: z.enum(DRAFT_STAGES),
+    completedStages: z.array(z.enum(DRAFT_STAGES)).max(DRAFT_STAGES.length),
+    autosaveId: z
+      .string()
+      .regex(/^\d{1,128}$/)
+      .optional(),
+    noteId: z
+      .string()
+      .regex(/^\d{1,128}$/)
+      .optional(),
+  })
+  .strict();
 export const brokerRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("ping") }).strict(),
   z.object({ action: z.literal("shutdown") }).strict(),
@@ -157,8 +172,20 @@ export const brokerRequestSchema = z.discriminatedUnion("action", [
     })
     .strict(),
   z.object({ action: z.literal("forget") }).strict(),
+  z
+    .object({
+      action: z.literal("create_email_draft"),
+      groupId: z.string().min(1).max(128).optional(),
+      groupName: z.string().min(1).max(256).optional(),
+      subject: z.string().min(1),
+      body: z.string().min(1),
+    })
+    .strict(),
 ]);
 export type BrokerRequest = z.infer<typeof brokerRequestSchema>;
+export function isWriteRequest(request: BrokerRequest): boolean {
+  return request.action === "add" || request.action === "create_email_draft";
+}
 export interface BrokerDescriptor {
   version: 1;
   runtime: string;
@@ -177,6 +204,7 @@ export interface BrokerReply {
     reason?: FailureReason;
     outcome?: "not_submitted" | "unknown";
     stage?: BrowserConnectionError["stage"];
+    draftProgress?: DraftProgress;
   };
 }
 
@@ -227,12 +255,11 @@ export async function requestBroker(
       complete = true;
       if (capture) receiveVerboseDiagnostic(undefined);
       socket.destroy();
-      const outcome =
-        request.action === "add"
-          ? sent
-            ? "unknown"
-            : "not_submitted"
-          : undefined;
+      const outcome = isWriteRequest(request)
+        ? sent
+          ? "unknown"
+          : "not_submitted"
+        : undefined;
       reject(
         cancelled
           ? new FlockbotError("operation_cancelled", undefined, outcome)
@@ -288,11 +315,17 @@ export async function requestBroker(
                   reply.error.outcome,
                   undefined,
                   safeFailureReason(reply.error.reason),
+                  reply.error.draftProgress === undefined
+                    ? undefined
+                    : draftProgressSchema.parse(reply.error.draftProgress),
                 )
               : new BrowserConnectionError(
                   reply.error.code as BrowserConnectionError["code"],
                   reply.error.outcome,
                   reply.error.stage,
+                  reply.error.draftProgress === undefined
+                    ? undefined
+                    : draftProgressSchema.parse(reply.error.draftProgress),
                 );
         }
         complete = true;
@@ -307,18 +340,32 @@ export async function requestBroker(
     try {
       socket.connect({ path: descriptor.address }, () => {
         if (complete) return;
-        sent = true;
-        socket.write(
-          encodeFrame(
-            {
-              nonce,
-              request,
-              operationId: diagnosticOperationId(),
-              verboseDiagnostics: capture,
-            },
-            descriptor.key,
-          ),
+        const frame = encodeFrame(
+          {
+            nonce,
+            request,
+            operationId: diagnosticOperationId(),
+            verboseDiagnostics: capture,
+          },
+          descriptor.key,
         );
+        if (Buffer.byteLength(frame) > MAX_REQUEST) {
+          complete = true;
+          finish();
+          socket.destroy();
+          reject(
+            new FlockbotError(
+              "request_not_sent",
+              undefined,
+              "not_submitted",
+              undefined,
+              "request_too_large",
+            ),
+          );
+          return;
+        }
+        sent = true;
+        socket.write(frame);
       });
     } catch {
       fail();

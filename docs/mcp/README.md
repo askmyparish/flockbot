@@ -32,6 +32,7 @@ published by these changes.
 | `group_notes` | Discover note IDs and titles on one bounded group page, with explicit continuation and unknown channel metadata |
 | `find_notes` | Find note summaries by parish-wide keyword search, without confusing broad hit counts with note totals |
 | `note` | Read one identified email/SMS note as bounded Markdown, with explicit unavailable/partial results |
+| `create_email_draft` | Create a plain-text email draft for one explicit group, then verify its persisted content and unscheduled state |
 | `group_members` | List a named group's subscribed members in bounded pages, with names by default |
 | `is_member` | Check one chosen member/group relationship as `member`, `not_member`, or `unknown` |
 | `add_member` | Add once by `groupId` or case-insensitive unique `groupName`; return only success |
@@ -421,6 +422,37 @@ Discovery remains summary-only. `group_notes`/`find_notes` and their `notes`
 result fields replace the unreleased message-named interfaces without aliases.
 Email analytics and engagement tool names stay unchanged. The reader has offline
 coverage; installed Codex use remains unverified.
+
+### Create an email draft
+
+`create_email_draft` requires exactly one explicit `groupId` or case-insensitive
+unique `groupName`, a nonblank single-line `subject`, and a nonblank plain-text
+`body`. It never defaults to Everyone. Subject whitespace is trimmed; body line
+endings become LF. Literal markup remains text. No subject/body character cap
+is imposed, and input is never truncated. The existing local broker's 16 KiB
+JSON request-frame limit still applies: an oversized request fails before
+submission with `request_not_sent`, `request_too_large`, and `not_submitted`.
+
+The writer uses the saved connection, checks the composer entry's readiness and
+billing branches, and inherits Flocknote's sender/theme. It saves a new email-only,
+unscheduled draft through the JSON composer endpoints and reads it back to verify
+the ID, draft status, group target, routing, subject, sender/theme, and body before
+returning `verified: true`, `noteId`, `autosaveId`, and `groupId`. Subsequent editing
+belongs in Flocknote. Sending, scheduling, test delivery, SMS/voice, attachments,
+arbitrary HTML and editing existing notes are not supported.
+
+Group discovery does not expose target type. Smart/filtered/parent targets are
+rejected after composer initialization reveals their shape, before any metadata
+or content save. Because initialization was submitted, these failures retain
+the conservative `unknown` outcome rather than promise no upstream side effect.
+
+This is a non-idempotent write. It never retries, resumes or automatically deletes
+partial drafts. Failures include `draftProgress` with the failing `stage`,
+`completedStages`, and any known `noteId`/`autosaveId`. After possible submission,
+`outcome: unknown` means a partial draft may remain; inspect Flocknote before
+deciding to submit again. A lost IPC reply may leave IDs unavailable to the caller.
+Default diagnostics exclude authored content; explicitly verbose diagnostics use
+the existing shared sanitization. The direct development runner remains read-only.
 
 ## Develop and verify
 

@@ -23,6 +23,7 @@ import {
   type TestContext,
 } from "vitest";
 import { BrowserService } from "../../adapters/mcp/src/browser-broker.js";
+import { draftInput } from "../fixtures/email-draft.js";
 import {
   requestBroker,
   decodeFrame,
@@ -285,6 +286,46 @@ describe.skipIf(process.platform === "win32")(
       expect(JSON.stringify(diagnostic)).not.toMatch(
         /example-parish|group\/101|peopleFilterInfo/,
       );
+    });
+
+    it("creates drafts over IPC and preserves partial progress without replay", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
+      writeFileSync(join(f.profile, "draft"), "");
+      expect(await f.service.createEmailDraft(draftInput)).toEqual({
+        noteId: "803",
+        autosaveId: "801",
+        groupId: "101",
+        status: "draft",
+        verified: true,
+      });
+      writeFileSync(join(f.profile, "draft-failure"), "");
+      await expect(
+        f.service.createEmailDraft(draftInput),
+      ).rejects.toMatchObject({
+        code: "upstream_rejected",
+        outcome: "unknown",
+        draftProgress: {
+          stage: "module",
+          autosaveId: "801",
+          completedStages: ["resolve_group", "entry", "initialize", "autosave"],
+        },
+      });
+      expect(
+        f.events().filter((e) => e === "POST composer/saveModule"),
+      ).toHaveLength(2);
+      expect(
+        f.events().filter((e) => e === "POST composer/saveSection"),
+      ).toHaveLength(1);
+      const before = f.events();
+      await expect(
+        f.service.createEmailDraft({ ...draftInput, body: "x".repeat(20001) }),
+      ).rejects.toMatchObject({
+        code: "request_not_sent",
+        reason: "request_too_large",
+        outcome: "not_submitted",
+      });
+      expect(f.events()).toEqual(before);
     });
 
     it("reads one recipient page through private IPC with opt-in addresses", async (context) => {
