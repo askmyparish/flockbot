@@ -11,6 +11,8 @@ import {
   draftResponse,
   draftReadback,
   draftInitialization,
+  htmlDraftInput,
+  htmlDraftStored,
 } from "../fixtures/email-draft.js";
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -86,6 +88,185 @@ const sequence = [
 ];
 
 describe("create-only email drafts", () => {
+  it("preserves supported HTML structure, entities and links through the shared writer", async () => {
+    const f = fixture((path, _body, response) =>
+      path === "composer/editNote"
+        ? draftResponse(path, undefined, htmlDraftStored)
+        : response,
+    );
+    expect(await f.connection.createEmailDraft(htmlDraftInput)).toMatchObject({
+      verified: true,
+      status: "draft",
+      noteId: "803",
+    });
+    expect(f.requests.map((r) => r.path)).toEqual(sequence);
+    const wire = new URLSearchParams(
+      f.requests.find((r) => r.path === "composer/saveModule")!.body,
+    ).get("data[html]");
+    expect(wire).toBe(
+      '<h1>One</h1><h2>Two</h2><h3>Three</h3><h4>Four</h4><h5>Five</h5><h6>Six</h6> <div><p>A <strong>bold</strong> <b>alias</b> <em>emphasis</em> <i>italic</i><br>Literal &amp;#60;b&amp;#62; &amp;#38;lt; &amp;#34; &amp;#39; café 🕊</p><ul><li>First</li><li><ol><li>Nested</li></ol></li></ul><blockquote><p>Quote</p></blockquote><a href="https://example.test/?a=1&amp;#38;b=2#part">A &amp;#38; B</a></div>',
+    );
+  });
+
+  it.each([
+    ["<p>unclosed", "draft_html_malformed"],
+    ["<p>one<p>two</p>", "draft_html_malformed"],
+    ["<strong><em>x</strong></em>", "draft_html_malformed"],
+    ["<!doctype html><p>x</p>", "draft_html_malformed"],
+    ["<html><body><p>x</p></body></html>", "draft_html_malformed"],
+    ["<div>x</div></span>", "draft_html_malformed"],
+    [
+      '<a href="https://example.test" href="https://other.test">x</a>',
+      "draft_html_malformed",
+    ],
+    ["<script>x</script>", "draft_html_unsupported"],
+    ['<div style="color:red">x</div>', "draft_html_unsupported"],
+    ['<p onclick="x">x</p>', "draft_html_unsupported"],
+    ['<div class="x">x</div>', "draft_html_unsupported"],
+    ['<img src="https://example.test/x">', "draft_html_unsupported"],
+    ["<table><tr><td>x</td></tr></table>", "draft_html_unsupported"],
+    ["<svg><text>x</text></svg>", "draft_html_unsupported"],
+    ["<template><p>x</p></template>", "draft_html_unsupported"],
+    ["<!--hidden--><p>x</p>", "draft_html_unsupported"],
+    ["<li>orphan</li>", "draft_html_unsupported"],
+    ["<ul>unwrapped text<li>item</li></ul>", "draft_html_unsupported"],
+    ["<ol><div>not an item</div></ol>", "draft_html_unsupported"],
+    ["<b><p>block</p></b>", "draft_html_unsupported"],
+    [
+      '<strong><a href="https://example.test"><div>block</div></a></strong>',
+      "draft_html_unsupported",
+    ],
+    ["<a>x</a>", "draft_html_unsupported"],
+    ['<a href="javascript:alert(1)">x</a>', "draft_html_unsafe_link"],
+    ['<a href="java&#115;cript:alert(1)">x</a>', "draft_html_unsafe_link"],
+    ['<a href="//example.test">x</a>', "draft_html_unsafe_link"],
+    ['<a href="/relative">x</a>', "draft_html_unsafe_link"],
+    ['<a href="mailto:a@example.test">x</a>', "draft_html_unsafe_link"],
+    [
+      '<a href="https://user:password@example.test">x</a>',
+      "draft_html_unsafe_link",
+    ],
+    ['<a href="https://example.test/&#10;x">x</a>', "draft_html_unsafe_link"],
+    [
+      '<a href="https://example.test\\@other.test">x</a>',
+      "draft_html_unsafe_link",
+    ],
+    ["<p> &nbsp; <br></p>", "draft_html_empty"],
+    ["<p>&#8203;</p>", "draft_html_empty"],
+  ])(
+    "rejects unsafe or unsupported fragments before I/O: %s",
+    async (body, reason) => {
+      const f = fixture();
+      await expect(
+        f.connection.createEmailDraft({ ...htmlDraftInput, body }),
+      ).rejects.toMatchObject({
+        code: "invalid_input",
+        outcome: "not_submitted",
+        reason,
+      });
+      expect(f.requests).toEqual([]);
+    },
+  );
+
+  it.each([
+    htmlDraftStored.replace("<strong>bold</strong>", "bold"),
+    htmlDraftStored.replace("<h1>One</h1>", "<h2>One</h2>"),
+    htmlDraftStored.replace("b=2", "b=3"),
+    htmlDraftStored.replace("&#60;b&#62;", "<b>changed</b>"),
+    htmlDraftStored.replace(
+      "<div>Quote</div>",
+      '<div style="color:red">Quote</div>',
+    ),
+    htmlDraftStored + "<script>unexpected</script>",
+    htmlDraftStored.replace("<ul>", "<ul><li>Inserted</li>"),
+    htmlDraftStored.replace("A <strong>", "A<strong>"),
+  ])(
+    "reports unknown progress for altered persisted markup",
+    async (stored) => {
+      const f = fixture((path, _body, response) =>
+        path === "composer/editNote"
+          ? draftResponse(path, undefined, stored)
+          : response,
+      );
+      await expect(
+        f.connection.createEmailDraft(htmlDraftInput),
+      ).rejects.toMatchObject({
+        code: "invalid_response",
+        reason: "draft_verification",
+        outcome: "unknown",
+        draftProgress: { stage: "verify", noteId: "803", autosaveId: "801" },
+      });
+      expect(f.requests.map((r) => r.path)).toEqual(sequence);
+    },
+  );
+
+  it("accepts equivalent HTML syntax without changing text or link destinations", async () => {
+    const body =
+      '<P>A &amp; B <A HREF="http://example.test/path?q=&quot;x&quot;">link</A></P>';
+    const stored =
+      '<div>A &#38; B <a href="http://example.test/path?q=&#34;x&#34;">link</a></div>';
+    const f = fixture((path, _body, response) =>
+      path === "composer/editNote"
+        ? draftResponse(path, undefined, stored)
+        : response,
+    );
+    expect(
+      await f.connection.createEmailDraft({ ...htmlDraftInput, body }),
+    ).toMatchObject({ verified: true });
+  });
+
+  it("preserves indented content and empty blocks while removing only outer HTML whitespace", async () => {
+    const body =
+      "\n  <div>\n    <p></p>\n    <p>First  repeated   spaces\n      and a\ttab.</p>\n    <ul>\n      <li>One</li>\n      <li>Two</li>\n    </ul>\n  </div>\n";
+    const stored =
+      "<div>     <div></div>     <div>First  repeated   spaces       and a\ttab.</div>     <ul>       <li>One</li>       <li>Two</li>     </ul>   </div>";
+    const f = fixture((path, _body, response) =>
+      path === "composer/editNote"
+        ? draftResponse(path, undefined, stored)
+        : response,
+    );
+    expect(
+      await f.connection.createEmailDraft({ ...htmlDraftInput, body }),
+    ).toMatchObject({ verified: true });
+    const wire = new URLSearchParams(
+      f.requests.find((r) => r.path === "composer/saveModule")?.body,
+    ).get("data[html]");
+    expect(wire).toBe(
+      "<div>     <p></p>     <p>First  repeated   spaces       and a\ttab.</p>     <ul>       <li>One</li>       <li>Two</li>     </ul>   </div>",
+    );
+  });
+
+  it("allows a link around block content in a flow context", async () => {
+    const body = '<a href="https://example.test"><div>Block link</div></a>';
+    const f = fixture((path, _body, response) =>
+      path === "composer/editNote"
+        ? draftResponse(path, undefined, body)
+        : response,
+    );
+    expect(
+      await f.connection.createEmailDraft({ ...htmlDraftInput, body }),
+    ).toMatchObject({ verified: true });
+  });
+
+  it("explicit text mode keeps markup literal and rejects unknown modes", async () => {
+    const f = fixture();
+    expect(
+      await f.connection.createEmailDraft({
+        ...draftInput,
+        bodyFormat: "text",
+      }),
+    ).toMatchObject({ verified: true });
+    expect(
+      () => new EmailDraft({ ...draftInput, bodyFormat: "markdown" as "text" }),
+    ).toThrow(FlockbotError);
+    const draft = new EmailDraft({
+      ...htmlDraftInput,
+      body: `<p>${"x".repeat(20001)}</p>`,
+    });
+    expect(draft.toInput().body.length).toBe(20008);
+    expect(JSON.stringify(draft)).toBe('{"type":"EmailDraft"}');
+  });
+
   it("creates one verified draft, preserving literal text and distinct IDs without preview or send", async () => {
     const f = fixture();
     expect(

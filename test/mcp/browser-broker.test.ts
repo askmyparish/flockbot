@@ -23,7 +23,7 @@ import {
   type TestContext,
 } from "vitest";
 import { BrowserService } from "../../adapters/mcp/src/browser-broker.js";
-import { draftInput } from "../fixtures/email-draft.js";
+import { draftInput, htmlDraftInput } from "../fixtures/email-draft.js";
 import {
   requestBroker,
   decodeFrame,
@@ -299,9 +299,14 @@ describe.skipIf(process.platform === "win32")(
         status: "draft",
         verified: true,
       });
+      writeFileSync(join(f.profile, "draft-html"), "");
+      expect(await f.service.createEmailDraft(htmlDraftInput)).toMatchObject({
+        noteId: "803",
+        verified: true,
+      });
       writeFileSync(join(f.profile, "draft-failure"), "");
       await expect(
-        f.service.createEmailDraft(draftInput),
+        f.service.createEmailDraft(htmlDraftInput),
       ).rejects.toMatchObject({
         code: "upstream_rejected",
         outcome: "unknown",
@@ -313,10 +318,10 @@ describe.skipIf(process.platform === "win32")(
       });
       expect(
         f.events().filter((e) => e === "POST composer/saveModule"),
-      ).toHaveLength(2);
+      ).toHaveLength(3);
       expect(
         f.events().filter((e) => e === "POST composer/saveSection"),
-      ).toHaveLength(1);
+      ).toHaveLength(2);
       const before = f.events();
       await expect(
         f.service.createEmailDraft({ ...draftInput, body: "x".repeat(20001) }),

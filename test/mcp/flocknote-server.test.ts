@@ -20,7 +20,12 @@ import {
 } from "../../adapters/mcp/src/browser-runtime.js";
 import { waitFor } from "./support.js";
 import { FlockbotError } from "../../src/errors.js";
-import { draftInput, draftResponse } from "../fixtures/email-draft.js";
+import {
+  draftInput,
+  draftResponse,
+  htmlDraftInput,
+  htmlDraftStored,
+} from "../fixtures/email-draft.js";
 import {
   safeDiagnostic,
   recordResponse,
@@ -76,6 +81,7 @@ async function fixture(
 describe("Flocknote MCP contract", () => {
   it("creates drafts through MCP and returns safe partial progress on failures", async () => {
     let fail = false;
+    let html = false;
     const f = await fixture({
       factory: async () => ({
         signIn: async () => {},
@@ -83,7 +89,7 @@ describe("Flocknote MCP contract", () => {
         request: async (path, _method, body) => {
           if (fail && path === "composer/saveModule")
             throw new FlockbotError("transport_failed");
-          return draftResponse(path, body);
+          return draftResponse(path, body, html ? htmlDraftStored : undefined);
         },
       }),
     });
@@ -100,10 +106,33 @@ describe("Flocknote MCP contract", () => {
       noteId: "803",
       verified: true,
     });
+    html = true;
+    const formatted = await f.client.callTool({
+      name: "create_email_draft",
+      arguments: htmlDraftInput,
+    });
+    expect(formatted.structuredContent).toMatchObject({
+      ok: true,
+      verified: true,
+      noteId: "803",
+    });
+    const invalid = await f.client.callTool({
+      name: "create_email_draft",
+      arguments: {
+        ...htmlDraftInput,
+        body: '<p style="color:red">private body</p>',
+      },
+    });
+    expect(invalid.isError).toBe(true);
+    expect(invalid.structuredContent).toMatchObject({
+      code: "invalid_input",
+      outcome: "not_submitted",
+    });
+    expect(JSON.stringify(invalid)).not.toContain("private body");
     fail = true;
     const failure = await f.client.callTool({
       name: "create_email_draft",
-      arguments: draftInput,
+      arguments: htmlDraftInput,
     });
     expect(failure.isError).toBe(true);
     expect(failure.structuredContent).toMatchObject({
