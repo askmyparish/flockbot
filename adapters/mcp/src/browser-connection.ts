@@ -653,11 +653,12 @@ export class BrowserConnection {
       path: string,
       method: "GET" | "POST",
       body?: string,
+      writeEntry = false,
     ) => {
       const data = await session.request(path, method, body);
       validationSource(path);
       try {
-        return accepted(data, path === "dashboard");
+        return accepted(data, path === "dashboard", writeEntry);
       } catch (error) {
         validationError(error, path);
         throw error;
@@ -670,6 +671,15 @@ export class BrowserConnection {
         const value = await read(path, "POST", body);
         op.check();
         return value;
+      },
+      compose: (path: string, body: string) => {
+        op.check();
+        return read(
+          path,
+          "POST",
+          body,
+          /^network\/\d+\/writeNewNote\?ajax$/.test(path),
+        );
       },
       check: () => op.check(),
       validationSource,
@@ -690,22 +700,7 @@ export class BrowserConnection {
     const draft = new EmailDraft(input);
     try {
       return await this.#operate(options, (session, op, network) =>
-        draft.create(
-          {
-            ...this.#resources(session, op),
-            compose: async (path, body) => {
-              op.check();
-              const data = await session.request(path, "POST", body);
-              validationSource(path);
-              return accepted(
-                data,
-                false,
-                /^network\/\d+\/writeNewNote\?ajax$/.test(path),
-              );
-            },
-          },
-          network,
-        ),
+        draft.create(this.#resources(session, op), network),
       );
     } catch (error) {
       const outcome = draft.submitted ? "unknown" : "not_submitted";
