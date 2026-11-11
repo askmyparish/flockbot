@@ -25,6 +25,8 @@ import {
   draftResponse,
   htmlDraftInput,
   htmlDraftStored,
+  blockDraftInput,
+  blockDraftResponse,
 } from "../fixtures/email-draft.js";
 import {
   safeDiagnostic,
@@ -82,6 +84,8 @@ describe("Flocknote MCP contract", () => {
   it("creates drafts through MCP and returns safe partial progress on failures", async () => {
     let fail = false;
     let html = false;
+    let blocks = false;
+    const blockResponse = blockDraftResponse();
     const f = await fixture({
       factory: async () => ({
         signIn: async () => {},
@@ -89,6 +93,7 @@ describe("Flocknote MCP contract", () => {
         request: async (path, _method, body) => {
           if (fail && path === "composer/saveModule")
             throw new FlockbotError("transport_failed");
+          if (blocks) return blockResponse(path, body);
           return draftResponse(path, body, html ? htmlDraftStored : undefined);
         },
       }),
@@ -116,6 +121,35 @@ describe("Flocknote MCP contract", () => {
       verified: true,
       noteId: "803",
     });
+    blocks = true;
+    expect(
+      (
+        await f.client.callTool({
+          name: "create_email_draft",
+          arguments: blockDraftInput,
+        })
+      ).structuredContent,
+    ).toMatchObject({ ok: true, verified: true });
+    for (const input of [
+      { ...blockDraftInput, body: "conflict" },
+      {
+        ...blockDraftInput,
+        content: [
+          { type: "button", text: "Private label", url: "javascript:alert(1)" },
+        ],
+      },
+    ]) {
+      const rejected = await f.client.callTool({
+        name: "create_email_draft",
+        arguments: input,
+      });
+      expect(rejected.structuredContent).toMatchObject({
+        code: "invalid_input",
+        outcome: "not_submitted",
+      });
+      expect(JSON.stringify(rejected)).not.toContain("Private label");
+    }
+    blocks = false;
     const invalid = await f.client.callTool({
       name: "create_email_draft",
       arguments: {
@@ -1027,13 +1061,36 @@ describe("Flocknote MCP contract", () => {
       "status",
       "subscriber_count",
     ]);
-    for (const tool of tools)
-      expect(
-        JSON.stringify(tool.inputSchema).replaceAll(
-          '"description":',
-          '"documentation":',
-        ),
-      ).not.toMatch(/password|cookie|token|script|url|code/i);
+    for (const tool of tools) {
+      const schema = JSON.stringify(tool.inputSchema).replaceAll(
+        '"description":',
+        '"documentation":',
+      );
+      expect(schema).not.toMatch(/password|cookie|token|script|code/i);
+      if (tool.name !== "create_email_draft")
+        expect(schema).not.toMatch(/url/i);
+    }
+    // A button destination is content, not an arbitrary request endpoint.
+    expect(
+      tools
+        .filter((tool) => /"url":/.test(JSON.stringify(tool.inputSchema)))
+        .map((tool) => tool.name),
+    ).toEqual(["create_email_draft"]);
+    // Codex versions that cannot normalize oneOf array items need anyOf here.
+    expect(
+      tools.find(({ name }) => name === "create_email_draft")?.inputSchema,
+    ).toMatchObject({
+      properties: {
+        content: {
+          items: {
+            anyOf: [
+              { type: "object", properties: { type: { const: "text" } } },
+              { type: "object", properties: { type: { const: "button" } } },
+            ],
+          },
+        },
+      },
+    });
     expect(
       tools.find(({ name }) => name === "add_member")?.annotations,
     ).toMatchObject({

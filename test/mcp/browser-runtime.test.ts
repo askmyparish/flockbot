@@ -36,6 +36,8 @@ import {
   draftResponse,
   htmlDraftInput,
   htmlDraftStored,
+  blockDraftInput,
+  blockDraftResponse,
 } from "../fixtures/email-draft.js";
 import { safeDiagnostic } from "../../adapters/mcp/src/diagnostics.js";
 import { FailureLog } from "../../adapters/mcp/src/failure-log.js";
@@ -53,8 +55,10 @@ async function fixture() {
   const origin = "https://example-parish.flocknote.com";
   const visits: { path: string; method: string }[] = [];
   const emailResponses: Record<string, unknown> = latestEmailResponses();
+  const blocks = blockDraftResponse();
   const state = {
     draft: false,
+    draftBlocks: false,
     draftHtml: undefined as string | undefined,
     launches: 0,
     expired: false,
@@ -169,11 +173,13 @@ async function fixture() {
             await route.fulfill({ contentType: "text/html", body: value });
           else await json(value);
         } else if (state.draft) {
-          const value = draftResponse(
-            `${path}${url.search}`,
-            request.postData() ?? undefined,
-            state.draftHtml,
-          );
+          const value = state.draftBlocks
+            ? blocks(`${path}${url.search}`, request.postData() ?? undefined)
+            : draftResponse(
+                `${path}${url.search}`,
+                request.postData() ?? undefined,
+                state.draftHtml,
+              );
           if (typeof value === "string")
             await route.fulfill({ contentType: "text/html", body: value });
           else await json(value);
@@ -325,12 +331,13 @@ async function fixture() {
 describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
   "real Chromium with offline Flocknote fixtures",
   () => {
-    it.each([draftInput, htmlDraftInput])(
+    it.each([draftInput, htmlDraftInput, blockDraftInput])(
       "creates an unscheduled draft through the actual browser fetch allowlist: $bodyFormat",
       async (input) => {
         const f = await fixture();
         await f.signIn();
         f.state.draft = true;
+        f.state.draftBlocks = "content" in input;
         f.state.draftHtml = "bodyFormat" in input ? htmlDraftStored : undefined;
         const start = f.visits.length;
         expect(await f.connection.createEmailDraft(input)).toMatchObject({
@@ -345,6 +352,13 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
           "composer/createNote",
           "composer/save2",
           "composer/saveModule",
+          ...("content" in input
+            ? [
+                "composer/saveModule",
+                "composer/saveModule",
+                "composer/saveModule",
+              ]
+            : []),
           "composer/saveSection",
           "composer/saveLayout",
           "composer/save2",

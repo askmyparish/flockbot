@@ -373,6 +373,31 @@ comparison correctly reported an unverified partial write. Remove only outer
 HTML whitespace before submitting; do not collapse interior text or omit empty
 blocks. The probe's owned records were deleted and verified deleted.
 
+### Native URL button persistence
+
+Disposable button drafts extended the fifth capture's module contract. A native
+`button` module with `data.type=url`, raw `data.text` and raw `data.url` retained
+its strings exactly on a fresh editor read, including angle brackets, quotes,
+ampersands, Unicode, literal entity-looking text and URL query/fragment data.
+The HTML text-module escaped-numeric transport encoding is not applicable:
+submitting it for a button label stored the extra escaping literally. Do not
+reuse the lossy Markdown reader as a button-write verifier.
+
+The tested appearance fields were `fontFamily=Arial`, `fontSize=16`,
+`maxWidth=300`, `padding=12`, `backgroundColor=336699`, and `textColor=ffffff`.
+All persisted as strings without submitting gradients, `fontSizee`, or Outlook
+dimension fields. This establishes one fixed style, not arbitrary styling or
+which fields can be omitted. Both experiments' owned drafts and autosaves were
+deleted and read back deleted; no note was sent. These persistence observations
+alone do not establish delivered-email rendering.
+
+A mixed text/button draft also passed a composer-preview check: button labels
+containing angle brackets and entity-looking text appeared as escaped literal
+text, and query/fragment URLs retained their decoded destinations. Preview's
+`note` object omitted `status`; fresh editor reads before and after preview
+confirmed unchanged sections and an unscheduled draft. Preview is an experiment
+only, not part of the draft tool's save/verification sequence.
+
 ### Cleanup and remaining limits
 
 The experiment deleted only its owned draft B and autosave A with

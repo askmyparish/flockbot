@@ -7,6 +7,17 @@ export function encodeDraftText(value: string): string {
   return value.replace(/[&<>"']/g, (c) => `&amp;#${c.codePointAt(0)};`);
 }
 
+/** Shared authoring-link policy for HTML links and native URL buttons. */
+export function safeDraftUrl(value: string): boolean {
+  if (!/^https?:\/\//i.test(value) || /[\s\\\p{Cc}]/u.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return Boolean(url.hostname) && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
 /** Authoring policy, not a lossy sanitizer. Persisted content uses the same grammar. */
 export function htmlDraftBody(value: string, persisted = false) {
   // The composer trims outer HTML whitespace, but retains interior runs and tabs.
@@ -97,15 +108,7 @@ export function htmlDraftBody(value: string, persisted = false) {
         if (node.attrs.length !== 1 || node.attrs[0]?.name !== "href")
           return fail("draft_html_unsupported");
         href = node.attrs[0].value;
-        if (!/^https?:\/\//i.test(href) || /[\s\\\p{Cc}]/u.test(href))
-          return fail("draft_html_unsafe_link");
-        try {
-          const url = new URL(href);
-          if (!url.hostname || url.username || url.password)
-            return fail("draft_html_unsafe_link");
-        } catch {
-          return fail("draft_html_unsafe_link");
-        }
+        if (!safeDraftUrl(href)) return fail("draft_html_unsafe_link");
       } else if (node.attrs.length) return fail("draft_html_unsupported");
       const inner =
         tag === "br"

@@ -57,7 +57,9 @@ export function draftReadback() {
       options: { schedule: false, route2: false, voiceCalls: false },
       sections: [
         {
-          col1: { items: [{ type: "text", data: { html: draftHtml } }] },
+          col1: {
+            items: [{ type: "text", data: { ID: 811, html: draftHtml } }],
+          },
           col2: { items: [] as unknown[] },
         },
       ],
@@ -110,7 +112,7 @@ export function draftResponse(
           ...draftReadback().noteInfo,
           sections: [
             {
-              col1: { items: [{ type: "text", data: { html } }] },
+              col1: { items: [{ type: "text", data: { ID: 811, html } }] },
               col2: { items: [] },
             },
           ],
@@ -119,4 +121,87 @@ export function draftResponse(
     default:
       throw Error(`Unexpected fictional endpoint ${path}`);
   }
+}
+
+export const blockDraftInput = {
+  groupName: "Choir",
+  subject: draftInput.subject,
+  content: [
+    { type: "text" as const, body: "Invitation <b>\nDetails" },
+    {
+      type: "button" as const,
+      text: `Join <b> & "quoted" O'Neil café 🕊 &lt;`,
+      url: "https://example.test/register?a=1&b=2#part",
+    },
+    {
+      type: "text" as const,
+      bodyFormat: "html" as const,
+      body: "<p>Thanks, <strong>Alex</strong></p>",
+    },
+    {
+      type: "button" as const,
+      text: "More information",
+      url: "http://example.test/info",
+    },
+  ],
+};
+export const blockDraftStored = [
+  {
+    type: "text",
+    data: { ID: 811, html: "<div>Invitation &#60;b&#62;<br>Details</div>" },
+  },
+  {
+    type: "button",
+    data: {
+      ID: 812,
+      type: "url",
+      text: `Join <b> & "quoted" O'Neil café 🕊 &lt;`,
+      url: "https://example.test/register?a=1&b=2#part",
+      fontFamily: "Arial",
+      fontSize: "16",
+      maxWidth: "300",
+      padding: "12",
+      backgroundColor: "336699",
+      textColor: "ffffff",
+    },
+  },
+  {
+    type: "text",
+    data: { ID: 813, html: "<div>Thanks, <strong>Alex</strong></div>" },
+  },
+  {
+    type: "button",
+    data: {
+      ID: 814,
+      type: "url",
+      text: "More information",
+      url: "http://example.test/info",
+      fontFamily: "Arial",
+      fontSize: "16",
+      maxWidth: "300",
+      padding: "12",
+      backgroundColor: "336699",
+      textColor: "ffffff",
+    },
+  },
+];
+/** Independent saved records, not an echo of the writer's request payload. */
+export function blockDraftResponse(items = blockDraftStored) {
+  let next = 0;
+  return (path: string, body?: string): unknown => {
+    if (path === "composer/createNote") next = 0;
+    if (path === "composer/saveModule")
+      return { success: true, itemID: String(items[next++]?.data.ID) };
+    if (path === "composer/editNote")
+      return {
+        success: true,
+        noteInfo: {
+          ...draftReadback().noteInfo,
+          sections: [
+            { col1: { items: structuredClone(items) }, col2: { items: [] } },
+          ],
+        },
+      };
+    return draftResponse(path, body);
+  };
 }

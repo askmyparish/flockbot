@@ -426,8 +426,9 @@ coverage; installed Codex use remains unverified.
 ### Create an email draft
 
 `create_email_draft` requires exactly one explicit `groupId` or case-insensitive
-unique `groupName`, a nonblank single-line `subject`, and a nonblank plain-text
-`body` by default. It never defaults to Everyone. Subject whitespace is trimmed; body line
+unique `groupName`, a nonblank single-line `subject`, and either a nonblank `body`
+or ordered `content` blocks described below. Body text is literal by default.
+It never defaults to Everyone. Subject whitespace is trimmed; body line
 endings become LF. Literal markup remains text. No subject/body character cap
 is imposed, and input is never truncated. The existing local broker's 16 KiB
 JSON request-frame limit still applies: an oversized request fails before
@@ -455,10 +456,36 @@ Validation reasons are `draft_html_malformed` (use balanced fragments),
 (use an absolute HTTP(S) URL without credentials/whitespace) and `draft_html_empty`
 (include visible text). Errors do not echo authored content.
 
+For buttons or interleaved content, supply a nonempty `content` array **instead
+of** top-level `body`/`bodyFormat`. Existing body-based calls remain supported.
+Each text block has its own optional `bodyFormat`, defaulting to literal text:
+
+```json
+{
+  "groupName": "Choir",
+  "subject": "Rehearsal registration",
+  "content": [
+    {"type": "text", "body": "Please register for rehearsal."},
+    {"type": "button", "text": "Register", "url": "https://example.org/register"},
+    {"type": "text", "bodyFormat": "html", "body": "<p>Thanks, <strong>Alex</strong></p>"}
+  ]
+}
+```
+
+Buttons are native URL modules with plain, nonblank single-line labels and the
+same safe HTTP(S) destinations as HTML links. They use one fixed appearance:
+Arial 16, width limit 300, padding 12, blue `#336699` background and white text.
+Custom styling is not accepted. Multiple buttons and button-only drafts are
+allowed; text and buttons retain their requested order in one column/section.
+There is no application-level block-count cap; the existing request-size and
+operation-deadline safeguards still apply. Unsupported blocks or conflicting
+body/content representations fail before composer requests. Saved module IDs,
+types, order, text, button destinations and appearance must match before success.
+
 The writer uses the saved connection, checks the composer entry's readiness and
 billing branches, and inherits Flocknote's sender/theme. It saves a new email-only,
 unscheduled draft through the JSON composer endpoints and reads it back to verify
-the ID, draft status, group target, routing, subject, sender/theme, and body before
+the ID, draft status, group target, routing, subject, sender/theme, and content before
 returning `verified: true`, `noteId`, `autosaveId`, and `groupId`. Subsequent editing
 belongs in Flocknote. Sending, scheduling, test delivery, SMS/voice, attachments,
 arbitrary HTML and editing existing notes are not supported.
@@ -471,6 +498,8 @@ the conservative `unknown` outcome rather than promise no upstream side effect.
 This is a non-idempotent write. It never retries, resumes or automatically deletes
 partial drafts. Failures include `draftProgress` with the failing `stage`,
 `completedStages`, and any known `noteId`/`autosaveId`. After possible submission,
+the module stage is complete only when every requested block was saved; an
+interrupted module stage can leave earlier blocks persisted.
 `outcome: unknown` means a partial draft may remain; inspect Flocknote before
 deciding to submit again. A lost IPC reply may leave IDs unavailable to the caller.
 Default diagnostics exclude authored content; explicitly verbose diagnostics use

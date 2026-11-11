@@ -6,6 +6,7 @@ import { Operation } from "../../../src/operation.js";
 import { setTimeout as delay } from "node:timers/promises";
 import type { BrowserConnection, BrowserStatus } from "./browser-connection.js";
 import { BrowserConnectionError } from "./browser-runtime.js";
+import { draftContentSchema } from "./browser-protocol.js";
 import { MCP_VERSION } from "./version.js";
 import { UpdateChecker, type UpdateNotifications } from "./update-check.js";
 import { FailureLog } from "./failure-log.js";
@@ -782,15 +783,16 @@ export function createFlocknoteServer(
     {
       title: "Create an unsent email draft",
       description:
-        "Save a new email draft only when the user requests it. Supply exactly one groupId or unique groupName, a nonblank single-line subject, and body. bodyFormat defaults to text (HTML/Markdown remain literal); html accepts balanced fragments with p/div/br, h1–h6, strong/b, em/i, ul/ol/li, blockquote and a[href]. Only absolute HTTP(S) links without credentials; no other attributes, CSS, images or tables. Unsupported markup is rejected, not stripped. Paragraphs become Flocknote div blocks; HTML source newlines become spaces. Returns draft IDs only after verifying content, links, target and unscheduled status. Does not send or edit existing notes. On failure, draftProgress identifies known partial work; check Flocknote before resubmitting an unknown outcome. No application character caps; transport limits may reject without truncation.",
+        "Save a new unsent, unscheduled email draft only when requested. Supply exactly one groupId or unique groupName and a nonblank single-line subject. Choose body with optional bodyFormat, OR an ordered content array without top-level body/bodyFormat. Text blocks use {type:'text',body,bodyFormat?}; native button blocks use {type:'button',text,url}. Buttons have plain single-line labels and a fixed blue/white appearance; multiple buttons and button-only content are allowed. Text defaults to literal plain text; html accepts balanced p/div/br, h1–h6, strong/b, em/i, ul/ol/li, blockquote and a[href]. All links require absolute HTTP(S) URLs without credentials. No CSS, images, tables or other attributes; unsupported markup is rejected, not stripped. HTML paragraphs become div blocks, source newlines become spaces, and outer whitespace is trimmed. Success verifies saved content/order, links, target and draft status. Does not send or edit existing notes. On unknown outcomes, check Flocknote before resubmitting; draftProgress identifies known partial work. No application character/block caps; transport limits can reject without truncation.",
       inputSchema: z
         .object({
           verboseDiagnostics,
           groupId: groupId.optional(),
           groupName: z.string().min(1).max(256).optional(),
           subject: z.string().min(1),
-          body: z.string().min(1),
+          body: z.string().min(1).optional(),
           bodyFormat: z.enum(["text", "html"]).optional(),
+          content: draftContentSchema.optional(),
         })
         .strict(),
       annotations: {

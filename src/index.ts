@@ -70,6 +70,7 @@ export {
 export { Note, type NoteInput, type NoteResult } from "./models/note.js";
 export {
   EmailDraft,
+  type EmailDraftBlock,
   type EmailDraftInput,
   type EmailDraftResult,
   type DraftContext,
