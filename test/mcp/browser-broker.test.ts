@@ -343,6 +343,19 @@ describe.skipIf(process.platform === "win32")(
         expect(JSON.stringify(latest)).not.toMatch(
           /Rivera|alex@|PRIVATE|summaryCounts/,
         );
+        const listingStart = f.events().length;
+        expect(await f.service.groupNotes(selector)).toMatchObject({
+          groupId: "101",
+          returnedCount: 2,
+          hasMore: true,
+          notes: [
+            { id: "801", type: null },
+            { id: "800", type: null },
+          ],
+        });
+        expect(f.events().slice(listingStart)).toEqual([
+          "GET group/101/notes?ajax&more",
+        ]);
       }
     });
 

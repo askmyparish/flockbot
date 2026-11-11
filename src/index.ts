@@ -57,6 +57,11 @@ export {
   type EmailAnalyticsCounts,
 } from "./models/email-analytics.js";
 export {
+  GroupNotes,
+  type GroupNoteSummary,
+  type GroupNotesResult,
+} from "./models/group-notes.js";
+export {
   MemberGroups,
   membershipGroupSelector,
   type GroupSelector,
