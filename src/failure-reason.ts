@@ -36,6 +36,7 @@ export const FAILURE_REASONS = [
   "email_identity_shape",
   "missing_analytics_counts",
   "analytics_count_invalid",
+  "recipient_page_mismatch",
   "note_targets_shape",
   "sending_summary_shape",
   "membership_confirmation",

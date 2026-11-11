@@ -74,7 +74,9 @@ function allowed(path: string, method: string): boolean {
       "composer/editNote",
     ].includes(path) ||
       /^group\/[A-Za-z0-9_-]+\/addToGroupByAdmin$/.test(path) ||
-      /^note\/[A-Za-z0-9_-]+\/searchAnalytics\?ajax$/.test(path) ||
+      /^note\/[A-Za-z0-9_-]+\/(?:searchAnalytics|detailedAnalytics)\?ajax$/.test(
+        path,
+      ) ||
       /^group\/[A-Za-z0-9_-]+\/(?:people\?ajax|filter)$/.test(path) ||
       /^group\/[A-Za-z0-9_-]+\/people\/[1-9]\d{0,15}\?ajax&more$/.test(path) ||
       /^user\/[A-Za-z0-9_-]+\/(?:profile|groups)$/.test(path))

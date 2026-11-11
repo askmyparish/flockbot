@@ -28,6 +28,7 @@ published by these changes.
 | `member_communication_status` | Read one member/group's email/SMS preferences and contact warnings without promising delivery |
 | `member_latest_email_status` | Check recorded engagement on the group's latest distinct sent email; unsupported cases remain unknown |
 | `email_analytics` | Read aggregate tracking categories for an explicit email ID or the latest group email without recipient records |
+| `email_recipients` | Read one bounded opened/unopened category page for an explicit email, with addresses only on request |
 | `group_notes` | Discover note IDs and titles on one bounded group page, with explicit continuation and unknown channel metadata |
 | `find_notes` | Find note summaries by parish-wide keyword search, without confusing broad hit counts with note totals |
 | `note` | Read one identified email/SMS note as bounded Markdown, with explicit unavailable/partial results |
@@ -288,6 +289,39 @@ content. The operation reuses the saved session and coordinated deadline without
 preflight or automatic retries. Group-mode selection and aggregate counts have
 read-only live verification through the development runner; explicit-ID mode
 has offline coverage only. Codex Desktop use of this change remains unverified.
+
+### Specific-email recipient records
+
+`email_recipients` requires an explicit `emailId` and `category` (`opened` or
+`unopened`), including for older emails. For example,
+`{"emailId":"801","category":"opened"}` returns names and stable member IDs;
+add `"fields":["address"]` only when contact addresses are needed. Group selectors,
+other categories and page selection are unsupported. Use `email_analytics` when
+only counts are needed.
+
+The tool confirms matching email identity/type with one JSON summary read, then
+reads page 1 of `detailedAnalytics` with one POST. These are read operations: no
+per-person enrichment, writes, retries or automatic continuation. Non-email notes
+return `selection:"unknown"` and `reason:"unsupported_email_type"` without the
+recipient request; failed or malformed responses remain errors.
+
+The first 50 upstream rows are considered. Supported `mailgun` records with empty
+`targetContacts` become `recipients`; unsupported rows count toward `omittedCount`
+without guessed attribution. Duplicate member IDs stay separate records.
+`upstreamReturnedCount` counts all rows in the received page; `returnedCount`
+counts projected rows. `totalRecords` is only the reported upstream value.
+`truncated` reports local row/text clipping, separately from omitted records.
+Names are capped at 256 characters per field with `nameTruncated`; opt-in
+addresses are capped at 320 with `addressTruncated`.
+
+`hasMore:null` and `completeness:"unknown"` remain explicit, even for empty or
+short pages. Populated later pages and termination have not been established.
+Recorded opens do not prove human reading or delivery, and unopened does not
+prove unread. Records are not attributed to a particular resend, and the two
+reads are not an atomic snapshot. `observedAt` is lookup time, not an open time.
+Default diagnostics remain metadata-only; existing per-call verbose diagnostics
+apply unchanged. Offline model, MCP, broker and intercepted-browser coverage is
+provided; installed Codex Desktop use of this operation remains unverified.
 
 ### Recent group notes
 

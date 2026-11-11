@@ -31,6 +31,7 @@ import {
   MemberCommunicationStatus,
   MemberLatestEmailStatus,
   EmailAnalytics,
+  EmailRecipients,
   GroupNotes,
   NoteSearch,
   Note,
@@ -346,6 +347,11 @@ export async function runBrowserBroker(options: BrokerOptions): Promise<void> {
                   case "email_analytics": {
                     const { action: _, ...input } = request;
                     value = await connection.emailAnalytics(input, { signal });
+                    break;
+                  }
+                  case "email_recipients": {
+                    const { action: _, ...input } = request;
+                    value = await connection.emailRecipients(input, { signal });
                     break;
                   }
                   case "group_notes": {
@@ -770,6 +776,21 @@ export class BrowserService {
       { ...prepared, action: "group_notes" },
       options.signal,
     )) as Awaited<ReturnType<BrowserConnection["groupNotes"]>>;
+  }
+
+  async emailRecipients(
+    input: Parameters<BrowserConnection["emailRecipients"]>[0],
+    options: OperationOptions = {},
+  ) {
+    const prepared = new EmailRecipients(input).toInput();
+    return (await this.#call(
+      {
+        ...prepared,
+        fields: [...(prepared.fields ?? [])],
+        action: "email_recipients",
+      },
+      options.signal,
+    )) as Awaited<ReturnType<BrowserConnection["emailRecipients"]>>;
   }
 
   async groupMembers(

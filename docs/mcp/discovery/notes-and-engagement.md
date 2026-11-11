@@ -308,6 +308,23 @@ requests have HTTP 200 responses.
 | POST | `/note/{noteId}/searchAnalytics` | 1 | 97 |
 | POST | `/note/{noteId}/detailedAnalytics` | 2 | 98, 100 |
 
+## Bounded recipient-category follow-up
+
+A read-only test-parish probe confirmed the JSON forms `type=opened&page=1` and
+`type=unopened&page=1` for `POST /note/{noteId}/detailedAnalytics?ajax`, after a
+matching email summary read. Successful responses echo string `type` and `page`,
+with `records`, numeric `totalRecords`, `isApp`, and top-level login `userID`.
+Observed records contain numeric member `userID`, string `fname`, `lname`,
+`address`, `service:"mailgun"`, and empty `targetContacts`.
+
+The sample returned one opened record and four unopened records on page 1.
+Explicit page-2 probes returned empty arrays while retaining totals of one and
+four. This establishes an empty shape, not reliable continuation, fixed page
+size, populated later-page ordering or exhaustive termination. The reader
+therefore exposes page 1 only and keeps completeness unknown. Other services
+and populated `targetContacts` remain unsupported; no extra test recipients were
+created and no messages were sent.
+
 ## Remaining evidence gaps
 
 - Search pagination and note-only filtering; additional result/entity types.
@@ -315,7 +332,7 @@ requests have HTTP 200 responses.
   note variants beyond search previews.
 - Analytics permissions, additional note types, metric definitions, timestamp
   units, and graph timezone/label interpretation.
-- Further detail pages, empty detail categories, other detail types, and
+- Populated further detail pages, empty first-page categories, other detail types, and
   populated `targetContacts`.
 - Populated analytics-search and comment results, with ordering and pagination.
 - Any composition, scheduling, sending, editing, deletion, or comment writes.

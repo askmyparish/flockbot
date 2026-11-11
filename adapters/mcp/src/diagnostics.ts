@@ -23,6 +23,7 @@ const operations = [
   "member",
   "member_groups",
   "email_analytics",
+  "email_recipients",
   "group_notes",
   "member_latest_email_status",
   "member_communication_status",
@@ -96,6 +97,7 @@ const endpoints = [
   "note/{id}/analyticsSummary",
   "note/{id}/analytics2",
   "note/{id}/searchAnalytics",
+  "note/{id}/detailedAnalytics",
 ] as const;
 const boundedNumber = z.number().finite().min(0).max(Number.MAX_SAFE_INTEGER);
 const eventSchema = z.object({

@@ -57,6 +57,12 @@ export {
   type EmailAnalyticsCounts,
 } from "./models/email-analytics.js";
 export {
+  EmailRecipients,
+  type EmailRecipientsInput,
+  type EmailRecipientsResult,
+  type EmailRecipient,
+} from "./models/email-recipients.js";
+export {
   GroupNotes,
   type GroupNoteSummary,
   type GroupNotesResult,
