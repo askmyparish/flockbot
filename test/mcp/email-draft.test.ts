@@ -12,6 +12,11 @@ import {
 import { BrowserConnection } from "../../adapters/mcp/src/browser-connection.js";
 import { SerialCoordinator } from "../../adapters/mcp/src/serial-coordinator.js";
 import {
+  failureDiagnostic,
+  recordResponse,
+  runDiagnostic,
+} from "../../adapters/mcp/src/diagnostics.js";
+import {
   draftInput,
   draftResponse,
   draftReadback,
@@ -628,25 +633,45 @@ describe("create-only email drafts", () => {
     },
   );
 
-  it.each(["<html>Sign in</html>", { authorized: false }])(
-    "diagnoses auth-like failures without replaying a partial draft: %j",
+  it.each(["<html>Sign in</html>", { authorized: false }, { success: false }])(
+    "diagnoses rejected write responses without replaying a partial draft: %j",
     async (response) => {
-      const f = fixture((path, _b, value) =>
-        path === "composer/saveModule" ? response : value,
-      );
-      await expect(
-        f.connection.createEmailDraft(draftInput),
-      ).rejects.toMatchObject({
-        code:
-          typeof response === "string"
-            ? "invalid_response"
-            : "upstream_rejected",
-        outcome: "unknown",
-        draftProgress: { stage: "module", autosaveId: "801" },
+      const f = fixture((path, _b, value) => {
+        if (path !== "composer/saveModule") return value;
+        recordResponse(path, "POST", { status: 200 }, 1);
+        return response;
+      });
+      const code =
+        typeof response === "string" ? "invalid_response" : "upstream_rejected";
+      const diagnostic = await runDiagnostic("create_email_draft", async () => {
+        try {
+          await f.connection.createEmailDraft(draftInput);
+        } catch (error) {
+          expect(error).toMatchObject({
+            code,
+            outcome: "unknown",
+            draftProgress: { stage: "module", autosaveId: "801" },
+          });
+          return failureDiagnostic(error);
+        }
+        throw new Error("Expected rejected write");
+      });
+      expect(diagnostic).toMatchObject({
+        failure: {
+          stage: "validation",
+          endpoint: "composer/saveModule",
+          method: "POST",
+          status: 200,
+          // Preserve the failed response's timing, not total operation time.
+          elapsedMs: 1,
+          code,
+        },
       });
       expect(f.requests.map((r) => r.path)).toEqual([
         ...sequence.slice(0, 6),
-        "user/userData",
+        ...(typeof response === "object" && "success" in response
+          ? []
+          : ["user/userData"]),
       ]);
       expect(await f.connection.status()).toMatchObject({ state: "ready" });
     },
