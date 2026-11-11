@@ -429,7 +429,11 @@ coverage; installed Codex use remains unverified.
 unique `groupName`, a nonblank single-line `subject`, and either a nonblank `body`
 or ordered `content` blocks described below. Body text is literal by default.
 It never defaults to Everyone. Subject whitespace is trimmed; body line
-endings become LF. Literal markup remains text. No subject/body character cap
+endings become LF. Subjects and button labels reject control characters;
+plain-text bodies allow tabs and normalized newlines but reject other control
+characters. Ill-formed Unicode (unpaired surrogates) is rejected in subjects,
+content and URLs. These checks return `invalid_input` before any request.
+Literal markup remains text. No subject/body character cap
 is imposed, and input is never truncated. The existing local broker's 16 KiB
 JSON request-frame limit still applies: an oversized request fails before
 submission with `request_not_sent`, `request_too_large`, and `not_submitted`.

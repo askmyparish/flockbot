@@ -162,7 +162,7 @@ export class EmailDraft {
         ) ||
         typeof input.subject !== "string" ||
         !input.subject.trim() ||
-        /[\r\n]/.test(input.subject)
+        /[\p{Cc}\p{Cs}]/u.test(input.subject)
       )
         throw new Error();
       const ordered = input.content !== undefined;
@@ -183,7 +183,7 @@ export class EmailDraft {
             ) ||
             typeof block.text !== "string" ||
             !block.text.replace(/\p{Cf}/gu, "").trim() ||
-            /[\r\n\u2028\u2029\p{Cc}]/u.test(block.text) ||
+            /[\r\n\u2028\u2029\p{Cc}\p{Cs}]/u.test(block.text) ||
             typeof block.url !== "string" ||
             !safeDraftUrl(block.url)
           )
@@ -206,9 +206,16 @@ export class EmailDraft {
             block.bodyFormat !== "html")
         )
           throw new Error();
+        const body = block.body.replace(/\r\n?/g, "\n");
+        if (
+          /\p{Cs}/u.test(body) ||
+          (block.bodyFormat !== "html" &&
+            /\p{Cc}/u.test(body.replace(/[\n\t]/g, "")))
+        )
+          throw new Error();
         return Object.freeze({
           type: "text",
-          body: block.body.replace(/\r\n?/g, "\n"),
+          body,
           ...(block.bodyFormat === undefined
             ? {}
             : { bodyFormat: block.bodyFormat }),

@@ -15,6 +15,7 @@ import {
   draftInput,
   draftResponse,
   draftReadback,
+  draftHtml,
   draftInitialization,
   htmlDraftInput,
   htmlDraftStored,
@@ -158,8 +159,15 @@ describe("create-only email drafts", () => {
     { bodyFormat: "text", content: blockDraftInput.content },
     { content: [{ type: "video", url: "https://example.test" }] },
     { content: [{ type: "text", body: " " }] },
+    { content: [{ type: "text", body: "a\u0085b" }] },
+    { content: [{ type: "text", body: "a\ud800b" }] },
     { content: [{ type: "text", body: "x", bodyFormat: "markdown" }] },
     { content: [{ type: "button", text: " ", url: "https://example.test" }] },
+    {
+      content: [
+        { type: "button", text: "a\udfffb", url: "https://example.test" },
+      ],
+    },
     {
       content: [
         { type: "button", text: "\u200b", url: "https://example.test" },
@@ -188,6 +196,7 @@ describe("create-only email drafts", () => {
       "https://user:pass@example.test",
       "https://example.test/\nx",
       "https://example.test\\@other.test",
+      "https://example.test/\ud800",
     ].map((url) => ({ content: [{ type: "button", text: "Label", url }] })),
   ])("rejects malformed ordered input before I/O: %j", async (payload) => {
     const f = fixture();
@@ -460,11 +469,15 @@ describe("create-only email drafts", () => {
   });
 
   it("creates one verified draft, preserving literal text and distinct IDs without preview or send", async () => {
-    const f = fixture();
+    const f = fixture((path, body, response) =>
+      path === "composer/editNote"
+        ? draftResponse(path, body, draftHtml.replace("A ", "A\t"))
+        : response,
+    );
     expect(
       await f.connection.createEmailDraft({
         ...draftInput,
-        body: draftInput.body.replaceAll("\n", "\r\n"),
+        body: draftInput.body.replace("A ", "A\t").replaceAll("\n", "\r\n"),
       }),
     ).toEqual({
       noteId: "803",
@@ -482,7 +495,7 @@ describe("create-only email drafts", () => {
         .find((r) => r.path === "composer/saveModule")
         ?.form.get("data[html]"),
     ).toBe(
-      "<div>A &amp;#60;b&amp;#62; &amp;#38;lt; &amp;#34;hi&amp;#34;<br><br>**literal** café 🕊<br></div>",
+      "<div>A\t&amp;#60;b&amp;#62; &amp;#38;lt; &amp;#34;hi&amp;#34;<br><br>**literal** café 🕊<br></div>",
     );
     for (const { form } of forms.filter((r) => r.path === "composer/save2")) {
       expect(form.get("options[schedule]")).toBe("false");
@@ -515,7 +528,14 @@ describe("create-only email drafts", () => {
   it.each([
     { subject: "" },
     { subject: "a\nb" },
+    { subject: "a\u0000b" },
+    { subject: "a\tb" },
+    { subject: "a\ud800b" },
     { body: " \n" },
+    { body: "a\u0000b" },
+    { body: "a\udfffb" },
+    { body: "<p>a\udfff\udc00b</p>", bodyFormat: "html" as const },
+    { body: "a\u007fb", bodyFormat: "text" as const },
     { groupId: "101" },
     { noteId: "803" },
     { html: "<b>wrong mode</b>" },
