@@ -101,6 +101,12 @@ export function draftResponse(
       };
     case "composer/saveModule":
       return { success: true, itemID: "811" };
+    case "upload/photo/note":
+      return {
+        success: true,
+        photoID: 901,
+        url: "https://images.example.test/first.jpg",
+      };
     case "composer/saveSection":
       return { success: true, sectionID: "821" };
     case "composer/saveLayout":
@@ -186,7 +192,12 @@ export const blockDraftStored = [
   },
 ];
 /** Independent saved records, not an echo of the writer's request payload. */
-export function blockDraftResponse(items = blockDraftStored) {
+export function blockDraftResponse(
+  items: {
+    type: string;
+    data: { ID: number; [key: string]: unknown };
+  }[] = blockDraftStored,
+) {
   let next = 0;
   return (path: string, body?: string): unknown => {
     if (path === "composer/createNote") next = 0;
@@ -204,4 +215,49 @@ export function blockDraftResponse(items = blockDraftStored) {
       };
     return draftResponse(path, body);
   };
+}
+
+export const imageDraftStored = [
+  {
+    type: "photo",
+    data: {
+      ID: 811,
+      photoID: "901",
+      photourl: "https://images.example.test/first.jpg",
+      photodimensions: { width: 240, height: 120 },
+    },
+  },
+  { type: "button", data: { ...blockDraftStored[1]!.data, ID: 812 } },
+  {
+    type: "photo",
+    data: {
+      ID: 813,
+      photoID: "902",
+      photourl: "https://images.example.test/second.png",
+      photodimensions: { width: 120, height: 240 },
+    },
+  },
+];
+export function imageDraftInput(first: string, second: string) {
+  return {
+    groupName: "Choir",
+    subject: draftInput.subject,
+    content: [
+      { type: "image" as const, path: first },
+      blockDraftInput.content[1]!,
+      { type: "image" as const, path: second },
+    ],
+  };
+}
+export function imageDraftResponse() {
+  const response = blockDraftResponse(imageDraftStored);
+  let uploads = 0;
+  return (path: string, body?: string) =>
+    path === "upload/photo/note"
+      ? {
+          success: true,
+          photoID: 901 + uploads++,
+          url: "https://images.example.test/upload.jpg",
+        }
+      : response(path, body);
 }

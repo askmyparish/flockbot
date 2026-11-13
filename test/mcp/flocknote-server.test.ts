@@ -1086,6 +1086,7 @@ describe("Flocknote MCP contract", () => {
             anyOf: [
               { type: "object", properties: { type: { const: "text" } } },
               { type: "object", properties: { type: { const: "button" } } },
+              { type: "object", properties: { type: { const: "image" } } },
             ],
           },
         },

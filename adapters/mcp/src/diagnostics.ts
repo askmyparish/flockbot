@@ -92,6 +92,7 @@ const endpoints = [
   "composer/saveModule",
   "composer/saveSection",
   "composer/saveLayout",
+  "upload/photo/note",
   "network/{id}/writeNewNote",
   "group/{id}/getSubscriberCount",
   "group/{id}/addToGroupByAdmin",

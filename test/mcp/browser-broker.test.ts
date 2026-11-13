@@ -27,6 +27,7 @@ import {
   draftInput,
   htmlDraftInput,
   blockDraftInput,
+  imageDraftInput,
 } from "../fixtures/email-draft.js";
 import {
   requestBroker,
@@ -296,6 +297,35 @@ describe.skipIf(process.platform === "win32")(
       expect(JSON.stringify(diagnostic)).not.toMatch(
         /example-parish|group\/101|peopleFilterInfo/,
       );
+    });
+
+    it("passes image paths over bounded IPC and preserves uploaded photo IDs on failure", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
+      writeFileSync(join(f.profile, "draft"), "");
+      writeFileSync(join(f.profile, "draft-images"), "");
+      const first = join(f.profile, "photo.jpg"),
+        second = join(f.profile, "other.gif");
+      const bytes = Buffer.alloc(32 * 1024);
+      bytes.set([255, 216, 255]);
+      writeFileSync(first, bytes);
+      writeFileSync(second, "GIF89a\x01\x00\x01\x00");
+      const input = imageDraftInput(first, second);
+      expect(await f.service.createEmailDraft(input)).toMatchObject({
+        verified: true,
+      });
+      writeFileSync(join(f.profile, "draft-failure"), "");
+      await expect(f.service.createEmailDraft(input)).rejects.toMatchObject({
+        outcome: "unknown",
+        draftProgress: {
+          stage: "section",
+          autosaveId: "801",
+          photoIds: ["903", "904"],
+        },
+      });
+      expect(
+        f.events().filter((e) => e === "POST upload/photo/note"),
+      ).toHaveLength(4);
     });
 
     it("creates drafts over IPC and preserves partial progress without replay", async (context) => {
