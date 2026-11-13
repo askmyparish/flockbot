@@ -151,6 +151,123 @@ async function fixture(failureLog?: {
   return { connection, client, factory, session, state };
 }
 
+describe("advanced member MCP boundary", () => {
+  it("returns opt-in fields and actionable stale/incomplete errors without logging cursors", async () => {
+    const saved: unknown[] = [];
+    const f = await fixture({
+      save: async (value) => {
+        saved.push(value);
+        return true;
+      },
+    });
+    f.state.catalog = filterCatalog();
+    f.state.response = {
+      success: true,
+      results: [searchRow(301), searchRow(302)],
+      resultCount: 3,
+    };
+    const input = {
+      mode: "members",
+      groupId: "101",
+      searchTerm: "private-query",
+      limit: 1,
+    };
+    const first = (
+      await f.client.callTool({ name: "find_members", arguments: input })
+    ).structuredContent as Record<string, unknown>;
+    expect(first).toMatchObject({
+      ok: true,
+      mode: "members",
+      returnedCount: 1,
+      hasMore: true,
+      complete: false,
+    });
+    expect(first).not.toHaveProperty("exactMatchUserId");
+    expect(JSON.stringify(first)).not.toContain("alex@example.test");
+    const continuation = first.nextContinuation;
+    const selected = await f.client.callTool({
+      name: "find_members",
+      arguments: { ...input, fields: ["email"] },
+    });
+    expect(JSON.stringify(selected)).toContain("alex@example.test");
+    const stale = await f.client.callTool({
+      name: "find_members",
+      arguments: { ...input, limit: 2, continuation },
+    });
+    expect(stale.structuredContent).toMatchObject({
+      code: "member_search_changed",
+      message: expect.stringContaining("Stop this traversal"),
+    });
+    const repeated = await f.client.callTool({
+      name: "find_members",
+      arguments: { ...input, continuation },
+    });
+    expect(repeated.structuredContent).toMatchObject({
+      code: "member_search_incomplete",
+      message: expect.stringContaining("report incomplete"),
+    });
+    expect(saved).toHaveLength(2);
+    expect(
+      JSON.stringify(saved) + JSON.stringify(stale) + JSON.stringify(repeated),
+    ).not.toMatch(
+      /private-query|alex@|queryKey|previousPageKey|criteriaSummary/,
+    );
+  });
+
+  it("passes continuation offsets through MCP and preserves authentication failure handling", async () => {
+    const f = await fixture();
+    f.state.catalog = filterCatalog();
+    f.state.response = {
+      success: true,
+      results: [searchRow()],
+      resultCount: 2,
+    };
+    const input = { mode: "members", groupId: "101", searchTerm: "Alex" };
+    const first = (
+      await f.client.callTool({ name: "find_members", arguments: input })
+    ).structuredContent as Record<string, unknown>;
+    f.state.response = {
+      success: true,
+      results: [searchRow(302)],
+      resultCount: 2,
+    };
+    const last = await f.client.callTool({
+      name: "find_members",
+      arguments: { ...input, continuation: first.nextContinuation },
+    });
+    expect(last.structuredContent).toMatchObject({
+      offset: 1,
+      complete: false,
+      hasMore: false,
+      nextContinuation: null,
+      members: [{ id: "302" }],
+    });
+    expect(
+      new URLSearchParams(
+        vi.mocked(f.session.request).mock.calls.at(-1)?.[2],
+      ).get("from"),
+    ).toBe("1");
+    f.state.response = new AuthenticationSuspectedError(
+      "invalid_response",
+      "unexpected_html",
+      200,
+    );
+    f.state.verification = { success: true, userID: null, authorized: false };
+    const failed = await f.client.callTool({
+      name: "find_members",
+      arguments: { ...input, continuation: first.nextContinuation },
+    });
+    expect(failed.structuredContent).toMatchObject({
+      code: "authentication_required",
+    });
+    expect(
+      vi
+        .mocked(f.session.request)
+        .mock.calls.filter(([p]) => p === "group/101/filter"),
+    ).toHaveLength(3);
+  });
+});
+
 describe("advanced count MCP boundary", () => {
   it("returns scoped criteria and totals without native rows or an identity shortcut", async () => {
     const f = await fixture();
@@ -1883,6 +2000,17 @@ describe("member search MCP/connection boundary", () => {
       { action: "find_members", searchTerm: "Alex", limit: 51 },
     ])
       expect(brokerRequestSchema.safeParse(invalid).success).toBe(false);
+    const oversizedLegacy = brokerRequestSchema.safeParse({
+      action: "find_members",
+      searchTerm: "Alex",
+      limit: 51,
+    });
+    expect(oversizedLegacy.error?.issues).toEqual([
+      expect.objectContaining({
+        path: ["limit"],
+        message: "Limits above 50 require mode members.",
+      }),
+    ]);
   });
 
   it("does not replay a business rejection, leak upstream contacts or perform an auth probe", async () => {

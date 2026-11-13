@@ -22,7 +22,7 @@ published by these changes.
 | `connect` | Open real Flocknote sign-in for a parish subdomain |
 | `groups` | Return group identifiers, names and Everyone status; optional `refresh` |
 | `subscriber_count` | Fetch a current count without member records |
-| `find_members` | Search active members for bounded identities, or use explicit count mode with validated advanced criteria |
+| `find_members` | Search active members for bounded identities, or use explicit advanced count/member-page modes with validated criteria |
 | `member_filters` | Discover supported member-filter fields and choices in a selected group, without member records |
 | `member` | Read one identified member's identity and explicitly selected stored email/mobile phone with status |
 | `member_groups` | List a chosen member's explicit group subscriptions with bounded output and visibility limits |
@@ -134,7 +134,7 @@ Use `find_members` with `mode: "count"` and a nonempty `searchTerm`, `criteria`,
 or both. A term combines with criteria using AND. Counts return only `mode`,
 `groupId`, `includeInactive`, `resultCount` and `criteriaSummary`; they never
 return member rows, contacts, continuation or `exactMatchUserId`. Count mode
-rejects `fields` and `limit`. Advanced member-page mode is not available yet.
+rejects `fields`, `limit` and `continuation`.
 
 Criteria have the form `{ "any": [{ "all": [predicate] }] }`: OR of 1–8
 nonempty AND branches, with at most 20 predicate occurrences. Each predicate
@@ -173,15 +173,77 @@ requests use OR with on. The date is the subscription to the selected group,
 not a contact update or first-ever parish arrival. No timezone adjustment is
 inferred. Contact-update dates remain unavailable.
 
-`includeInactive` is count-only; omit it for legacy lookups, even when false.
-Counts default to active members. `includeInactive: true` requires the current
+`includeInactive` is advanced-only; omit it for legacy lookups, even when false.
+Advanced queries default to active members. `includeInactive: true` requires the current
 catalog's permission; denial never falls back to active-only results. Each call
 revalidates the selected group's catalog and makes at most one filter request,
-without retry or pagination, inside existing deadlines and response caps. Native
+without retry, inside existing deadlines and response caps. For counts, native
 rows are discarded before broker IPC or MCP results; unused contact/name fields
 are not required for a count. Results describe the interpreted query and scope,
 not a parish-wide total or an identity proof. `criteriaSummary` intentionally
 echoes sensitive query values in the result; it is not diagnostic/log data.
+
+### Advanced member pages
+
+Use `mode: "members"` with the same text/criteria and group selectors. Each call
+returns one page, with `limit` from 1 to 100 (default 100). Names and internal IDs
+are included; `fields` selects only the existing `email`, `mobilePhone` and
+`joinedOn` fields. Filtering by a contact does not select that contact for output.
+Advanced pages never return `exactMatchUserId`, even for a single matching name.
+
+For example, request a bounded page of members without a phone:
+
+```json
+{
+  "mode": "members",
+  "groupName": "Volunteers",
+  "criteria": { "any": [{ "all": [{ "fieldId": "phone", "operator": "exists", "negated": true }] }] },
+  "limit": 25
+}
+```
+
+Results include `mode`, `groupId`, `includeInactive`, `criteriaSummary`, `members`,
+`resultCount`, `returnedCount`, `offset`, `hasMore`, `nextContinuation` and
+`complete`. Only a page starting at zero that includes all reported matches is
+`complete`; the final continuation page alone is not. Smaller limits advance by
+rows actually returned, not all native rows. This relies on Flocknote's `from`
+parameter being a row offset. The captured advanced-filter client submits that
+parameter; a subsequent read-only characterization with 13 results found that
+`from=2` returned the exact ordered 11-row suffix and `from=13` returned no rows,
+both retaining the total. That supports row offsets for the characterized case,
+not a general no-skipped-members guarantee. Live behavior across a natural
+100-row boundary, including a caller limit below 100, remains unverified.
+
+For an explicitly requested all-results traversal, keep the query unchanged and
+pass the returned `nextContinuation` as `continuation`. Never construct offsets
+or fingerprints. The token contains exactly `offset`, `resultCount`, `queryKey`
+and `previousPageKey`. SHA-256 fingerprints bind the normalized query, output
+selection, referenced catalog definitions, parish and connection generation;
+the previous-page fingerprint uses ordered member IDs, not contacts. Adapter
+authors supply an opaque `MemberSearchBinding.connectionGeneration` to the
+shared model. Session renewal alone does not change that generation.
+
+Tokens are consistency checks, not signed authorization, secret credentials or
+snapshot proof. They cannot detect arbitrary offset edits, equal-count changes
+or all reorderings. The connector rechecks current catalog/permissions, rejects
+stale query bindings before filtering, validates safe counts/unique identities,
+and stops on changed totals, a consecutive repeated page or an empty page before
+the reported total. Empty zero-match first pages and unchanged terminal offsets
+are valid. `member_search_changed` requires a fresh search;
+`member_search_incomplete` stops a stalled traversal. Neither automatically
+restarts, retries or merges results. Malformed tokens fail with `invalid_input`.
+Criteria and tokens stay out of default logs/inspection/errors. Explicit verbose
+capture retains its existing local sanitization policy.
+
+The assistant, not this stateless API, tracks all prior IDs and user consent.
+Continue only explicit all-results requests. Stop on any overlap with an earlier
+page, error, changed total or cancellation; report partial results rather than
+deduplicating into a false complete list. After ten successful pages or 1,000
+members in one pass, whichever comes first, ask before another pass with the
+existing token. Count-only queries never page; focused lookups never traverse
+automatically just because `hasMore` is true. Even with the row-offset assumption
+confirmed, a finished traversal is not a point-in-time snapshot. Offline tests
+verify connector mechanics, not conversational consent or the assistant's pass cap.
 
 Member IDs are internal lookup keys, not choices to present to parish staff.
 Before asking the user to distinguish same-name records, repeat the search in
@@ -210,7 +272,8 @@ Search returns only identifiers and names by default. Selected contacts include
 their stored value and verification flag; a blank/null value remains null, and
 verification is not a delivery guarantee. Other contact, role and UI fields are
 discarded. These read operations use the observed POST contracts without being
-automatically replayed. No member-search live verification is claimed here.
+automatically replayed. The earlier small-result characterization described above
+is not end-to-end live verification of this pagination implementation.
 
 `member` takes a chosen `userId` and optional `fields` (`email`,
 `mobilePhone`). Without fields it returns only the member's ID and names, under

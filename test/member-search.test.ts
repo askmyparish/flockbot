@@ -1,9 +1,12 @@
 import { inspect } from "node:util";
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   MemberSearch,
   type MemberSearchInput,
+  type MemberSearchContinuation,
 } from "../src/models/member-search.js";
+import { FlockbotError } from "../src/errors.js";
 import type { MemberPredicate } from "../src/models/member-filters.js";
 import { Network } from "../src/models/network.js";
 import { filterCatalog } from "./fixtures/member-filters.js";
@@ -386,6 +389,322 @@ describe("advanced member counts", () => {
       expect(f.context.query).toHaveBeenCalledTimes(2);
     },
   );
+});
+
+describe("advanced member pages", () => {
+  function pages(total = 237) {
+    const f = countFixture();
+    const state = {
+      total,
+      generation: "connection-one",
+      parish: "example-parish",
+      override: undefined as unknown[] | undefined,
+    };
+    const rows = Array.from({ length: 237 }, (_, i) => searchRow(1001 + i));
+    f.context.query.mockImplementation(async (path, body) => {
+      if (path.endsWith("?ajax")) return f.catalog;
+      const offset = Number(new URLSearchParams(body).get("from"));
+      return {
+        ...f.data,
+        results:
+          state.override ??
+          rows.slice(offset, Math.min(offset + 100, state.total)),
+        resultCount: state.total,
+      };
+    });
+    const page = (input: MemberSearchInput = {}) =>
+      new MemberSearch({
+        searchTerm: "Alex",
+        groupId: "101",
+        ...input,
+        mode: "members" as const,
+      }).find(f.context, new Network(state.parish), {
+        connectionGeneration: state.generation,
+      });
+    return { ...f, state, rows, page };
+  }
+
+  it.each([
+    [237, 100],
+    [200, 100],
+    [237, 37],
+    [3, 1],
+    [17, 100],
+    [0, 100],
+  ])(
+    "returns every reported row without skips (total %i, limit %i)",
+    async (total, limit) => {
+      const f = pages(total);
+      const ids: string[] = [];
+      let continuation: MemberSearchContinuation | undefined;
+      const offsets: number[] = [];
+      do {
+        const result = await f.page({
+          limit,
+          ...(continuation ? { continuation } : {}),
+        });
+        offsets.push(result.offset);
+        expect(result.offset).toBe(ids.length);
+        expect(result.complete).toBe(result.offset === 0 && total <= limit);
+        expect(result.returnedCount).toBe(Math.min(limit, total - ids.length));
+        expect(
+          result.members.every(
+            (m) => Object.keys(m).sort().join(",") === "firstName,id,lastName",
+          ),
+        ).toBe(true);
+        expect(result).not.toHaveProperty("exactMatchUserId");
+        ids.push(...result.members.map((m) => m.id));
+        expect(result.hasMore).toBe(ids.length < total);
+        if (result.nextContinuation) {
+          expect(Object.keys(result.nextContinuation).sort()).toEqual([
+            "offset",
+            "previousPageKey",
+            "queryKey",
+            "resultCount",
+          ]);
+          expect(result.nextContinuation.queryKey).toMatch(/^[a-f0-9]{64}$/);
+          expect(result.nextContinuation.previousPageKey).toBe(
+            createHash("sha256")
+              .update(JSON.stringify(result.members.map((m) => m.id)))
+              .digest("hex"),
+          );
+        }
+        continuation = result.nextContinuation ?? undefined;
+      } while (continuation);
+      expect(ids).toEqual(
+        Array.from({ length: total }, (_, i) => String(1001 + i)),
+      );
+      const queries = f.context.query.mock.calls.filter(([path]) =>
+        path.endsWith("/filter"),
+      );
+      expect(
+        queries.map(([, body]) =>
+          Number(new URLSearchParams(body).get("from")),
+        ),
+      ).toEqual(offsets);
+      expect(f.context.query).toHaveBeenCalledTimes(offsets.length * 2);
+    },
+  );
+
+  it("selects contacts only on request and never resolves an advanced identity", async () => {
+    const f = pages(1);
+    expect((await f.page()).members[0]).not.toHaveProperty("email");
+    const result = await f.page({
+      fields: ["email", "mobilePhone", "joinedOn"],
+    });
+    expect(result.members[0]).toMatchObject({
+      email: { value: "alex@example.test", verified: false },
+      mobilePhone: { verified: true },
+      joinedOn: "2026-03-05",
+    });
+    expect(result).not.toHaveProperty("exactMatchUserId");
+  });
+
+  it.each([
+    { searchTerm: "different" },
+    { fields: ["email"] },
+    { limit: 99 },
+    { includeInactive: true },
+    { criteria: expression([criterion("phone", "exists")]) },
+  ] as MemberSearchInput[])(
+    "rejects a changed query before filtering: %j",
+    async (change) => {
+      const f = pages();
+      f.catalog.canViewInactiveMembers = true;
+      const first = await f.page();
+      f.context.query.mockClear();
+      await expect(
+        f.page({ ...change, continuation: first.nextContinuation! }),
+      ).rejects.toMatchObject({ code: "member_search_changed" });
+      expect(f.context.query).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["generation", "parish", "group", "catalog"])(
+    "binds continuation to %s",
+    async (change) => {
+      const f = pages();
+      const first = await f.page();
+      if (change === "generation") f.state.generation = "connection-two";
+      if (change === "parish") f.state.parish = "another-parish";
+      if (change === "group") f.catalog.groupID = "102";
+      if (change === "catalog")
+        f.catalog.peopleFilterInfo.generalSearchFilter.filterID = 99;
+      f.context.query.mockClear();
+      await expect(
+        f.page({
+          groupId: change === "group" ? "102" : "101",
+          continuation: first.nextContinuation!,
+        }),
+      ).rejects.toMatchObject({ code: "member_search_changed" });
+      expect(f.context.query).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("binds referenced custom definitions and rechecks permissions", async () => {
+    const f = pages();
+    const criteria = expression([
+      criterion("custom:201:select:501", "equals", "1"),
+    ]);
+    const first = await f.page({ criteria });
+    const choices = f.catalog.peopleFilterInfo.filters;
+    // The fixture deliberately shares native filter IDs across custom fields.
+    const custom = choices["Personal Info"].categories.ChoiceA;
+    const equals = custom.filters.find(
+      (d) => d.filterName === "Select List Field Equals",
+    )!;
+    const input = equals.inputs as Record<string, { allowedValues: unknown }>;
+    input.listOfIDs!.allowedValues = [
+      { value: 1, label: "Changed label" },
+      { value: 2, label: "Same label" },
+    ];
+    await expect(
+      f.page({ criteria, continuation: first.nextContinuation! }),
+    ).rejects.toMatchObject({ code: "member_search_changed" });
+    f.catalog.canViewInactiveMembers = true;
+    const active = await f.page({ includeInactive: true });
+    f.catalog.canViewInactiveMembers = false;
+    await expect(
+      f.page({ includeInactive: true, continuation: active.nextContinuation! }),
+    ).rejects.toMatchObject({ code: "permission_denied" });
+  });
+
+  it("stops changed totals, repeated pages and empty premature pages without replay", async () => {
+    const f = pages();
+    const first = await f.page();
+    f.state.total = 236;
+    await expect(
+      f.page({ continuation: first.nextContinuation! }),
+    ).rejects.toMatchObject({ code: "member_search_changed" });
+    f.state.total = 237;
+    f.state.override = f.rows
+      .slice(0, 100)
+      .map((r) => ({ ...r, mail: "changed@example.test" }));
+    await expect(
+      f.page({ continuation: first.nextContinuation! }),
+    ).rejects.toMatchObject({ code: "member_search_incomplete" });
+    f.state.override = [];
+    await expect(
+      f.page({ continuation: first.nextContinuation! }),
+    ).rejects.toMatchObject({ code: "member_search_incomplete" });
+    await expect(f.page()).rejects.toMatchObject({
+      code: "member_search_incomplete",
+    });
+    expect(
+      f.context.query.mock.calls.filter(([p]) => p.endsWith("/filter")),
+    ).toHaveLength(5);
+    const end = await f.page({
+      continuation: { ...first.nextContinuation!, offset: 237 },
+    });
+    expect(end).toMatchObject({
+      offset: 237,
+      members: [],
+      hasMore: false,
+      nextContinuation: null,
+      complete: false,
+    });
+  });
+
+  it.each([
+    { offset: -1 },
+    { offset: 1.5 },
+    { offset: Number.MAX_SAFE_INTEGER + 1 },
+    { resultCount: -1 },
+    { offset: 238 },
+    { queryKey: "A".repeat(64) },
+    { previousPageKey: "bad" },
+    { extra: "private" },
+  ])("rejects malformed continuation before discovery: %j", async (change) => {
+    const f = pages();
+    const first = await f.page();
+    f.context.query.mockClear();
+    await expect(async () =>
+      f.page({ continuation: { ...first.nextContinuation!, ...change } }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(f.context.query).not.toHaveBeenCalled();
+  });
+
+  it("rejects modified hashes, keeps cursors private and snapshots caller input", async () => {
+    const f = pages();
+    const first = await f.page();
+    const token = { ...first.nextContinuation! };
+    const search = new MemberSearch({
+      mode: "members",
+      searchTerm: "Alex",
+      groupId: "101",
+      continuation: token,
+    });
+    token.queryKey = "a".repeat(64);
+    expect(JSON.stringify(search) + inspect(search)).not.toMatch(
+      /Alex|queryKey|previousPageKey/,
+    );
+    expect(
+      (
+        await search.find(f.context, new Network(f.state.parish), {
+          connectionGeneration: f.state.generation,
+        })
+      ).offset,
+    ).toBe(100);
+    await expect(f.page({ continuation: token })).rejects.toMatchObject({
+      code: "member_search_changed",
+    });
+  });
+
+  it.each([
+    {
+      results: [searchRow(1001), searchRow(1001)],
+      reason: "duplicate_identifier",
+    },
+    {
+      results: [searchRow(1001), { ...searchRow(1002), fn: "", ln: "" }],
+      reason: "missing_name",
+    },
+    {
+      results: [{ ...searchRow(), userID: "../private" }],
+      reason: "expected_identifier",
+    },
+    {
+      results: Array.from({ length: 101 }, (_, i) => searchRow(1001 + i)),
+      reason: "page_limit_exceeded",
+    },
+  ])(
+    "validates all native identities before truncating: $reason",
+    async ({ results, reason }) => {
+      const f = pages();
+      f.state.override = results;
+      await expect(f.page({ limit: 1 })).rejects.toMatchObject({
+        code: "invalid_response",
+        reason,
+      });
+    },
+  );
+
+  it("guards total/offset arithmetic and preserves cancellation", async () => {
+    const f = pages();
+    const first = await f.page();
+    f.state.total = Number.MAX_SAFE_INTEGER;
+    f.state.override = [searchRow()];
+    await expect(
+      f.page({
+        continuation: {
+          ...first.nextContinuation!,
+          offset: Number.MAX_SAFE_INTEGER,
+          resultCount: Number.MAX_SAFE_INTEGER,
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_response",
+      reason: "invalid_result_count",
+    });
+    f.context.query.mockClear();
+    f.context.check.mockImplementation(() => {
+      throw new FlockbotError("operation_cancelled");
+    });
+    await expect(
+      f.page({ continuation: first.nextContinuation! }),
+    ).rejects.toMatchObject({ code: "operation_cancelled" });
+    expect(f.context.query).not.toHaveBeenCalled();
+  });
 });
 
 describe("member search domain reads", () => {
