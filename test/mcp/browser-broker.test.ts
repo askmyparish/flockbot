@@ -328,6 +328,7 @@ describe.skipIf(process.platform === "win32")(
       writeFileSync(join(f.profile, "draft"), "");
       expect(await f.service.createEmailDraft(draftInput)).toEqual({
         noteId: "803",
+        url: "https://example-parish.flocknote.com/note/803",
         autosaveId: "801",
         groupId: "101",
         status: "draft",
@@ -406,6 +407,7 @@ describe.skipIf(process.platform === "win32")(
       const r = await f.service.note({ noteId: "00801" });
       expect(r).toMatchObject({
         noteId: "801",
+        url: "https://example-parish.flocknote.com/note/801",
         completeness: "complete",
         status: "published",
       });
@@ -430,9 +432,21 @@ describe.skipIf(process.platform === "win32")(
         totalHits: 12,
         omittedNonNoteCount: 1,
         notes: [
-          { id: "803", type: "scheduled" },
-          { id: "801", type: "email" },
-          { id: "802", type: "sms" },
+          {
+            id: "803",
+            type: "scheduled",
+            url: "https://example-parish.flocknote.com/note/803",
+          },
+          {
+            id: "801",
+            type: "email",
+            url: "https://example-parish.flocknote.com/note/801",
+          },
+          {
+            id: "802",
+            type: "sms",
+            url: "https://example-parish.flocknote.com/note/802",
+          },
         ],
       });
       expect(
@@ -500,8 +514,16 @@ describe.skipIf(process.platform === "win32")(
           returnedCount: 2,
           hasMore: true,
           notes: [
-            { id: "801", type: null },
-            { id: "800", type: null },
+            {
+              id: "801",
+              type: null,
+              url: "https://example-parish.flocknote.com/note/801",
+            },
+            {
+              id: "800",
+              type: null,
+              url: "https://example-parish.flocknote.com/note/800",
+            },
           ],
         });
         expect(f.events().slice(listingStart)).toEqual([

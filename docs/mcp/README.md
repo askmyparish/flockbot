@@ -39,6 +39,11 @@ published by these changes.
 
 The MCP server publishes input schemas and workflow instructions. It offers no raw
 HTTP, arbitrary URL, script evaluation, credential or browser-inspection tool.
+`note`, `find_notes`, `group_notes` and successful `create_email_draft` results
+include a parish-scoped `url` without an additional request. Unavailable note
+reads and group-list rows with unestablished non-published identities return
+`url: null`. Links do not establish publication, delivery, public
+access or editing permission; Flocknote applies the viewer's access and note status.
 Membership writes are never automatically repeated. A failure after possible
 submission reports `outcome: unknown`; check Flocknote before deciding to
 resubmit.

@@ -2,6 +2,7 @@ import { AuthenticationSuspectedError, FlockbotError } from "../errors.js";
 import type { GroupAttributes } from "./group.js";
 import { dashboardGroups, navigationGroups } from "./group-discovery.js";
 import type { ResourceRead } from "./resource-read.js";
+import { identifier } from "./identifier.js";
 
 /**
  * A parish network identified by its configured Flocknote origin.
@@ -37,6 +38,11 @@ export class Network {
 
   clearGroups(): void {
     this.#groups = undefined;
+  }
+
+  /** A note link does not establish publication or the viewer's access. */
+  noteUrl(noteId: string): string {
+    return `${this.origin}/note/${encodeURIComponent(identifier(noteId))}`;
   }
 
   async discoverGroups(

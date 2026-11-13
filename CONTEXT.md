@@ -46,6 +46,9 @@ _Avoid_: Message when naming this resource; unqualified note for a member-profil
 **Email draft**:
 An email note saved for further editing, not sent or scheduled for publication. Plain-text authoring describes the supplied content, not the eventual email's delivery format.
 
+**Note link**:
+A web address for opening a note in Flocknote. Having a link does not establish public access, permission to edit, or publication; Flocknote applies the note's status and the viewer's access.
+
 **Latest group email**:
 The email with the newest original send time for a group. Resending an older email does not make it latest, and selection does not depend on whether a particular user was a recipient.
 

@@ -21,6 +21,7 @@ import {
 
 const INSTRUCTIONS =
   "Use these tools for the user's Flocknote parish requests. Trust the saved session and call the requested tool directly; no preliminary status or authentication check is needed. " +
+  "Use the returned url for note links from note, find_notes, group_notes and successful draft creation; no separate link lookup is needed. Unavailable note reads and group-list rows with unestablished non-published identities return url:null; do not construct a link for those results. A link does not establish publication, delivery, public access or edit permission. " +
   "Enable verboseDiagnostics only when the user explicitly requests verbose diagnostic capture for this call. It saves bounded credential-redacted request/response data locally, including personal data, for this operation only. Never automatically enable it or replay a failed write for diagnostics. " +
   "Member IDs are internal: identify people to the user by name and distinguishing contact details, not numeric IDs. " +
   "If sign-in is needed, ask for the parish subdomain and call connect; the user signs in on Flocknote's real website. " +

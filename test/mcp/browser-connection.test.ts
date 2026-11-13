@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { FlockbotError } from "../../src/index.js";
 import { BrowserConnection } from "../../adapters/mcp/src/browser-connection.js";
 import { waitFor } from "./support.js";
+import { noteResponse } from "../fixtures/note.js";
 import { SerialCoordinator } from "../../adapters/mcp/src/serial-coordinator.js";
 import {
   runDiagnostic,
@@ -103,6 +104,63 @@ async function ready(connection: BrowserConnection) {
 }
 
 describe("browser-owned local connection", () => {
+  it("withholds group-list links for provisional identities without extra requests", async () => {
+    const f = fixture();
+    await ready(f.connection);
+    f.responses["group/101/notes?ajax&more"] = {
+      groupID: 101,
+      more: false,
+      notes: [
+        "published",
+        "draft",
+        "scheduled",
+        "autosaved",
+        "unrecognized",
+      ].map((status, i) => ({ ID: 801 + i, status })),
+    };
+    f.requests.length = 0;
+    const result = await f.connection.groupNotes({ groupId: "101" });
+    expect(result.notes.map(({ url }) => url)).toEqual([
+      "https://example-parish.flocknote.com/note/801",
+      null,
+      null,
+      null,
+      null,
+    ]);
+    expect(f.requests).toEqual([
+      { path: "group/101/notes?ajax&more", method: "GET" },
+    ]);
+  });
+
+  it.each([
+    ["deleted", false, "deleted"],
+    ["scheduled", false, "unsupported_status"],
+    ["published", true, "ambiguous_identity"],
+  ] as const)(
+    "withholds links for unavailable notes (%s, duplicate %s)",
+    async (status, duplicate, reason) => {
+      const f = fixture();
+      await ready(f.connection);
+      const response = noteResponse();
+      response.noteInfo.status = status;
+      response.noteInfo.duplicate = duplicate;
+      f.responses["composer/editNote"] = response;
+      f.requests.length = 0;
+      expect(await f.connection.note({ noteId: "801" })).toMatchObject({
+        url: null,
+        reason,
+        completeness: "unavailable",
+      });
+      expect(f.requests).toEqual([
+        {
+          path: "composer/editNote",
+          method: "POST",
+          body: "noteID=801&fromComposer=1",
+        },
+      ]);
+    },
+  );
+
   it("coalesces startup failure rather than reporting a sign-in window before it opens", async () => {
     const f = fixture();
     await ready(f.connection);

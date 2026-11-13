@@ -696,9 +696,13 @@ export class BrowserConnection {
 
   async note(input: NoteInput, options: OperationOptions = {}) {
     const note = new Note(input);
-    return this.#operate(options, (session, op) =>
-      note.read(this.#resources(session, op)),
-    );
+    return this.#operate(options, async (session, op, network) => {
+      const result = await note.read(this.#resources(session, op));
+      return {
+        ...result,
+        url: result.reason === null ? network.noteUrl(result.noteId) : null,
+      };
+    });
   }
 
   async createEmailDraft(
@@ -712,7 +716,7 @@ export class BrowserConnection {
         try {
           await images.prepare(draft.toInput(), () => op.check());
           const resources = this.#resources(session, op);
-          return await draft.create(
+          const result = await draft.create(
             {
               ...resources,
               uploadImage: async (path) => {
@@ -722,6 +726,7 @@ export class BrowserConnection {
             },
             network,
           );
+          return { ...result, url: network.noteUrl(result.noteId) };
         } finally {
           await images.close();
         }
@@ -748,9 +753,16 @@ export class BrowserConnection {
 
   async findNotes(input: NoteSearchInput, options: OperationOptions = {}) {
     const search = new NoteSearch(input);
-    return this.#operate(options, (session, op) =>
-      search.find(this.#resources(session, op)),
-    );
+    return this.#operate(options, async (session, op, network) => {
+      const result = await search.find(this.#resources(session, op));
+      return {
+        ...result,
+        notes: result.notes.map((note) => ({
+          ...note,
+          url: network.noteUrl(note.id),
+        })),
+      };
+    });
   }
 
   async findMembers(input: MemberSearchInput, options: OperationOptions = {}) {
@@ -811,9 +823,16 @@ export class BrowserConnection {
 
   async groupNotes(input: GroupSelector, options: OperationOptions = {}) {
     const messages = new GroupNotes(input);
-    return this.#operate(options, (session, op, network) =>
-      messages.list(this.#resources(session, op), network),
-    );
+    return this.#operate(options, async (session, op, network) => {
+      const result = await messages.list(this.#resources(session, op), network);
+      return {
+        ...result,
+        notes: result.notes.map((note) => ({
+          ...note,
+          url: note.status === "published" ? network.noteUrl(note.id) : null,
+        })),
+      };
+    });
   }
 
   async emailRecipients(
