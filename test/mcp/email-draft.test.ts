@@ -499,6 +499,7 @@ describe("create-only email drafts", () => {
       }),
     ).toEqual({
       noteId: "803",
+      url: "https://example-parish.flocknote.com/note/803",
       autosaveId: "801",
       groupId: "101",
       status: "draft",

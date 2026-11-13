@@ -9,6 +9,27 @@ import {
 } from "../../src/index.js";
 
 describe("shared resource models", () => {
+  it("constructs note links only within the configured parish and identity boundary", () => {
+    const network = new Network("Example-Parish");
+    expect(network.noteUrl("00801")).toBe(
+      "https://example-parish.flocknote.com/note/801",
+    );
+    expect(network.noteUrl("note_A-9")).toBe(
+      "https://example-parish.flocknote.com/note/note_A-9",
+    );
+    for (const id of [
+      "0",
+      "../801",
+      "801?token=secret",
+      "801#part",
+      "%2F",
+      "https://other.test",
+      "a/b",
+    ]) {
+      expect(() => network.noteUrl(id)).toThrow(FlockbotError);
+    }
+  });
+
   it("sanitizes failures while snapshotting caller-supplied contact fields", () => {
     const input = {
       firstName: "Alex",
