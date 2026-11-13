@@ -40,6 +40,7 @@ export type ErrorCode =
   | "invalid_configuration"
   | "invalid_path"
   | "invalid_input"
+  | "member_filter_unavailable"
   | "session_load_failed"
   | "invalid_session_state"
   | "session_save_failed"

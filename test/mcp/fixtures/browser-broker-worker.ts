@@ -3,6 +3,7 @@ import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { searchMetadata, searchRow } from "../../fixtures/member-search.js";
+import { filterCatalog } from "../../fixtures/member-filters.js";
 import { profileResponse } from "../../fixtures/member-profile.js";
 import { membershipResponse } from "../../fixtures/member-groups.js";
 import { rosterPage, rosterRow } from "../../fixtures/group-members.js";
@@ -117,6 +118,12 @@ if (role === "broker") {
                 };
               case "group/101/people?ajax":
                 return searchMetadata();
+              case "group/104/people?ajax":
+                return {
+                  ...filterCatalog(),
+                  groupID: "104",
+                  isEveryoneGroup: 0,
+                };
               case "group/101/filter":
                 return {
                   success: true,

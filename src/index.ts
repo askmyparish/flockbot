@@ -15,6 +15,13 @@ export { FlocknoteLogin } from "./models/flocknote-login.js";
 export type { Group } from "./models/group.js";
 export type { ResourceRead, ResourceQuery } from "./models/resource-read.js";
 export {
+  MemberFilters,
+  type MemberFiltersInput,
+  type MemberFiltersResult,
+  type MemberFilterField,
+  type MemberFilterChoice,
+} from "./models/member-filters.js";
+export {
   MemberSearch,
   type MemberSearchInput,
   type MemberSearchField,

@@ -11,6 +11,7 @@ import { brokerRequestSchema } from "../../adapters/mcp/src/browser-protocol.js"
 import { SerialCoordinator } from "../../adapters/mcp/src/serial-coordinator.js";
 import type { BrowserSession } from "../../adapters/mcp/src/browser-runtime.js";
 import { searchMetadata, searchRow } from "../fixtures/member-search.js";
+import { filterCatalog } from "../fixtures/member-filters.js";
 import { profileResponse } from "../fixtures/member-profile.js";
 import { membershipResponse } from "../fixtures/member-groups.js";
 import { latestEmailResponses } from "../fixtures/latest-email.js";
@@ -39,6 +40,7 @@ async function fixture() {
     { mode: 0o600 },
   );
   const state: {
+    catalog: unknown;
     response: unknown;
     verification: unknown;
     everyoneGroupID: number | null;
@@ -50,6 +52,7 @@ async function fixture() {
     recipients: unknown;
     latestEmail: Record<string, unknown>;
   } = {
+    catalog: searchMetadata(),
     response: { success: true, results: [searchRow()], resultCount: 1 },
     verification: { success: true, userID: 201 },
     everyoneGroupID: 101,
@@ -86,7 +89,10 @@ async function fixture() {
         if (state.recipients instanceof Error) throw state.recipients;
         return state.recipients;
       }
-      if (path === "group/101/people?ajax") return searchMetadata();
+      if (path === "group/101/people?ajax") {
+        if (state.catalog instanceof Error) throw state.catalog;
+        return state.catalog;
+      }
       if (path === "group/101/filter") {
         if (state.response instanceof Error) throw state.response;
         return state.response;
@@ -137,6 +143,95 @@ async function fixture() {
   });
   return { connection, client, factory, session, state };
 }
+
+describe("member filter MCP boundary", () => {
+  it("returns only catalog choices and fails unavailable requests with refresh guidance", async () => {
+    const f = await fixture();
+    f.state.catalog = filterCatalog();
+    const result = await f.client.callTool({
+      name: "member_filters",
+      arguments: { groupId: "101", fieldId: "custom:202:select:502" },
+    });
+    expect(result.structuredContent).toMatchObject({
+      ok: true,
+      groupId: "101",
+      total: 2,
+      choices: [
+        { id: "1", label: "Same label" },
+        { id: "2", label: "Same label" },
+      ],
+    });
+    expect(JSON.stringify(result)).not.toMatch(
+      /alex@|Rivera|555|private-|permissions|subscribedMembers/,
+    );
+    expect(
+      vi.mocked(f.session.request).mock.calls.map((c) => c.slice(0, 3)),
+    ).toEqual([["group/101/people?ajax", "POST", "includeUnsubscribed=0"]]);
+    const unavailable = await f.client.callTool({
+      name: "member_filters",
+      arguments: { groupId: "101", fieldId: "email_updated" },
+    });
+    expect(unavailable.structuredContent).toMatchObject({
+      ok: false,
+      code: "member_filter_unavailable",
+      message: expect.stringContaining("Refresh member_filters"),
+    });
+  });
+  it("returns label diagnostic reasons over MCP without reflecting metadata values", async () => {
+    const f = await fixture();
+    const data = filterCatalog();
+    f.state.catalog = data;
+    for (const [label, reason] of [
+      [42, "search_filter_shape"],
+      ["https://private.example.test/choice", "search_filter_label"],
+    ]) {
+      Object.assign(
+        data.peopleFilterInfo.filters["Personal Info"].categories.ChoiceA,
+        { displayName: label },
+      );
+      const failed = await f.client.callTool({
+        name: "member_filters",
+        arguments: { groupId: "101", fieldId: "custom:201:select:501" },
+      });
+      expect(failed.structuredContent).toMatchObject({
+        ok: false,
+        code: "invalid_response",
+        diagnostic: { final: { reason } },
+      });
+      expect(JSON.stringify(failed)).not.toMatch(
+        /private\.example|alex@|Rivera|subscribedMembers/,
+      );
+    }
+  });
+  it("rejects invalid selectors before I/O and preserves transport failures", async () => {
+    const f = await fixture();
+    const result = await f.client.callTool({
+      name: "member_filters",
+      arguments: { groupId: "101", groupName: "Private group" },
+    });
+    expect(result.structuredContent).toMatchObject({
+      ok: false,
+      code: "invalid_input",
+    });
+    expect(f.factory).not.toHaveBeenCalled();
+    f.state.catalog = new FlockbotError(
+      "invalid_response",
+      200,
+      undefined,
+      undefined,
+      "response_too_large",
+    );
+    const failed = await f.client.callTool({
+      name: "member_filters",
+      arguments: { groupId: "101" },
+    });
+    expect(failed.structuredContent).toMatchObject({
+      ok: false,
+      code: "invalid_response",
+      diagnostic: { final: { reason: "response_too_large" } },
+    });
+  });
+});
 
 describe("specific-email recipient MCP boundary", () => {
   it("rejects unsupported inputs without I/O and returns only requested fields", async () => {
