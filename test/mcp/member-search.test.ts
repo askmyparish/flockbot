@@ -18,15 +18,21 @@ import { latestEmailResponses } from "../fixtures/latest-email.js";
 import { noteSearchResponse } from "../fixtures/note-search.js";
 import { noteResponse } from "../fixtures/note.js";
 import { recipientPage } from "../fixtures/email-recipients.js";
-import { FlockbotError } from "../../src/errors.js";
+import {
+  AuthenticationSuspectedError,
+  FlockbotError,
+} from "../../src/errors.js";
 import { waitFor } from "./support.js";
+import { recordResponse } from "../../adapters/mcp/src/diagnostics.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const close of cleanup.splice(0)) await close();
 });
 
-async function fixture() {
+async function fixture(failureLog?: {
+  save(value: unknown): Promise<boolean>;
+}) {
   const profile = mkdtempSync(join(tmpdir(), "flockbot-member-search-"));
   writeFileSync(
     join(profile, "connection.json"),
@@ -120,6 +126,7 @@ async function fixture() {
     coordinator: new SerialCoordinator(),
   });
   const server = createFlocknoteServer(connection, {
+    ...(failureLog ? { failureLog } : {}),
     updates: {
       touch: vi.fn(),
       notice: () => ({
@@ -143,6 +150,268 @@ async function fixture() {
   });
   return { connection, client, factory, session, state };
 }
+
+describe("advanced count MCP boundary", () => {
+  it("returns scoped criteria and totals without native rows or an identity shortcut", async () => {
+    const f = await fixture();
+    f.state.catalog = filterCatalog();
+    const result = await f.client.callTool({
+      name: "find_members",
+      arguments: {
+        mode: "count",
+        groupId: "101",
+        searchTerm: "Alex",
+        criteria: {
+          any: [
+            {
+              all: [
+                {
+                  fieldId: "custom:201:select:501",
+                  operator: "equals",
+                  value: "1",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    expect(result.structuredContent).toMatchObject({
+      ok: true,
+      mode: "count",
+      resultCount: 1,
+      groupId: "101",
+      includeInactive: false,
+      criteriaSummary: {
+        searchTerm: "Alex",
+        any: [
+          {
+            all: [
+              {
+                displayName: "Volunteer preference",
+                choiceLabel: "Same label",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(result)).not.toMatch(
+      /alex@|Rivera|555|subscribedMembers|exactMatchUserId|"members"|permissions/,
+    );
+    expect(vi.mocked(f.session.request).mock.calls.map((c) => c[0])).toEqual([
+      "group/101/people?ajax",
+      "group/101/filter",
+    ]);
+    const form = new URLSearchParams(
+      vi.mocked(f.session.request).mock.calls[1]?.[2],
+    );
+    expect(form.get("request[and][1][or][0][and][0][inputs][searchTerm]")).toBe(
+      "Alex",
+    );
+  });
+  it.each([
+    { mode: "count", searchTerm: "private-query", fields: ["email"] },
+    { mode: "count", searchTerm: "private-query", extra: true },
+    {
+      searchTerm: "private-query",
+      criteria: { any: [{ all: [{ fieldId: "phone", operator: "exists" }] }] },
+    },
+    {
+      mode: "count",
+      criteria: {
+        any: [
+          {
+            all: [
+              { fieldId: "phone", operator: "exists", raw: "private-query" },
+            ],
+          },
+        ],
+      },
+    },
+  ])(
+    "rejects invalid mode/grammar without browser access: %j",
+    async (args) => {
+      const f = await fixture();
+      const result = await f.client.callTool({
+        name: "find_members",
+        arguments: args,
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("private-query");
+      expect(f.factory).not.toHaveBeenCalled();
+    },
+  );
+  it("makes unavailable predicates actionable without dropping them", async () => {
+    const f = await fixture();
+    f.state.catalog = filterCatalog();
+    const result = await f.client.callTool({
+      name: "find_members",
+      arguments: {
+        mode: "count",
+        groupId: "101",
+        criteria: {
+          any: [
+            {
+              all: [
+                {
+                  fieldId: "email_updated",
+                  operator: "on",
+                  value: "2026-11-04",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    expect(result.structuredContent).toMatchObject({
+      ok: false,
+      code: "member_filter_unavailable",
+      message: expect.stringContaining("Refresh member_filters"),
+    });
+    expect(f.session.request).toHaveBeenCalledTimes(1);
+  });
+  it.each(["catalog", "response"] as const)(
+    "preserves transport diagnostics and does not retry a failed %s",
+    async (stage) => {
+      const f = await fixture();
+      f.state.catalog = filterCatalog();
+      f.state[stage] = new FlockbotError(
+        "invalid_response",
+        200,
+        undefined,
+        undefined,
+        "response_too_large",
+      );
+      const result = await f.client.callTool({
+        name: "find_members",
+        arguments: {
+          mode: "count",
+          groupId: "101",
+          searchTerm: "private-query",
+        },
+      });
+      expect(result.structuredContent).toMatchObject({
+        code: "invalid_response",
+        diagnostic: {
+          final: {
+            reason: "response_too_large",
+            stage: "transport",
+            status: 200,
+          },
+        },
+      });
+      expect(JSON.stringify(result)).not.toMatch(/private-query|alex@|Rivera/);
+      expect(f.session.request).toHaveBeenCalledTimes(
+        stage === "catalog" ? 1 : 2,
+      );
+    },
+  );
+  it.each([false, true])(
+    "keeps count diagnostics metadata-only unless verbose capture is explicit (%s)",
+    async (verboseDiagnostics) => {
+      const saved: unknown[] = [];
+      const f = await fixture({
+        save: async (value) => {
+          saved.push(value);
+          return true;
+        },
+      });
+      f.state.catalog = filterCatalog();
+      const original = vi.mocked(f.session.request).getMockImplementation()!;
+      vi.mocked(f.session.request).mockImplementation(
+        async (path, method, body) => {
+          if (path !== "group/101/filter") return original(path, method, body);
+          const data = {
+            success: true,
+            results: [searchRow()],
+            resultCount: "invalid",
+          };
+          recordResponse(
+            path,
+            "POST",
+            { status: 200, bytes: 512, contentType: "json", data },
+            2,
+            body,
+          );
+          return data;
+        },
+      );
+      const result = await f.client.callTool({
+        name: "find_members",
+        arguments: {
+          mode: "count",
+          groupId: "101",
+          verboseDiagnostics,
+          criteria: {
+            any: [
+              {
+                all: [
+                  {
+                    fieldId: "first_name",
+                    operator: "contains",
+                    value: "private-advanced-query",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      });
+      expect(result.structuredContent).toMatchObject({
+        code: "invalid_response",
+        diagnostic: {
+          failure: {
+            stage: "validation",
+            reason: "invalid_result_count",
+            endpoint: "group/{id}/filter",
+            bytes: 512,
+            status: 200,
+          },
+        },
+      });
+      expect(saved).toHaveLength(1);
+      expect(JSON.stringify(result)).not.toMatch(
+        /private-advanced-query|alex@|Rivera|555-0123/,
+      );
+      if (verboseDiagnostics) {
+        expect(saved[0]).toMatchObject({
+          kind: "verbose",
+          exchanges: expect.any(Array),
+        });
+      } else {
+        expect(JSON.stringify(saved)).not.toMatch(
+          /private-advanced-query|alex@|Rivera|555-0123|exchanges/,
+        );
+      }
+      expect(f.session.request).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("diagnoses an HTML filter response once without replaying the count", async () => {
+    const f = await fixture();
+    f.state.catalog = filterCatalog();
+    f.state.response = new AuthenticationSuspectedError(
+      "invalid_response",
+      "unexpected_html",
+      200,
+    );
+    f.state.verification = { success: true, userID: null, authorized: false };
+    await expect(
+      f.connection.findMembers({
+        mode: "count",
+        searchTerm: "Alex",
+        groupId: "101",
+      }),
+    ).rejects.toMatchObject({ code: "authentication_required" });
+    expect(vi.mocked(f.session.request).mock.calls.map((c) => c[0])).toEqual([
+      "group/101/people?ajax",
+      "group/101/filter",
+      "user/userData",
+    ]);
+  });
+});
 
 describe("member filter MCP boundary", () => {
   it("returns only catalog choices and fails unavailable requests with refresh guidance", async () => {
@@ -1524,7 +1793,7 @@ describe("member search MCP/connection boundary", () => {
     const { tools } = await f.client.listTools();
     expect(
       tools.find((tool) => tool.name === "find_members")?.description,
-    ).toContain("clarify using distinguishing contacts");
+    ).toContain("clarify ambiguous names using selected contacts");
   });
 
   it("asks for an explicit group when Everyone is unavailable", async () => {

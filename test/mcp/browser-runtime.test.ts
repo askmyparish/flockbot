@@ -291,7 +291,9 @@ async function fixture({ onTestFinished, expect }: TestContext) {
         ) {
           await json(rosterPage([rosterRow(401)], false, null));
         } else if (
-          (path === "group/101/filter" || path === "group/102/filter") &&
+          (path === "group/101/filter" ||
+            path === "group/102/filter" ||
+            path === "group/104/filter") &&
           request.method() === "POST"
         ) {
           state.searchForms.push(request.postData() ?? "");
@@ -1178,6 +1180,69 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
         /alex@|Example|555|private-|permissions|subscribedMembers/,
       );
       expect(f.visits).toEqual([{ path: "group/104/people", method: "POST" }]);
+      expect(f.state.external).toBe(0);
+    }, 60_000);
+
+    it("counts native criteria through intercepted Chromium and MCP without exposing member rows", async (context) => {
+      const { expect, onTestFinished } = context;
+      const f = await fixture(context);
+      await f.signIn();
+      f.visits.length = 0;
+      const server = createFlocknoteServer(f.connection);
+      const client = new Client({
+        name: "fictional-count-workflow",
+        version: "1",
+      });
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      await server.connect(a);
+      await client.connect(b);
+      onTestFinished(() => client.close());
+      const result = await client.callTool({
+        name: "find_members",
+        arguments: {
+          mode: "count",
+          groupId: "104",
+          criteria: {
+            any: [
+              {
+                all: [
+                  { fieldId: "phone", operator: "verified", negated: true },
+                ],
+              },
+            ],
+          },
+        },
+      });
+      expect(result.structuredContent).toMatchObject({
+        ok: true,
+        mode: "count",
+        resultCount: 1,
+        criteriaSummary: {
+          any: [
+            {
+              all: [
+                {
+                  fieldId: "phone",
+                  negated: true,
+                  missingValueBehavior: "excluded",
+                },
+              ],
+            },
+          ],
+        },
+      });
+      expect(JSON.stringify(result)).not.toMatch(
+        /alex@|Rivera|555|"members"|exactMatchUserId/,
+      );
+      expect(f.visits).toEqual([
+        { path: "group/104/people", method: "POST" },
+        { path: "group/104/filter", method: "POST" },
+      ]);
+      const form = new URLSearchParams(f.state.searchForms[0]);
+      expect(form.get("request[and][0][or][0][and][0][isNegated]")).toBe(
+        "true",
+      );
+      expect(form.get("includeInactive")).toBe("false");
       expect(f.state.external).toBe(0);
     }, 60_000);
 

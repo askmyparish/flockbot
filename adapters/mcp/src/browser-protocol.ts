@@ -3,7 +3,11 @@ import { AsyncResource } from "node:async_hooks";
 import net from "node:net";
 import { z } from "zod";
 import { FlockbotError } from "../../../src/index.js";
-import { MEMBER_FILTER_PAGE_SIZE } from "../../../src/models/member-filters.js";
+import { MAX_REQUEST_BYTES } from "../../../src/request-limits.js";
+import {
+  MEMBER_FILTER_PAGE_SIZE,
+  MEMBER_OPERATORS,
+} from "../../../src/models/member-filters.js";
 import { DRAFT_STAGES, type DraftProgress } from "../../../src/errors.js";
 import { BrowserConnectionError } from "./browser-runtime.js";
 import {
@@ -19,8 +23,49 @@ import {
   type FailureReason,
 } from "../../../src/failure-reason.js";
 
-export const MAX_REQUEST = 16 * 1024;
+export const MAX_REQUEST = MAX_REQUEST_BYTES;
 export const MAX_RESPONSE = 2 * 1024 * 1024;
+export const memberSearchShape = {
+  mode: z.literal("count").optional(),
+  searchTerm: z.string().min(1).max(256).optional(),
+  groupId: z.string().min(1).max(128).optional(),
+  groupName: z.string().min(1).max(256).optional(),
+  fields: z
+    .array(z.enum(["email", "mobilePhone", "joinedOn"]))
+    .max(3)
+    .optional(),
+  limit: z.number().int().min(1).max(50).optional(),
+  includeInactive: z.boolean().optional(),
+  criteria: z
+    .object({
+      any: z
+        .array(
+          z
+            .object({
+              all: z
+                .array(
+                  z
+                    .object({
+                      fieldId: z.string().min(1).max(280),
+                      operator: z.enum(MEMBER_OPERATORS),
+                      value: z.string().min(1).max(256).optional(),
+                      negated: z.boolean().optional(),
+                    })
+                    .strict(),
+                )
+                .min(1)
+                .max(20)
+                .readonly(),
+            })
+            .strict(),
+        )
+        .min(1)
+        .max(8)
+        .readonly(),
+    })
+    .strict()
+    .optional(),
+};
 export const draftContentSchema = z
   .array(
     z.union([
@@ -100,14 +145,7 @@ export const brokerRequestSchema = z.discriminatedUnion("action", [
   z
     .object({
       action: z.literal("find_members"),
-      searchTerm: z.string().min(1).max(256),
-      groupId: z.string().min(1).max(128).optional(),
-      groupName: z.string().min(1).max(256).optional(),
-      fields: z
-        .array(z.enum(["email", "mobilePhone", "joinedOn"]))
-        .max(3)
-        .optional(),
-      limit: z.number().int().min(1).max(50).optional(),
+      ...memberSearchShape,
     })
     .strict(),
   z

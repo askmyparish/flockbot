@@ -124,6 +124,7 @@ if (role === "broker") {
                   groupID: "104",
                   isEveryoneGroup: 0,
                 };
+              case "group/104/filter":
               case "group/101/filter":
                 return {
                   success: true,

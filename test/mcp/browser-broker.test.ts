@@ -33,8 +33,10 @@ import {
   requestBroker,
   decodeFrame,
   encodeFrame,
+  MAX_REQUEST,
 } from "../../adapters/mcp/src/browser-protocol.js";
 import { FlockbotError } from "../../src/errors.js";
+import { MemberSearch } from "../../src/models/member-search.js";
 import { run, waitFor } from "./support.js";
 import {
   runDiagnostic,
@@ -721,6 +723,71 @@ describe.skipIf(process.platform === "win32")(
         /alex@|Rivera|555|<script|private-|https:|permissions|filterID|subscribedMembers/,
       );
       expect(f.events()).toEqual(["launch", "POST group/104/people?ajax"]);
+    });
+
+    it("checks the full count frame even when normalized intent fits the byte budget", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
+      const input = (length: number) => ({
+        mode: "count" as const,
+        groupId: "104",
+        criteria: {
+          any: [
+            {
+              all: Array.from({ length: 20 }, () => ({
+                fieldId: "first_name",
+                operator: "contains" as const,
+                value: "界".repeat(length),
+              })),
+            },
+          ],
+        },
+      });
+      expect((await f.service.findMembers(input(230))).resultCount).toBe(1);
+      const nearLimit = input(245);
+      const prepared = new MemberSearch(nearLimit).toInput();
+      expect(Buffer.byteLength(JSON.stringify(prepared))).toBeLessThanOrEqual(
+        MAX_REQUEST,
+      );
+      const before = f.events();
+      await expect(f.service.findMembers(nearLimit)).rejects.toMatchObject({
+        code: "request_not_sent",
+        reason: "request_too_large",
+        outcome: "not_submitted",
+      });
+      expect(f.events()).toEqual(before);
+    });
+
+    it("discards native member rows before returning an advanced count over private IPC", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
+      const result = await f.service.findMembers({
+        mode: "count",
+        groupId: "104",
+        criteria: {
+          any: [
+            {
+              all: [
+                { fieldId: "membership", operator: "in_group", value: "102" },
+              ],
+            },
+          ],
+        },
+      });
+      expect(result).toMatchObject({
+        mode: "count",
+        groupId: "104",
+        resultCount: 1,
+        criteriaSummary: { any: [{ all: [{ choiceLabel: "Choir" }] }] },
+      });
+      expect(JSON.stringify(result)).not.toMatch(
+        /alex@|Rivera|555|"members"|exactMatchUserId|subscribedMembers/,
+      );
+      expect(f.events()).toEqual([
+        "launch",
+        "POST group/104/people?ajax",
+        "POST group/104/filter",
+      ]);
     });
 
     it("routes member search through actual private IPC without authentication preflight", async (context) => {

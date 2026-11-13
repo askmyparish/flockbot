@@ -99,6 +99,14 @@ export function filterCatalog() {
     css: ["https://example.test/private.css"],
     peopleFilterInfo: {
       ...searchMetadata().peopleFilterInfo,
+      generalSearchFilter: {
+        ...searchMetadata().peopleFilterInfo.generalSearchFilter,
+        permissions: {
+          isNotContactsView: true,
+          requiredNetworkFeatureDictID: null,
+        },
+        inputs: { searchTerm: filterInput("searchTerm", "text") },
+      },
       filters: {
         "Personal Info": {
           categories: {

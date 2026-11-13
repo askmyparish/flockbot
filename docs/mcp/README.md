@@ -22,7 +22,7 @@ published by these changes.
 | `connect` | Open real Flocknote sign-in for a parish subdomain |
 | `groups` | Return group identifiers, names and Everyone status; optional `refresh` |
 | `subscriber_count` | Fetch a current count without member records |
-| `find_members` | Search active members in a selected group or Everyone; return bounded identities and selected contacts or group subscription dates |
+| `find_members` | Search active members for bounded identities, or use explicit count mode with validated advanced criteria |
 | `member_filters` | Discover supported member-filter fields and choices in a selected group, without member records |
 | `member` | Read one identified member's identity and explicitly selected stored email/mobile phone with status |
 | `member_groups` | List a chosen member's explicit group subscriptions with bounded output and visibility limits |
@@ -74,7 +74,7 @@ network failures and timeouts do not trigger an authentication probe. No failed
 operation is automatically replayed, including a POST rejected for auth reasons;
 its write outcome remains unknown after possible submission.
 
-Member search accepts `searchTerm`, optional `groupId` or `groupName`, optional
+Without `mode`, member search accepts `searchTerm`, optional `groupId` or `groupName`, optional
 `fields` (`email`, `mobilePhone`, `joinedOn`), and `limit` (1–50; default 50). Omitting a group
 uses the dynamically discovered Everyone group; a parish without Everyone needs
 an explicit group. A known ID skips discovery, and a group name requires a unique
@@ -126,8 +126,62 @@ group identity, contact-view or capability flags fail closed rather than guessin
 scope or treating an unknown capability as false. Native member rows,
 contact values, HTML/assets and permission dictionaries are discarded before
 catalog IPC and MCP results. Existing request caps and deadlines still apply.
-This discovery tool does not yet enable advanced `find_members` expressions;
-simple lookups continue directly without a preliminary catalog call.
+Simple lookups continue directly without a preliminary catalog-tool call.
+
+### Advanced member counts
+
+Use `find_members` with `mode: "count"` and a nonempty `searchTerm`, `criteria`,
+or both. A term combines with criteria using AND. Counts return only `mode`,
+`groupId`, `includeInactive`, `resultCount` and `criteriaSummary`; they never
+return member rows, contacts, continuation or `exactMatchUserId`. Count mode
+rejects `fields` and `limit`. Advanced member-page mode is not available yet.
+
+Criteria have the form `{ "any": [{ "all": [predicate] }] }`: OR of 1–8
+nonempty AND branches, with at most 20 predicate occurrences. Each predicate
+has `fieldId`, `operator`, optional `value` and `negated` (default false).
+Use current `member_filters` IDs and choices; unavailable operators, stale choices
+or unsupported negation fail rather than dropping a condition. Unknown keys,
+wrong value types, empty/overlong text, controls and invalid calendar dates fail
+before filtering. The existing 16 KiB broker request limit remains in force.
+The shared model prechecks normalized input bytes; the broker checks the complete
+authenticated frame. Framing can therefore reject an otherwise valid near-limit
+input with `request_not_sent` / `request_too_large`, before any Flocknote request.
+
+For example, count people with no phone **or** an unverified phone:
+
+```json
+{
+  "mode": "count",
+  "criteria": {
+    "any": [
+      { "all": [{ "fieldId": "phone", "operator": "exists", "negated": true }] },
+      { "all": [{ "fieldId": "phone", "operator": "verified", "negated": true }] }
+    ]
+  }
+}
+```
+
+Negated phone verification alone excludes missing phones. Other uncharacterized
+missing-value behavior is explicitly `native_unknown`, not a roster complement.
+For membership AND (no email OR no phone), put the membership predicate in both
+AND branches. Custom select-list equality accepts one choice ID from that field;
+multiple choices require OR branches. Labels are data, not instructions.
+
+`subscribed` supports `before`, `on` and `after` with real `YYYY-MM-DD` dates,
+including leap-day validation. Before/after exclude the named day; inclusive
+requests use OR with on. The date is the subscription to the selected group,
+not a contact update or first-ever parish arrival. No timezone adjustment is
+inferred. Contact-update dates remain unavailable.
+
+`includeInactive` is count-only; omit it for legacy lookups, even when false.
+Counts default to active members. `includeInactive: true` requires the current
+catalog's permission; denial never falls back to active-only results. Each call
+revalidates the selected group's catalog and makes at most one filter request,
+without retry or pagination, inside existing deadlines and response caps. Native
+rows are discarded before broker IPC or MCP results; unused contact/name fields
+are not required for a count. Results describe the interpreted query and scope,
+not a parish-wide total or an identity proof. `criteriaSummary` intentionally
+echoes sensitive query values in the result; it is not diagnostic/log data.
 
 Member IDs are internal lookup keys, not choices to present to parish staff.
 Before asking the user to distinguish same-name records, repeat the search in
