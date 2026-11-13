@@ -322,6 +322,34 @@ describe.skipIf(process.platform === "win32")(
       ).toHaveLength(4);
     });
 
+    it("duplicates over IPC and preserves partial progress without replay", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
+      writeFileSync(join(f.profile, "duplicate"), "");
+      expect(
+        await f.service.duplicateEmailDraft({ noteId: "00801" }),
+      ).toMatchObject({
+        sourceNoteId: "801",
+        noteId: "803",
+        groupIds: ["101", "102"],
+        verified: true,
+        url: "https://example-parish.flocknote.com/note/803",
+      });
+      writeFileSync(join(f.profile, "draft-failure"), "");
+      await expect(
+        f.service.duplicateEmailDraft({ noteId: "801" }),
+      ).rejects.toMatchObject({
+        outcome: "unknown",
+        draftProgress: { autosaveId: "802", stage: "materialize" },
+      });
+      expect(
+        f.events().filter((e) => e === "POST composer/duplicateNote"),
+      ).toHaveLength(2);
+      expect(
+        f.events().filter((e) => e === "POST composer/save2"),
+      ).toHaveLength(3);
+    });
+
     it("creates drafts over IPC and preserves partial progress without replay", async (context) => {
       const { expect } = context;
       const f = await fixture(context);

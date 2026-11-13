@@ -3,7 +3,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { FlockbotError, type ErrorCode } from "../../../src/errors.js";
-import { FAILURE_REASONS } from "../../../src/failure-reason.js";
+import {
+  FAILURE_REASONS,
+  TRANSPORT_REASONS,
+} from "../../../src/failure-reason.js";
 import type { BrowserConnectionError } from "./browser-runtime.js";
 import { MCP_VERSION } from "./version.js";
 import {
@@ -31,6 +34,7 @@ const operations = [
   "is_member",
   "add_member",
   "create_email_draft",
+  "duplicate_email_draft",
   "forget",
   "ping",
   "shutdown",
@@ -50,6 +54,7 @@ const codes = [
   "operation_timeout",
   "operation_cancelled",
   "request_not_sent",
+  "draft_not_submitted",
   "write_outcome_unknown",
   "permission_denied",
   "invalid_configuration",
@@ -88,6 +93,7 @@ const endpoints = [
   "supersearch/query",
   "composer/editNote",
   "composer/createNote",
+  "composer/duplicateNote",
   "composer/save2",
   "composer/saveModule",
   "composer/saveSection",
@@ -375,19 +381,6 @@ export function validationError(error: unknown, path: string): void {
     responseError(error, { ...response, stage: "validation" });
 }
 
-const transportReasons = new Set([
-  "origin_mismatch",
-  "missing_response_body",
-  "response_too_large",
-  "invalid_json",
-  "empty_response",
-  "redirect",
-  "http_rejection",
-  "request_timeout",
-  "fetch_failed",
-  "evaluation_failed",
-]);
-
 function errorEvent(error: unknown, trace: Trace): DiagnosticEvent {
   let raw: { code?: unknown; reason?: unknown; status?: unknown } = {};
   try {
@@ -411,7 +404,7 @@ function errorEvent(error: unknown, trace: Trace): DiagnosticEvent {
   const status = eventSchema.shape.status.safeParse(raw.status);
   return {
     stage:
-      reason.success && transportReasons.has(reason.data)
+      reason.success && TRANSPORT_REASONS.has(reason.data)
         ? "transport"
         : raw.code === "broker_unavailable" || raw.code === "connection_busy"
           ? "broker"

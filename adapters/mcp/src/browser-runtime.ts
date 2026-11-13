@@ -79,6 +79,7 @@ function allowed(path: string, method: string): boolean {
       "supersearch/query?ajax",
       "composer/editNote",
       "composer/createNote",
+      "composer/duplicateNote",
       "composer/save2",
       "composer/saveModule",
       "composer/saveSection",

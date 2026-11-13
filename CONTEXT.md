@@ -46,6 +46,9 @@ _Avoid_: Message when naming this resource; unqualified note for a member-profil
 **Email draft**:
 An email note saved for further editing, not sent or scheduled for publication. Plain-text authoring describes the supplied content, not the eventual email's delivery format.
 
+**Duplicated email draft**:
+A new email draft copied from an existing email note, distinct from resending or editing the original. Reusing the original groups selects those groups, not a frozen list of the original recipients.
+
 **Note link**:
 A web address for opening a note in Flocknote. Having a link does not establish public access, permission to edit, or publication; Flocknote applies the note's status and the viewer's access.
 

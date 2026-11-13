@@ -46,6 +46,10 @@ import {
 import { GroupNotes } from "../../../src/models/group-notes.js";
 import { Note, type NoteInput } from "../../../src/models/note.js";
 import {
+  EmailDuplication,
+  type EmailDuplicationInput,
+} from "../../../src/models/email-duplication.js";
+import {
   EmailDraft,
   type EmailDraftInput,
 } from "../../../src/models/email-draft.js";
@@ -710,27 +714,50 @@ export class BrowserConnection {
     options: OperationOptions = {},
   ) {
     const draft = new EmailDraft(input);
-    try {
-      return await this.#operate(options, async (session, op, network) => {
-        const images = new DraftImages();
-        try {
-          await images.prepare(draft.toInput(), () => op.check());
-          const resources = this.#resources(session, op);
-          const result = await draft.create(
-            {
-              ...resources,
-              uploadImage: async (path) => {
-                const photo = await images.read(path);
-                return resources.upload(photo);
-              },
+    return this.#writeDraft(draft, options, async (session, op, network) => {
+      const images = new DraftImages();
+      try {
+        await images.prepare(draft.toInput(), () => op.check());
+        const resources = this.#resources(session, op);
+        const result = await draft.create(
+          {
+            ...resources,
+            uploadImage: async (path) => {
+              const photo = await images.read(path);
+              return resources.upload(photo);
             },
-            network,
-          );
-          return { ...result, url: network.noteUrl(result.noteId) };
-        } finally {
-          await images.close();
-        }
-      });
+          },
+          network,
+        );
+        return { ...result, url: network.noteUrl(result.noteId) };
+      } finally {
+        await images.close();
+      }
+    });
+  }
+
+  async duplicateEmailDraft(
+    input: EmailDuplicationInput,
+    options: OperationOptions = {},
+  ) {
+    const draft = new EmailDuplication(input);
+    return this.#writeDraft(draft, options, async (session, op, network) => {
+      const result = await draft.create(this.#resources(session, op), network);
+      return { ...result, url: network.noteUrl(result.noteId) };
+    });
+  }
+
+  async #writeDraft<T>(
+    draft: EmailDraft | EmailDuplication,
+    options: OperationOptions,
+    work: (
+      session: BrowserSession,
+      op: Operation,
+      network: Network,
+    ) => Promise<T>,
+  ) {
+    try {
+      return await this.#operate(options, work);
     } catch (error) {
       const outcome = draft.submitted ? "unknown" : "not_submitted";
       if (error instanceof BrowserConnectionError)

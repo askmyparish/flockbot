@@ -9,6 +9,7 @@ import { rosterPage, rosterRow } from "../../fixtures/group-members.js";
 import { latestEmailResponses } from "../../fixtures/latest-email.js";
 import { noteSearchResponse } from "../../fixtures/note-search.js";
 import { noteResponse } from "../../fixtures/note.js";
+import { duplicationFixture } from "../../fixtures/email-duplication.js";
 import { recipientPage } from "../../fixtures/email-recipients.js";
 import {
   draftResponse,
@@ -35,6 +36,7 @@ if (role === "broker") {
       appendFileSync(join(profile, "events"), "launch\n");
       const blocks = blockDraftResponse();
       const images = imageDraftResponse();
+      const duplication = duplicationFixture();
       return {
         signIn: async () => undefined,
         close: async () => {
@@ -43,6 +45,14 @@ if (role === "broker") {
         request: async (path, method = "GET", body, photo) => {
           appendFileSync(join(profile, "events"), `${method} ${path}\n`);
           const data = await (async () => {
+            if (existsSync(join(profile, "duplicate"))) {
+              if (
+                existsSync(join(profile, "draft-failure")) &&
+                path === "composer/save2"
+              )
+                return { success: false };
+              return duplication.response(path, body);
+            }
             if (existsSync(join(profile, "draft"))) {
               if (existsSync(join(profile, "draft-images"))) {
                 if (path === "upload/photo/note" && !photo?.base64)

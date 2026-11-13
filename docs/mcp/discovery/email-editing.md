@@ -299,3 +299,20 @@ Uploads and module saves are separate writes. An upload timeout can leave its
 outcome unknown, and an uploaded asset can survive a later draft failure. Neither
 this capture nor the probes establish an asset rollback/delete contract. Do not
 replay an uncertain upload or infer its absence solely from recent-image listings.
+
+## Native duplication
+
+The duplicate action uses `POST composer/duplicateNote` with `groupID` empty,
+`noteID` set to the source and `fromComposer=1`. A controlled test-parish probe
+returned `ID: 0`, a new `autosaveID`, `duplicate: true`, `status: autosaved` and
+empty targets. Raw section/module content and layout survived the copy, while
+section/module IDs and a photo ID changed; image URL and dimensions did not.
+
+An explicit `composer/save2` with the original groups, `ID: 0`, the new autosave
+identity, `autosaved: 0` and `explicitSaveClick: true` materialized a distinct
+draft. A second metadata save using the final ID and `status: draft` was needed
+to restore the sender label; the first reopened draft had `fromName: null`.
+The second save response omitted status, so the final `composer/editNote`
+read-back establishes it. The source remained unchanged. No module/layout saves,
+uploads, sending or scheduling were used. Only one ordinary group and observed
+single-column text/photo/URL-button content were exercised live.

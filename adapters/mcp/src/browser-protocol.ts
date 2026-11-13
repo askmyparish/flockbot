@@ -197,6 +197,12 @@ export const brokerRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("forget") }).strict(),
   z
     .object({
+      action: z.literal("duplicate_email_draft"),
+      noteId: z.string().min(1).max(128),
+    })
+    .strict(),
+  z
+    .object({
       action: z.literal("create_email_draft"),
       groupId: z.string().min(1).max(128).optional(),
       groupName: z.string().min(1).max(256).optional(),
@@ -209,7 +215,11 @@ export const brokerRequestSchema = z.discriminatedUnion("action", [
 ]);
 export type BrokerRequest = z.infer<typeof brokerRequestSchema>;
 export function isWriteRequest(request: BrokerRequest): boolean {
-  return request.action === "add" || request.action === "create_email_draft";
+  return (
+    request.action === "add" ||
+    request.action === "create_email_draft" ||
+    request.action === "duplicate_email_draft"
+  );
 }
 export interface BrokerDescriptor {
   version: 1;
