@@ -27,8 +27,12 @@ function fixture() {
   return { data, context, read };
 }
 describe("member filter discovery", () => {
-  it("discovers Everyone and exposes only supported descriptors and explicit unavailable dates", async () => {
+  it("discovers Everyone and exposes supported descriptors with characterized contact dates", async () => {
     const f = fixture();
+    for (const category of ["Email Address", "Phone Number"] as const)
+      f.data.peopleFilterInfo.filters["Contact Info"].categories[
+        category
+      ].filters.at(-1)!.operatorNegated = "Not on";
     const result = await f.read();
     expect(result).toMatchObject({
       groupId: "101",
@@ -62,13 +66,16 @@ describe("member filter discovery", () => {
       negation: true,
       missingValueBehavior: "excluded",
     });
-    expect(
-      result.fields?.find((x) => x.fieldId === "email_updated"),
-    ).toMatchObject({
-      available: false,
-      operators: [],
-      unavailableReason: "unverified_semantics",
-    });
+    for (const fieldId of ["email_updated", "phone_updated"])
+      expect(result.fields?.find((x) => x.fieldId === fieldId)).toMatchObject({
+        available: true,
+        type: "date",
+        operators: ["before", "on", "after"].map((operator) => ({
+          operator,
+          negation: false,
+          missingValueBehavior: "excluded",
+        })),
+      });
     expect(JSON.stringify(result)).not.toMatch(
       /alex@|Rivera|555|<script|private-|https:|permissions|filterID|subscribedMembers/,
     );

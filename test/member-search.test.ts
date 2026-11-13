@@ -255,7 +255,9 @@ describe("advanced member counts", () => {
 
   it.each([
     criterion("email", "mobile"),
-    criterion("email_updated", "before", "2026-11-04"),
+    criterion("email_updated", "before", "2026-11-04", true),
+    criterion("phone_updated", "on", "2026-11-04", true),
+    criterion("email_updated", "contains", "2026-11-04"),
     criterion("phone", "contains", "555", true),
     criterion("membership", "in_group", "101"),
     criterion("membership", "in_group", "103"),
@@ -321,9 +323,11 @@ describe("advanced member counts", () => {
       "2026-00-01",
       "2026-11-00",
       "2026-1-01",
-    ].map((date) => ({
-      criteria: expression([criterion("subscribed", "on", date)]),
-    })),
+    ].flatMap((date) =>
+      ["subscribed", "email_updated", "phone_updated"].map((fieldId) => ({
+        criteria: expression([criterion(fieldId, "on", date)]),
+      })),
+    ),
   ])("rejects invalid advanced intent before I/O: %j", async (input) => {
     const f = countFixture();
     await expect(async () =>
@@ -391,6 +395,198 @@ describe("advanced member counts", () => {
   );
 });
 
+describe.each(["count", "members"] as const)(
+  "contact-update dates in %s mode",
+  (mode) => {
+    // Fictional update facts on either side of a leap day, with different missing
+    // contacts. Native response membership below encodes the characterized strict
+    // boundaries independently of the compiler and these expected-date comparisons.
+    const facts = [
+      { id: 301, email_updated: "2024-02-28", phone_updated: "2024-03-01" },
+      { id: 302, email_updated: "2024-02-29", phone_updated: null },
+      { id: 303, email_updated: "2024-03-01", phone_updated: "2024-02-28" },
+      { id: 304, email_updated: null, phone_updated: "2024-02-29" },
+      { id: 305, email_updated: "2024-02-29", phone_updated: null },
+      { id: 306, email_updated: "2024-02-28", phone_updated: "2024-02-29" },
+      { id: 307, email_updated: "2024-02-28", phone_updated: "2024-03-01" },
+      { id: 308, email_updated: "2024-02-28", phone_updated: "2024-03-01" },
+    ];
+    const responses: Record<string, Record<string, number[]>> = {
+      email_updated: {
+        lessThanEqualToEndOfDay: [301, 306, 307, 308],
+        onDay: [302, 305],
+        greaterThanEqualToBeginOfDay: [303],
+      },
+      phone_updated: {
+        lessThanEqualToEndOfDay: [303],
+        onDay: [304, 306],
+        greaterThanEqualToBeginOfDay: [301, 307, 308],
+      },
+    };
+    it.each(["email_updated", "phone_updated"] as const)(
+      "maps %s boundaries, missing contacts and mixed criteria",
+      async (fieldId) => {
+        const f = countFixture();
+        const category =
+          fieldId === "email_updated" ? "Email Address" : "Phone Number";
+        const definition =
+          f.catalog.peopleFilterInfo.filters["Contact Info"].categories[
+            category
+          ].filters.at(-1)!;
+        definition.filterID = fieldId === "email_updated" ? 731 : 849;
+        f.context.query.mockImplementation(async (path, body) => {
+          if (path.endsWith("?ajax")) return f.catalog;
+          const form = new URLSearchParams(body);
+          const prefix = "request[and][0][or][0][and][0]";
+          expect(form.get(`${prefix}[filterID]`)).toBe(
+            String(definition.filterID),
+          );
+          expect(form.get(`${prefix}[isNegated]`)).toBe("false");
+          expect(form.get(`${prefix}[inputs][date]`)).toBe("2024-02-29");
+          expect(form.has(`${prefix}[inputs][groupID]`)).toBe(false);
+          const ids =
+            responses[fieldId]![form.get(`${prefix}[inputs][dateQueryType]`)!]!;
+          expect(ids).toBeDefined();
+          const mixed = form.has("request[and][0][or][0][and][1][filterID]");
+          if (mixed)
+            expect(
+              form.get("request[and][0][or][0][and][1][inputs][searchTerm]"),
+            ).toBe("Rivera");
+          const selected = mixed ? ids.filter((id) => id !== 305) : ids;
+          return {
+            success: true,
+            resultCount: selected.length,
+            results: selected.map((id) => {
+              const fact = facts.find((person) => person.id === id)!;
+              return {
+                ...searchRow(id, "Alex", id === 305 ? "Chen" : "Rivera"),
+                mail: fact.email_updated === null ? null : "alex@example.test",
+                phn: fact.phone_updated === null ? null : "+12025550123",
+              };
+            }),
+          };
+        });
+        for (const operator of ["before", "on", "after"] as const) {
+          for (const mixed of [false, true]) {
+            const expected = facts.filter((fact) => {
+              const date = fact[fieldId];
+              return (
+                date !== null &&
+                (!mixed || fact.id !== 305) &&
+                (operator === "before"
+                  ? date < "2024-02-29"
+                  : operator === "after"
+                    ? date > "2024-02-29"
+                    : date === "2024-02-29")
+              );
+            });
+            const result = await new MemberSearch({
+              mode,
+              criteria: expression([
+                criterion(fieldId, operator, "2024-02-29"),
+                ...(mixed
+                  ? [criterion("last_name", "contains", "Rivera")]
+                  : []),
+              ]),
+            }).find(f.context, new Network("example-parish"), {
+              connectionGeneration: "contact-dates",
+            });
+            expect(result.resultCount).toBe(expected.length);
+            expect(
+              "criteriaSummary" in result &&
+                result.criteriaSummary.any[0]?.all[0],
+            ).toMatchObject({
+              fieldId,
+              displayName:
+                fieldId === "email_updated"
+                  ? "Email last updated"
+                  : "Phone last updated",
+              operator,
+              value: "2024-02-29",
+              missingValueBehavior: "excluded",
+            });
+            if (mode === "members")
+              expect(
+                "members" in result &&
+                  result.members.map((member) => member.id),
+              ).toEqual(expected.map((fact) => String(fact.id)));
+            else expect(result).not.toHaveProperty("members");
+            expect(JSON.stringify(result)).not.toMatch(
+              /example.test|mobilePhone|joinedOn|exactMatchUserId/,
+            );
+          }
+        }
+        expect(f.context.query).toHaveBeenCalledTimes(12);
+      },
+    );
+
+    it.each(["email_updated", "phone_updated"] as const)(
+      "refuses malformed, denied or unverified %s relations before filtering",
+      async (fieldId) => {
+        for (const problem of [
+          "permission",
+          "inputs",
+          "operators",
+          "negation",
+        ]) {
+          const f = countFixture();
+          const category =
+            fieldId === "email_updated" ? "Email Address" : "Phone Number";
+          const definition =
+            f.catalog.peopleFilterInfo.filters["Contact Info"].categories[
+              category
+            ].filters.at(-1)!;
+          if (problem === "permission")
+            definition.permissions = { isOnlySuperAdmins: true };
+          if (problem === "negation") definition.operatorNegated = "Not on";
+          if (problem === "inputs") definition.inputs.date!.dataType = "text";
+          if (problem === "operators")
+            definition.inputs.dateQueryType!.allowedValues = [
+              { value: "unknown", label: "Unknown" },
+            ];
+          await expect(
+            new MemberSearch({
+              mode,
+              criteria: expression([
+                criterion(fieldId, "on", "2024-02-29", problem === "negation"),
+              ]),
+            }).find(f.context, new Network("example-parish"), {
+              connectionGeneration: "contact-dates",
+            }),
+          ).rejects.toMatchObject({
+            code:
+              problem === "permission" || problem === "negation"
+                ? "member_filter_unavailable"
+                : "invalid_response",
+          });
+          expect(f.context.query).toHaveBeenCalledTimes(1);
+        }
+      },
+    );
+
+    it("rejects invalid contact dates before I/O", async () => {
+      const f = countFixture();
+      for (const fieldId of ["email_updated", "phone_updated"])
+        for (const value of [
+          "2025-02-29",
+          "1900-02-29",
+          "2024-02-30",
+          "2024-02-29T00:00:00Z",
+        ])
+          await expect(async () =>
+            new MemberSearch({
+              mode,
+              criteria: expression([criterion(fieldId, "on", value)]),
+            }).find(f.context, new Network("example-parish"), {
+              connectionGeneration: "contact-dates",
+            }),
+          ).rejects.toMatchObject({ code: "invalid_input" });
+      expect(f.context.query).not.toHaveBeenCalled();
+      expect(f.context.read).not.toHaveBeenCalled();
+    });
+  },
+);
+
 describe("advanced member pages", () => {
   function pages(total = 237) {
     const f = countFixture();
@@ -423,6 +619,27 @@ describe("advanced member pages", () => {
       });
     return { ...f, state, rows, page };
   }
+
+  it.each(["email_updated", "phone_updated"] as const)(
+    "rejects continuation after the referenced %s native ID changes",
+    async (fieldId) => {
+      const f = pages();
+      const criteria = expression([criterion(fieldId, "on", "2024-02-29")]);
+      const first = await f.page({ criteria });
+      expect(first.nextContinuation).not.toBeNull();
+      const category =
+        fieldId === "email_updated" ? "Email Address" : "Phone Number";
+      f.catalog.peopleFilterInfo.filters["Contact Info"].categories[
+        category
+      ].filters.at(-1)!.filterID = 876;
+      await expect(
+        f.page({ criteria, continuation: first.nextContinuation! }),
+      ).rejects.toMatchObject({ code: "member_search_changed" });
+      expect(
+        f.context.query.mock.calls.filter(([path]) => path.endsWith("/filter")),
+      ).toHaveLength(1);
+    },
+  );
 
   it.each([
     [237, 100],
