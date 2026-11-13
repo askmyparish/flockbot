@@ -523,8 +523,9 @@ verify parser policy rather than establish what the upstream listing returns.
 ### Parish note search
 
 `find_notes` accepts only `searchTerm` (nonblank, at most 256 characters),
-plus the shared diagnostic option. It reads network metadata, then one broad
-JSON search page with the observed note/event/file/user/group/comment filters.
+plus the shared diagnostic option. It reads network metadata, then one
+JSON search page with only `filters[]=note`. The response must confirm the note
+filter is enabled and event/file/user/group/comment/userDocument are disabled.
 There is no group/date filter, continuation, automatic retry, or per-result
 enrichment. Results retain upstream order, not chronological order.
 
@@ -537,10 +538,12 @@ malformed optional target metadata becomes null. An empty group-target list is
 not evidence of no recipients. Bodies, previews, authors, person targets and
 unrelated entity payloads are excluded.
 
-`totalHits` is the broad upstream count, not a note-only total.
+`totalHits` is Flocknote's reported count for the note-only search, not an
+exhaustive archive count.
 `upstreamReturnedCount`, `returnedCount`, `omittedNonNoteCount`, and
-`clippedNoteCount` distinguish the received page from emitted notes.
-`completeness` is `partial` when more broad hits or clipped notes exist,
+`clippedNoteCount` distinguish the received page from emitted notes. Unexpected
+non-note rows are still omitted and counted without exposing their payloads.
+`completeness` is `partial` when more upstream hits or clipped notes exist,
 otherwise `unknown`; even zero hits do not establish exhaustive absence.
 `truncated` reports local clipping: notes at 50, titles at 512 UTF-16 code units, group-target
 names at 256, and 10 targets per note. Per-title/name/target clipping flags

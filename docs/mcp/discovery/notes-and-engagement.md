@@ -81,13 +81,28 @@ result.
 pagination input or subsequent search page. Because the request includes multiple
 entity types, the capture also does not prove that `totalHits` is a note-only
 count. A future tool must not report these 30 items as an exhaustive result set.
-A note-only filter request remains unverified; all returned results happening to
-be notes is not evidence that only notes were requested.
+This capture did not establish a note-only filter; all returned results happening
+to be notes is not evidence that only notes were requested.
 
 The first capture established group results from this same broad search. Together
 the captures support a search tool that validates heterogeneous result shapes
 and reports incompleteness, rather than a parser expecting only groups or only
 members.
+
+### Notes-only filtering established by capture 16
+
+The later notes-only search capture contains two successful UI requests with
+only `filters[]=note`, alongside `searchTerm` and `networkID`, to the same
+`POST /supersearch/query?ajax` endpoint. Both responses set `searchFilters.note`
+to true and `event`, `file`, `user`, `group`, `comment`, and `userDocument` to false.
+The envelope and note-summary fields are unchanged.
+
+Each broad/notes-only comparison returned the same 30 note IDs in the same order,
+but the reported total decreased from 7,958 to 3,985. The notes-only requests took
+about 2.07 and 2.47 seconds, versus 1.81 and 1.93 seconds for broad search. This
+establishes category filtering, not a speed improvement or an exhaustive count.
+No pagination or date-filter request was captured. `find_notes` now uses this
+notes-only request while retaining bounded output and incompleteness warnings.
 
 ## Opening a note is an HTML-bearing response
 

@@ -624,7 +624,7 @@ export function createFlocknoteServer(
     {
       title: "Find parish notes",
       description:
-        "Find note IDs and titles by keyword across the current parish. Returns up to 50 notes from one broad JSON search page, including email/SMS/scheduled and unknown types. totalHits covers all entity kinds, not just notes; omittedNonNoteCount and clippedNoteCount explain filtering and local limits. Search order is not chronology, scheduled does not mean sent, and empty results do not prove absence. Only established group targets are returned, never bodies, authors or recipients. Use group_notes for one group's recent page and note for one identified note's content. No group/date filters, pagination or enrichment.",
+        "Find note IDs and titles by keyword across the current parish using Flocknote's notes-only filter. Returns up to 50 notes from one JSON search page, including email/SMS/scheduled and unknown types. totalHits is Flocknote's reported count for that note-only search, not an exhaustive archive count; omittedNonNoteCount counts unexpected non-note rows and clippedNoteCount reports local limits. Search order is not chronology, scheduled does not mean sent, and empty results do not prove absence. Only established group targets are returned, never bodies, authors or recipients. Use group_notes for one group's recent page and note for one identified note's content. No group/date filters, pagination or enrichment.",
       inputSchema: z
         .object({ verboseDiagnostics, searchTerm: z.string().min(1).max(256) })
         .strict(),

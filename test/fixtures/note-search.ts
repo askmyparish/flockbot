@@ -5,12 +5,12 @@ export function noteSearchResponse(searchTerm = "choir + plans") {
     searchTerm,
     searchFilters: {
       note: true,
-      event: true,
-      file: true,
-      user: true,
-      group: true,
-      comment: true,
-      userDocument: true,
+      event: false,
+      file: false,
+      user: false,
+      group: false,
+      comment: false,
+      userDocument: false,
     },
     totalHits: 12,
     searchResults: [
