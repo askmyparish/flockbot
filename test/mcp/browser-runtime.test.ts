@@ -90,6 +90,7 @@ async function fixture() {
     external: 0,
     restoredParishPage: false,
     searchForms: [] as string[],
+    memberTotal: null as number | null,
     responses: {} as Record<
       string,
       { status: number; body: string; delayMs?: number }
@@ -302,6 +303,19 @@ async function fixture() {
           request.method() === "POST"
         ) {
           state.searchForms.push(request.postData() ?? "");
+          if (state.memberTotal !== null) {
+            const offset = Number(
+              new URLSearchParams(request.postData() ?? "").get("from"),
+            );
+            await json({
+              success: true,
+              resultCount: state.memberTotal,
+              results: Array.from({ length: state.memberTotal }, (_, i) =>
+                searchRow(1001 + i),
+              ).slice(offset, offset + 100),
+            });
+            return;
+          }
           await json({
             success: true,
             results: [
@@ -1173,6 +1187,75 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
         /alex@|Example|555|private-|permissions|subscribedMembers/,
       );
       expect(f.visits).toEqual([{ path: "group/104/people", method: "POST" }]);
+      expect(f.state.external).toBe(0);
+    }, 60_000);
+
+    it("pages advanced members through intercepted Chromium and MCP without contact leakage", async () => {
+      const f = await fixture();
+      await f.signIn();
+      f.visits.length = 0;
+      f.state.memberTotal = 237;
+      const server = createFlocknoteServer(f.connection);
+      const client = new Client({ name: "fictional-pages", version: "1" });
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      await server.connect(a);
+      await client.connect(b);
+      cleanup.unshift(() => client.close());
+      const input = {
+        mode: "members",
+        groupId: "104",
+        criteria: {
+          any: [{ all: [{ fieldId: "first_name", operator: "exists" }] }],
+        },
+      };
+      const first = (
+        await client.callTool({ name: "find_members", arguments: input })
+      ).structuredContent as Record<string, unknown>;
+      const second = (
+        await client.callTool({
+          name: "find_members",
+          arguments: { ...input, continuation: first.nextContinuation },
+        })
+      ).structuredContent as Record<string, unknown>;
+      const last = (
+        await client.callTool({
+          name: "find_members",
+          arguments: { ...input, continuation: second.nextContinuation },
+        })
+      ).structuredContent!;
+      expect(first).toMatchObject({
+        offset: 0,
+        returnedCount: 100,
+        hasMore: true,
+        complete: false,
+      });
+      expect(second).toMatchObject({
+        offset: 100,
+        returnedCount: 100,
+        hasMore: true,
+        complete: false,
+      });
+      expect(last).toMatchObject({
+        offset: 200,
+        returnedCount: 37,
+        hasMore: false,
+        complete: false,
+        nextContinuation: null,
+      });
+      expect(JSON.stringify([first, second, last])).not.toMatch(
+        /alex@|555|exactMatchUserId/,
+      );
+      expect(
+        f.state.searchForms.map((form) =>
+          new URLSearchParams(form).get("from"),
+        ),
+      ).toEqual(["0", "100", "200"]);
+      expect(f.visits).toEqual(
+        Array.from({ length: 3 }, () => [
+          { path: "group/104/people", method: "POST" },
+          { path: "group/104/filter", method: "POST" },
+        ]).flat(),
+      );
       expect(f.state.external).toBe(0);
     }, 60_000);
 

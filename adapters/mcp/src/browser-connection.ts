@@ -382,6 +382,7 @@ export class BrowserConnection {
       session: BrowserSession,
       op: Operation,
       network: Network,
+      connectionGeneration: string,
     ) => Promise<T>,
   ): Promise<T> {
     if (options.signal?.aborted) throw new FlockbotError("operation_cancelled");
@@ -404,7 +405,12 @@ export class BrowserConnection {
           const session = await this.#open(saved, false);
           try {
             op.check();
-            return await work(session, op, this.#networkFor(saved));
+            return await work(
+              session,
+              op,
+              this.#networkFor(saved),
+              saved.generation,
+            );
           } catch (error) {
             this.#network?.model.clearGroups();
             let failure = error;
@@ -812,8 +818,12 @@ export class BrowserConnection {
   ) {
     // Snapshot/validate before waiting for coordination or opening a browser.
     const search = new MemberSearch(input);
-    return this.#operate(options, (session, op, network) =>
-      search.find(this.#resources(session, op), network),
+    return this.#operate(
+      options,
+      (session, op, network, connectionGeneration) =>
+        search.find(this.#resources(session, op), network, {
+          connectionGeneration,
+        }),
     );
   }
 

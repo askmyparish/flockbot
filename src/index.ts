@@ -26,6 +26,9 @@ export {
   type MemberSearchInput,
   type MemberSearchField,
   type MemberSearchResult,
+  type MemberPageResult,
+  type MemberSearchContinuation,
+  type MemberSearchBinding,
   type MemberCountResult,
   type MemberSearchResultFor,
 } from "./models/member-search.js";

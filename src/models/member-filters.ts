@@ -706,7 +706,7 @@ function availableField(fields: Field[], fieldId: string): Field {
 }
 
 /** Compile only validated catalog bindings; no upstream member records escape. */
-export async function compileMemberCount(
+export async function compileMemberSearch(
   input: {
     groupId?: string | undefined;
     groupName?: string | undefined;
@@ -723,6 +723,7 @@ export async function compileMemberCount(
   const body = new URLSearchParams({
     includeInactive: String(input.includeInactive),
   });
+  const definitions: unknown[] = [];
   const put = (
     prefix: string,
     binding: Binding,
@@ -746,6 +747,11 @@ export async function compileMemberCount(
       const binding = field.bindings.get(p.operator);
       if (!operator || !binding || (p.negated && !operator.negation))
         throw new FlockbotError("member_filter_unavailable");
+      definitions.push({
+        descriptor: field.descriptor,
+        choices: field.choices,
+        binding,
+      });
       const values: Record<string, string> = {};
       let choice: MemberFilterChoice | undefined;
       const rule = OPERATOR_VALUES[p.operator];
@@ -795,6 +801,11 @@ export async function compileMemberCount(
       return invalidResponse("search_filter_shape");
     if (!permitted(f, current.everyone))
       throw new FlockbotError("member_filter_unavailable");
+    definitions.push({
+      fieldId: "general_search",
+      filterID: nativeId(f.filterID),
+      input: "text",
+    });
     put(
       `request[and][${any.length ? 1 : 0}][or][0][and][0]`,
       { filterID: nativeId(f.filterID), fixedInputs: {} },
@@ -809,7 +820,12 @@ export async function compileMemberCount(
     ...(input.searchTerm === undefined ? {} : { searchTerm: input.searchTerm }),
     any,
   };
-  return { groupId: current.groupId, body: body.toString(), criteriaSummary };
+  return {
+    groupId: current.groupId,
+    body: body.toString(),
+    criteriaSummary,
+    definitions,
+  };
 }
 
 /** Read-only, scoped catalog projection. Native people rows never enter results. */

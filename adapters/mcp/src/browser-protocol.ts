@@ -26,7 +26,7 @@ import {
 export const MAX_REQUEST = MAX_REQUEST_BYTES;
 export const MAX_RESPONSE = 2 * 1024 * 1024;
 export const memberSearchShape = {
-  mode: z.literal("count").optional(),
+  mode: z.enum(["count", "members"]).optional(),
   searchTerm: z.string().min(1).max(256).optional(),
   groupId: z.string().min(1).max(128).optional(),
   groupName: z.string().min(1).max(256).optional(),
@@ -34,7 +34,16 @@ export const memberSearchShape = {
     .array(z.enum(["email", "mobilePhone", "joinedOn"]))
     .max(3)
     .optional(),
-  limit: z.number().int().min(1).max(50).optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+  continuation: z
+    .object({
+      offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+      resultCount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+      queryKey: z.string().regex(/^[a-f0-9]{64}$/),
+      previousPageKey: z.string().regex(/^[a-f0-9]{64}$/),
+    })
+    .strict()
+    .optional(),
   includeInactive: z.boolean().optional(),
   criteria: z
     .object({
@@ -103,169 +112,183 @@ const draftProgressSchema = z
     photoIds: z.array(z.string().regex(/^\d{1,128}$/)).optional(),
   })
   .strict();
-export const brokerRequestSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("ping") }).strict(),
-  z.object({ action: z.literal("shutdown") }).strict(),
-  z.object({ action: z.literal("status") }).strict(),
-  z
-    .object({
-      action: z.literal("connect"),
-      subdomain: z.string().min(1).max(63),
-    })
-    .strict(),
-  z
-    .object({ action: z.literal("groups"), refresh: z.boolean().optional() })
-    .strict(),
-  z
-    .object({ action: z.literal("count"), groupId: z.string().min(1).max(128) })
-    .strict(),
-  z
-    .object({ action: z.literal("note"), noteId: z.string().min(1).max(128) })
-    .strict(),
-  z
-    .object({
-      action: z.literal("find_notes"),
-      searchTerm: z.string().min(1).max(256),
-    })
-    .strict(),
-  z
-    .object({
-      action: z.literal("member_filters"),
-      groupId: z.string().min(1).max(128).optional(),
-      groupName: z.string().min(1).max(256).optional(),
-      fieldId: z.string().min(1).max(280).optional(),
-      offset: z
-        .number()
-        .int()
-        .min(0)
-        .max(Number.MAX_SAFE_INTEGER - MEMBER_FILTER_PAGE_SIZE)
-        .optional(),
-    })
-    .strict(),
-  z
-    .object({
-      action: z.literal("find_members"),
-      ...memberSearchShape,
-    })
-    .strict(),
-  z
-    .object({
-      action: z.literal("member"),
-      userId: z.string().min(1).max(128),
-      fields: z
-        .array(z.enum(["email", "mobilePhone"]))
-        .max(2)
-        .optional(),
-    })
-    .strict(),
-  z
-    .object({
-      action: z.literal("member_groups"),
-      userId: z.string().min(1).max(128),
-    })
-    .strict(),
-  z
-    .object({
-      action: z.literal("group_notes"),
-      groupId: z.string().min(1).max(128).optional(),
-      groupName: z.string().min(1).max(256).optional(),
-    })
-    .strict(),
-  z
-    .object({
-      action: z.literal("email_analytics"),
-      emailId: z.string().min(1).max(128).optional(),
-      groupId: z.string().min(1).max(128).optional(),
-      groupName: z.string().min(1).max(256).optional(),
-    })
-    .strict(),
-  z
-    .object({
-      action: z.literal("email_recipients"),
-      emailId: z.string().min(1).max(128),
-      category: z.enum(["opened", "unopened"]),
-      fields: z.array(z.literal("address")).max(1).optional(),
-    })
-    .strict(),
-  z
-    .object({
-      action: z.literal("member_latest_email_status"),
-      userId: z.string().min(1).max(128),
-      groupId: z.string().min(1).max(128).optional(),
-      groupName: z.string().min(1).max(256).optional(),
-    })
-    .strict(),
-  z
-    .object({
-      action: z.literal("member_communication_status"),
-      userId: z.string().min(1).max(128),
-      groupId: z.string().min(1).max(128).optional(),
-      groupName: z.string().min(1).max(256).optional(),
-      fields: z
-        .array(z.enum(["email", "mobilePhone"]))
-        .max(2)
-        .optional(),
-    })
-    .strict(),
-  z
-    .object({
-      action: z.literal("group_members"),
-      groupId: z.string().min(1).max(128).optional(),
-      groupName: z.string().min(1).max(256).optional(),
-      offset: z
-        .number()
-        .int()
-        .min(0)
-        .max(Number.MAX_SAFE_INTEGER - 100)
-        .optional(),
-      fields: z
-        .array(z.enum(["email", "mobilePhone", "joinedOn"]))
-        .max(3)
-        .optional(),
-    })
-    .strict(),
-  z
-    .object({
-      action: z.literal("is_member"),
-      userId: z.string().min(1).max(128),
-      groupId: z.string().min(1).max(128).optional(),
-      groupName: z.string().min(1).max(256).optional(),
-    })
-    .strict(),
-  z
-    .object({
-      action: z.literal("add"),
-      groupId: z.string().max(128).optional(),
-      groupName: z.string().max(256).optional(),
-      member: z
-        .object({
-          firstName: z.string().max(256),
-          lastName: z.string().max(256),
-          email: z.string().max(320).optional(),
-          mobilePhone: z.string().max(64).optional(),
-        })
-        .strict(),
-    })
-    .strict(),
-  z.object({ action: z.literal("forget") }).strict(),
-  z
-    .object({
-      action: z.literal("duplicate_email_draft"),
-      noteId: z.string().min(1).max(128),
-    })
-    .strict(),
-  z
-    .object({
-      action: z.literal("create_email_draft"),
-      groupId: z.string().min(1).max(128).optional(),
-      groupName: z.string().min(1).max(256).optional(),
-      subject: z.string().min(1),
-      body: z.string().min(1).optional(),
-      bodyFormat: z.enum(["text", "html"]).optional(),
-      content: draftContentSchema.optional(),
-    })
-    .strict(),
-]);
+export const brokerRequestSchema = z
+  .discriminatedUnion("action", [
+    z.object({ action: z.literal("ping") }).strict(),
+    z.object({ action: z.literal("shutdown") }).strict(),
+    z.object({ action: z.literal("status") }).strict(),
+    z
+      .object({
+        action: z.literal("connect"),
+        subdomain: z.string().min(1).max(63),
+      })
+      .strict(),
+    z
+      .object({ action: z.literal("groups"), refresh: z.boolean().optional() })
+      .strict(),
+    z
+      .object({
+        action: z.literal("count"),
+        groupId: z.string().min(1).max(128),
+      })
+      .strict(),
+    z
+      .object({ action: z.literal("note"), noteId: z.string().min(1).max(128) })
+      .strict(),
+    z
+      .object({
+        action: z.literal("find_notes"),
+        searchTerm: z.string().min(1).max(256),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("member_filters"),
+        groupId: z.string().min(1).max(128).optional(),
+        groupName: z.string().min(1).max(256).optional(),
+        fieldId: z.string().min(1).max(280).optional(),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .max(Number.MAX_SAFE_INTEGER - MEMBER_FILTER_PAGE_SIZE)
+          .optional(),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("find_members"),
+        ...memberSearchShape,
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("member"),
+        userId: z.string().min(1).max(128),
+        fields: z
+          .array(z.enum(["email", "mobilePhone"]))
+          .max(2)
+          .optional(),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("member_groups"),
+        userId: z.string().min(1).max(128),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("group_notes"),
+        groupId: z.string().min(1).max(128).optional(),
+        groupName: z.string().min(1).max(256).optional(),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("email_analytics"),
+        emailId: z.string().min(1).max(128).optional(),
+        groupId: z.string().min(1).max(128).optional(),
+        groupName: z.string().min(1).max(256).optional(),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("email_recipients"),
+        emailId: z.string().min(1).max(128),
+        category: z.enum(["opened", "unopened"]),
+        fields: z.array(z.literal("address")).max(1).optional(),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("member_latest_email_status"),
+        userId: z.string().min(1).max(128),
+        groupId: z.string().min(1).max(128).optional(),
+        groupName: z.string().min(1).max(256).optional(),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("member_communication_status"),
+        userId: z.string().min(1).max(128),
+        groupId: z.string().min(1).max(128).optional(),
+        groupName: z.string().min(1).max(256).optional(),
+        fields: z
+          .array(z.enum(["email", "mobilePhone"]))
+          .max(2)
+          .optional(),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("group_members"),
+        groupId: z.string().min(1).max(128).optional(),
+        groupName: z.string().min(1).max(256).optional(),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .max(Number.MAX_SAFE_INTEGER - 100)
+          .optional(),
+        fields: z
+          .array(z.enum(["email", "mobilePhone", "joinedOn"]))
+          .max(3)
+          .optional(),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("is_member"),
+        userId: z.string().min(1).max(128),
+        groupId: z.string().min(1).max(128).optional(),
+        groupName: z.string().min(1).max(256).optional(),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("add"),
+        groupId: z.string().max(128).optional(),
+        groupName: z.string().max(256).optional(),
+        member: z
+          .object({
+            firstName: z.string().max(256),
+            lastName: z.string().max(256),
+            email: z.string().max(320).optional(),
+            mobilePhone: z.string().max(64).optional(),
+          })
+          .strict(),
+      })
+      .strict(),
+    z.object({ action: z.literal("forget") }).strict(),
+    z
+      .object({
+        action: z.literal("duplicate_email_draft"),
+        noteId: z.string().min(1).max(128),
+      })
+      .strict(),
+    z
+      .object({
+        action: z.literal("create_email_draft"),
+        groupId: z.string().min(1).max(128).optional(),
+        groupName: z.string().min(1).max(256).optional(),
+        subject: z.string().min(1),
+        body: z.string().min(1).optional(),
+        bodyFormat: z.enum(["text", "html"]).optional(),
+        content: draftContentSchema.optional(),
+      })
+      .strict(),
+  ])
+  // Preserve legacy IPC shape rejection; MemberSearch owns mode validation
+  // for every entry point, including the shared MCP input shape.
+  .refine(
+    (request) =>
+      request.action !== "find_members" ||
+      request.mode === "members" ||
+      request.limit === undefined ||
+      request.limit <= 50,
+    { path: ["limit"], message: "Limits above 50 require mode members." },
+  );
 export type BrokerRequest = z.infer<typeof brokerRequestSchema>;
 export function isWriteRequest(request: BrokerRequest): boolean {
   return (

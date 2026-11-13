@@ -752,6 +752,60 @@ describe.skipIf(process.platform === "win32")(
       expect(f.events()).toEqual(before);
     });
 
+    it("carries member pages over IPC and refuses a token from an older connection", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
+      const input = {
+        mode: "members" as const,
+        groupId: "104",
+        searchTerm: "Alex",
+        limit: 37,
+      };
+      const first = await f.service.findMembers(input);
+      expect(first).toMatchObject({
+        returnedCount: 37,
+        offset: 0,
+        resultCount: 237,
+        hasMore: true,
+        complete: false,
+      });
+      expect(first).not.toHaveProperty("exactMatchUserId");
+      for (const member of first.members)
+        expect(member).toEqual({
+          id: expect.any(String),
+          firstName: "Alex",
+          lastName: "Rivera",
+        });
+      const second = await f.service.findMembers({
+        ...input,
+        continuation: first.nextContinuation!,
+      });
+      expect(second.members[0]?.id).toBe("1038");
+      expect(second.offset).toBe(37);
+      const selected = await f.service.findMembers({
+        ...input,
+        fields: ["email"],
+      });
+      expect(selected.members[0]?.email?.value).toBe("alex@example.test");
+      const saved = JSON.parse(
+        readFileSync(join(f.profile, "connection.json"), "utf8"),
+      );
+      writeFileSync(
+        join(f.profile, "connection.json"),
+        JSON.stringify({ ...saved, generation: randomUUID() }),
+      );
+      const before = f.events().filter((e) => e.endsWith("/filter")).length;
+      await expect(
+        f.service.findMembers({
+          ...input,
+          continuation: second.nextContinuation!,
+        }),
+      ).rejects.toMatchObject({ code: "member_search_changed" });
+      expect(f.events().filter((e) => e.endsWith("/filter"))).toHaveLength(
+        before,
+      );
+    });
+
     it("discards native member rows before returning an advanced count over private IPC", async (context) => {
       const { expect } = context;
       const f = await fixture(context);

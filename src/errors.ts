@@ -41,6 +41,8 @@ export type ErrorCode =
   | "invalid_path"
   | "invalid_input"
   | "member_filter_unavailable"
+  | "member_search_changed"
+  | "member_search_incomplete"
   | "session_load_failed"
   | "invalid_session_state"
   | "session_save_failed"

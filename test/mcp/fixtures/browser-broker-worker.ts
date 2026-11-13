@@ -125,6 +125,21 @@ if (role === "broker") {
                   isEveryoneGroup: 0,
                 };
               case "group/104/filter":
+                if (new URLSearchParams(body).has("from")) {
+                  const offset = Number(new URLSearchParams(body).get("from"));
+                  return {
+                    success: true,
+                    resultCount: 237,
+                    results: Array.from({ length: 237 }, (_, i) =>
+                      searchRow(1001 + i),
+                    ).slice(offset, offset + 100),
+                  };
+                }
+                return {
+                  success: true,
+                  results: [searchRow()],
+                  resultCount: 1,
+                };
               case "group/101/filter":
                 return {
                   success: true,
