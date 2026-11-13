@@ -1,7 +1,12 @@
 import { inspect } from "node:util";
 import { describe, expect, it, vi } from "vitest";
-import { MemberSearch } from "../src/models/member-search.js";
+import {
+  MemberSearch,
+  type MemberSearchInput,
+} from "../src/models/member-search.js";
+import type { MemberPredicate } from "../src/models/member-filters.js";
 import { Network } from "../src/models/network.js";
+import { filterCatalog } from "./fixtures/member-filters.js";
 import { searchMetadata, searchRow } from "./fixtures/member-search.js";
 
 function fixture(rows: unknown[] = [searchRow()], resultCount = rows.length) {
@@ -28,6 +33,360 @@ function fixture(rows: unknown[] = [searchRow()], resultCount = rows.length) {
     );
   return { context, data, metadata, find };
 }
+
+function countFixture() {
+  const catalog = filterCatalog();
+  const data: Record<string, unknown> = {
+    success: true,
+    results: [{ mail: "private@example.test", fn: { invalid: "unused" } }],
+    resultCount: 73,
+  };
+  const base = fixture();
+  base.context.query.mockImplementation(async (path) =>
+    path.endsWith("?ajax") ? catalog : data,
+  );
+  const count = (input: MemberSearchInput = { searchTerm: "Alex" }) =>
+    new MemberSearch({ ...input, mode: "count" as const }).find(
+      base.context,
+      new Network("example-parish"),
+    );
+  return { ...base, catalog, data, count };
+}
+const criterion = (
+  fieldId: string,
+  operator: MemberPredicate["operator"],
+  value?: string,
+  negated = false,
+): MemberPredicate => ({
+  fieldId,
+  operator,
+  ...(value === undefined ? {} : { value }),
+  negated,
+});
+const expression = (...branches: MemberPredicate[][]) => ({
+  any: branches.map((all) => ({ all })),
+});
+
+describe("advanced member counts", () => {
+  it("discards unused native rows, including malformed contacts, without traversing or resolving an identity", async () => {
+    const f = countFixture();
+    const result = await f.count();
+    expect(result).toEqual({
+      mode: "count",
+      groupId: "101",
+      includeInactive: false,
+      resultCount: 73,
+      criteriaSummary: {
+        groupId: "101",
+        includeInactive: false,
+        searchTerm: "Alex",
+        any: [],
+      },
+    });
+    expect(JSON.stringify(result)).not.toMatch(
+      /private|members|exactMatchUserId|returnedCount/,
+    );
+    expect(f.context.query.mock.calls.map(([path]) => path)).toEqual([
+      "group/101/people?ajax",
+      "group/101/filter",
+    ]);
+  });
+
+  it("compiles OR-of-ANDs and outer text AND with native missing-phone semantics", async () => {
+    const f = countFixture();
+    const rows =
+      f.catalog.peopleFilterInfo.filters["Contact Info"].categories[
+        "Phone Number"
+      ].filters;
+    rows[0]!.filterID = 401; // phone exists
+    rows[2]!.filterID = 402; // phone verified (missing excluded even when negated)
+    // Independent fictional native evaluator: mixed names and missing/unverified/verified phones.
+    const people = [
+      { name: "Alex", phone: false, verified: false },
+      { name: "Alex", phone: true, verified: false },
+      { name: "Alex", phone: true, verified: true },
+      { name: "Bea", phone: false, verified: false },
+      { name: "Bea", phone: true, verified: false },
+    ];
+    f.context.query.mockImplementation(async (path, body) => {
+      if (path.endsWith("?ajax")) return f.catalog;
+      const form = new URLSearchParams(body);
+      const clauses = new Map<string, Map<string, string[]>>();
+      for (const key of form.keys()) {
+        const match =
+          /^(request\[and\]\[(\d+)\]\[or\]\[(\d+)\]\[and\]\[\d+\])\[filterID\]$/.exec(
+            key,
+          );
+        if (!match) continue;
+        const outer = clauses.get(match[2]!) ?? new Map<string, string[]>();
+        clauses.set(match[2]!, outer);
+        outer.set(match[3]!, [...(outer.get(match[3]!) ?? []), match[1]!]);
+      }
+      expect(clauses.size).toBeGreaterThan(0);
+      const resultCount = people.filter((person) =>
+        [...clauses.values()].every((alternatives) =>
+          [...alternatives.values()].some((predicates) =>
+            predicates.every((p) => {
+              const id = form.get(`${p}[filterID]`),
+                negated = form.get(`${p}[isNegated]`) === "true";
+              if (id === "17")
+                return person.name.includes(
+                  form.get(`${p}[inputs][searchTerm]`)!,
+                );
+              if (id === "401") return negated ? !person.phone : person.phone;
+              if (id === "402")
+                return (
+                  person.phone && (negated ? !person.verified : person.verified)
+                );
+              throw new Error("Unexpected fictional predicate");
+            }),
+          ),
+        ),
+      ).length;
+      return { success: true, resultCount, results: [] };
+    });
+    const missing = criterion("phone", "exists", undefined, true),
+      unverified = criterion("phone", "verified", undefined, true);
+    expect(
+      (await f.count({ criteria: expression([unverified]) })).resultCount,
+    ).toBe(2);
+    expect(
+      (await f.count({ criteria: expression([missing], [unverified]) }))
+        .resultCount,
+    ).toBe(4);
+    expect(
+      (await f.count({ criteria: expression([missing, unverified]) }))
+        .resultCount,
+    ).toBe(0);
+    const mixed = await f.count({
+      searchTerm: "Alex",
+      criteria: expression([missing], [unverified]),
+    });
+    expect(mixed.resultCount).toBe(2);
+    expect(mixed.criteriaSummary.any[1]?.all[0]).toMatchObject({
+      missingValueBehavior: "excluded",
+      negated: true,
+    });
+  });
+
+  it("binds repeated custom native IDs to the selected field and checks current choices on each operation", async () => {
+    const f = countFixture();
+    const input = {
+      criteria: expression([
+        criterion("custom:201:select:501", "equals", "1"),
+        criterion("custom:202:select:502", "equals", "2"),
+        criterion("membership", "in_group", "102"),
+      ]),
+    };
+    const result = await f.count(input);
+    const body = new URLSearchParams(f.context.query.mock.calls[1]?.[1]);
+    for (const [i, field, instance, choice] of [
+      [0, "201", "501", "1"],
+      [1, "202", "502", "2"],
+    ]) {
+      const prefix = `request[and][0][or][0][and][${i}]`;
+      expect(body.get(`${prefix}[filterID]`)).toBe("82");
+      expect(body.get(`${prefix}[inputs][networkFieldID]`)).toBe(field);
+      expect(body.get(`${prefix}[inputs][fieldTypeInstanceID]`)).toBe(instance);
+      expect(body.get(`${prefix}[inputs][extendedFieldFieldType]`)).toBe("5");
+      expect(body.get(`${prefix}[inputs][listOfIDs]`)).toBe(choice);
+    }
+    expect(result.criteriaSummary.any[0]?.all[2]).toMatchObject({
+      value: "102",
+      choiceLabel: "Choir",
+    });
+    f.catalog.peopleFilterInfo.filters["Personal Info"].categories.ChoiceB
+      .filters[1]!.inputs.listOfIDs!.allowedValues = [
+      { value: 1, label: "Other" },
+    ];
+    await expect(f.count(input)).rejects.toMatchObject({
+      code: "member_filter_unavailable",
+    });
+    expect(
+      f.context.query.mock.calls.filter(([p]) => p.endsWith("/filter")),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    ["before", "lessThanEqualToEndOfDay"],
+    ["on", "onDay"],
+    ["after", "greaterThanEqualToBeginOfDay"],
+  ] as const)(
+    "compiles strict subscription %s with selected scope and an explicit leap-day date",
+    async (operator, native) => {
+      const f = countFixture();
+      f.catalog.groupID = "102";
+      await f.count({
+        groupName: "Choir",
+        criteria: expression([criterion("subscribed", operator, "2024-02-29")]),
+      });
+      const form = new URLSearchParams(f.context.query.mock.calls[1]?.[1]);
+      expect(form.get("request[and][0][or][0][and][0][inputs][groupID]")).toBe(
+        "102",
+      );
+      expect(
+        form.get("request[and][0][or][0][and][0][inputs][dateQueryType]"),
+      ).toBe(native);
+      expect(form.get("request[and][0][or][0][and][0][inputs][date]")).toBe(
+        "2024-02-29",
+      );
+    },
+  );
+
+  it("keeps inclusive subscription dates as two alternatives, not adjusted dates", async () => {
+    const f = countFixture();
+    await f.count({
+      criteria: expression(
+        [criterion("subscribed", "before", "2026-11-04")],
+        [criterion("subscribed", "on", "2026-11-04")],
+      ),
+    });
+    const form = new URLSearchParams(f.context.query.mock.calls[1]?.[1]);
+    expect(
+      form.get("request[and][0][or][1][and][0][inputs][dateQueryType]"),
+    ).toBe("onDay");
+    expect(form.get("request[and][0][or][1][and][0][inputs][date]")).toBe(
+      "2026-11-04",
+    );
+  });
+
+  it.each([
+    criterion("email", "mobile"),
+    criterion("email_updated", "before", "2026-11-04"),
+    criterion("phone", "contains", "555", true),
+    criterion("membership", "in_group", "101"),
+    criterion("membership", "in_group", "103"),
+    criterion("custom:201:select:501", "equals", "999"),
+    criterion("unknown", "exists"),
+  ])("refuses unavailable criteria without filtering: %j", async (p) => {
+    const f = countFixture();
+    await expect(f.count({ criteria: expression([p]) })).rejects.toMatchObject({
+      code: "member_filter_unavailable",
+    });
+    expect(f.context.query.mock.calls).toHaveLength(1);
+  });
+
+  it("refuses inactive inclusion unless explicitly allowed and never downgrades", async () => {
+    const f = countFixture();
+    await expect(
+      f.count({ searchTerm: "Alex", includeInactive: true }),
+    ).rejects.toMatchObject({ code: "permission_denied" });
+    expect(f.context.query).toHaveBeenCalledTimes(1);
+    f.catalog.canViewInactiveMembers = true;
+    expect(
+      await f.count({ searchTerm: "Alex", includeInactive: true }),
+    ).toMatchObject({ includeInactive: true });
+    expect(
+      new URLSearchParams(f.context.query.mock.calls[2]?.[1]).get(
+        "includeInactive",
+      ),
+    ).toBe("true");
+  });
+
+  it.each([
+    {},
+    { fields: [] },
+    { limit: 1 },
+    { continuation: {} },
+    { mode: "members" },
+    { mode: null },
+    { criteria: { any: [] } },
+    { criteria: { any: [{ all: [] }] } },
+    {
+      criteria: {
+        any: [{ all: [{ fieldId: "phone", operator: "exists", nativeId: 7 }] }],
+      },
+    },
+    { criteria: expression([criterion("phone", "exists", "unwanted")]) },
+    { criteria: expression([criterion("phone", "contains", "\u0000secret")]) },
+    { criteria: expression([criterion("phone", "contains", "\udfff")]) },
+    {
+      criteria: expression(
+        ...Array.from({ length: 9 }, () => [criterion("phone", "exists")]),
+      ),
+    },
+    {
+      criteria: expression(
+        Array.from({ length: 21 }, () => criterion("phone", "exists")),
+      ),
+    },
+    ...[
+      "2025-02-29",
+      "1900-02-29",
+      "0000-01-01",
+      "2026-04-31",
+      "2026-00-01",
+      "2026-11-00",
+      "2026-1-01",
+    ].map((date) => ({
+      criteria: expression([criterion("subscribed", "on", date)]),
+    })),
+  ])("rejects invalid advanced intent before I/O: %j", async (input) => {
+    const f = countFixture();
+    await expect(async () =>
+      new MemberSearch({ mode: "count", ...input } as MemberSearchInput).find(
+        f.context,
+        new Network("example-parish"),
+      ),
+    ).rejects.toMatchObject({ code: "invalid_input" });
+    expect(f.context.query).not.toHaveBeenCalled();
+  });
+
+  it("accepts grammar boundaries but rejects oversized UTF-8 requests before discovery", async () => {
+    const f = countFixture();
+    await f.count({
+      criteria: expression(
+        Array.from({ length: 13 }, () => criterion("phone", "exists")),
+        ...Array.from({ length: 7 }, () => [criterion("phone", "exists")]),
+      ),
+    });
+    const query = {
+      mode: "count" as const,
+      criteria: expression(
+        Array.from({ length: 20 }, () =>
+          criterion("first_name", "contains", "界".repeat(256)),
+        ),
+      ),
+    };
+    expect(() => new MemberSearch(query)).toThrow(
+      expect.objectContaining({
+        code: "invalid_input",
+        reason: "request_too_large",
+      }),
+    );
+    const privateSearch = new MemberSearch({
+      mode: "count",
+      criteria: expression([
+        criterion("first_name", "contains", "sensitive-query"),
+      ]),
+    });
+    expect(
+      inspect(privateSearch) + JSON.stringify(privateSearch),
+    ).not.toContain("sensitive-query");
+  });
+
+  it.each([
+    { results: {} },
+    { results: Array(101).fill({}) },
+    { resultCount: -1 },
+    { resultCount: 0 },
+    { resultCount: 1.5 },
+    { resultCount: Infinity },
+    { resultCount: Number.MAX_SAFE_INTEGER + 1 },
+    { groupID: "999" },
+    { includeContacts: true },
+  ])(
+    "rejects malformed count envelopes without echoing rows or retrying: %j",
+    async (override) => {
+      const f = countFixture();
+      Object.assign(f.data, override);
+      await expect(f.count()).rejects.toMatchObject({
+        code: "invalid_response",
+      });
+      expect(f.context.query).toHaveBeenCalledTimes(2);
+    },
+  );
+});
 
 describe("member search domain reads", () => {
   it("discovers Everyone and resolves the metadata filter rather than a fixed ID", async () => {

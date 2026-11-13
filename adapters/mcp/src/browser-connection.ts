@@ -806,7 +806,10 @@ export class BrowserConnection {
     );
   }
 
-  async findMembers(input: MemberSearchInput, options: OperationOptions = {}) {
+  async findMembers<T extends MemberSearchInput>(
+    input: T,
+    options: OperationOptions = {},
+  ) {
     // Snapshot/validate before waiting for coordination or opening a browser.
     const search = new MemberSearch(input);
     return this.#operate(options, (session, op, network) =>

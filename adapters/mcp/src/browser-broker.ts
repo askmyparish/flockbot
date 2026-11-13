@@ -27,6 +27,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   FlockbotError,
   MemberSearch,
+  type MemberSearchInput,
+  type MemberSearchResultFor,
   MemberFilters,
   MemberProfile,
   MemberGroups,
@@ -734,19 +736,20 @@ export class BrowserService {
       options.signal,
     )) as Awaited<ReturnType<BrowserConnection["memberFilters"]>>;
   }
-  async findMembers(
-    input: Parameters<BrowserConnection["findMembers"]>[0],
+  async findMembers<T extends MemberSearchInput>(
+    input: T,
     options: OperationOptions = {},
   ) {
     const prepared = new MemberSearch(input).toInput();
     return (await this.#call(
       {
         ...prepared,
-        fields: [...(prepared.fields ?? [])],
+        fields:
+          prepared.fields === undefined ? undefined : [...prepared.fields],
         action: "find_members",
       },
       options.signal,
-    )) as Awaited<ReturnType<BrowserConnection["findMembers"]>>;
+    )) as MemberSearchResultFor<T>;
   }
   async member(
     userId: string,

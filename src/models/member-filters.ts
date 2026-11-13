@@ -6,6 +6,152 @@ import { invalidResponse, record } from "./parsing.js";
 import type { ResourceQuery } from "./resource-read.js";
 
 export const MEMBER_FILTER_PAGE_SIZE = 50;
+const FIELD_ID =
+  /^(?:[a-z_]{1,40}|custom:[1-9]\d{0,127}:select:[1-9]\d{0,127})$/;
+
+export const MEMBER_OPERATORS = [
+  "exists",
+  "contains",
+  "verified",
+  "bad",
+  "not_bad",
+  "mobile",
+  "landline",
+  "in_group",
+  "before",
+  "on",
+  "after",
+  "equals",
+] as const;
+export interface MemberPredicate {
+  readonly fieldId: string;
+  readonly operator: (typeof MEMBER_OPERATORS)[number];
+  readonly value?: string | undefined;
+  readonly negated?: boolean | undefined;
+}
+const OPERATOR_VALUES: Record<
+  MemberPredicate["operator"],
+  null | "text" | "identifier" | "date"
+> = {
+  exists: null,
+  contains: "text",
+  verified: null,
+  bad: null,
+  not_bad: null,
+  mobile: null,
+  landline: null,
+  in_group: "identifier",
+  equals: "identifier",
+  before: "date",
+  on: "date",
+  after: "date",
+};
+const DATE_OPERATORS = new Map<MemberPredicate["operator"], string>([
+  ["before", "lessThanEqualToEndOfDay"],
+  ["on", "onDay"],
+  ["after", "greaterThanEqualToBeginOfDay"],
+]);
+export interface MemberCriteria {
+  readonly any: readonly { readonly all: readonly MemberPredicate[] }[];
+}
+export interface MemberCriteriaSummary {
+  readonly groupId: string;
+  readonly includeInactive: boolean;
+  readonly searchTerm?: string;
+  readonly any: readonly {
+    readonly all: readonly (MemberPredicate & {
+      readonly displayName: string;
+      readonly choiceLabel?: string;
+      readonly missingValueBehavior: MemberFilterOperator["missingValueBehavior"];
+    })[];
+  }[];
+}
+
+function inputObject(
+  value: unknown,
+  keys: readonly string[],
+): Record<string, unknown> {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.keys(value).some((k) => !keys.includes(k))
+  )
+    throw new FlockbotError("invalid_input");
+  return value as Record<string, unknown>;
+}
+export function memberSearchText(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    !value.trim() ||
+    value.length > 256 ||
+    /[\p{Cc}\p{Cs}]/u.test(value)
+  )
+    throw new FlockbotError("invalid_input");
+  return value.trim();
+}
+function calendarDate(value: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value))
+    throw new FlockbotError("invalid_input");
+  const [year = 0, month = 0, day = 0] = value.split("-").map(Number);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (!year || !day || day > (days[month - 1] ?? 0))
+    throw new FlockbotError("invalid_input");
+  return value;
+}
+
+/** Snapshot the bounded grammar before any I/O; native bindings come later. */
+export function memberCriteria(value: unknown): MemberCriteria {
+  const criteria = inputObject(value, ["any"]);
+  if (
+    !Array.isArray(criteria.any) ||
+    !criteria.any.length ||
+    criteria.any.length > 8
+  )
+    throw new FlockbotError("invalid_input");
+  let count = 0;
+  const any = criteria.any.map((alternative) => {
+    const branch = inputObject(alternative, ["all"]);
+    if (!Array.isArray(branch.all) || !branch.all.length)
+      throw new FlockbotError("invalid_input");
+    count += branch.all.length;
+    if (count > 20) throw new FlockbotError("invalid_input");
+    const all = branch.all.map((value): MemberPredicate => {
+      const p = inputObject(value, ["fieldId", "operator", "value", "negated"]);
+      if (
+        typeof p.fieldId !== "string" ||
+        !FIELD_ID.test(p.fieldId) ||
+        !MEMBER_OPERATORS.includes(p.operator as MemberPredicate["operator"]) ||
+        (p.negated !== undefined && typeof p.negated !== "boolean")
+      )
+        throw new FlockbotError("invalid_input");
+      const operator = p.operator as MemberPredicate["operator"];
+      const rule = OPERATOR_VALUES[operator];
+      const takesValue = rule !== null;
+      if (takesValue ? typeof p.value !== "string" : p.value !== undefined)
+        throw new FlockbotError("invalid_input");
+      let parsed: string | undefined;
+      if (takesValue) {
+        parsed = memberSearchText(p.value);
+        if (rule === "identifier") parsed = inputIdentifier(parsed);
+        else if (rule === "date") {
+          if (!DATE_OPERATORS.has(operator))
+            throw new FlockbotError("member_filter_unavailable");
+          parsed = calendarDate(parsed);
+        }
+      }
+      return Object.freeze({
+        fieldId: p.fieldId,
+        operator,
+        negated: p.negated === true,
+        ...(parsed === undefined ? {} : { value: parsed }),
+      });
+    });
+    return Object.freeze({ all: Object.freeze(all) });
+  });
+  return Object.freeze({ any: Object.freeze(any) });
+}
 
 export interface MemberFiltersInput {
   readonly groupId?: string | undefined;
@@ -262,7 +408,12 @@ function choices(value: unknown, group = false): MemberFilterChoice[] {
   return result;
 }
 
-type Field = { descriptor: MemberFilterField; choices: MemberFilterChoice[] };
+type Binding = { filterID: string; fixedInputs: Record<string, string> };
+type Field = {
+  descriptor: MemberFilterField;
+  choices: MemberFilterChoice[];
+  bindings: Map<string, Binding>;
+};
 function builtinFields(
   sections: Record<string, unknown>,
   everyone: boolean,
@@ -288,6 +439,7 @@ function builtinFields(
     let reason: MemberFilterField["unavailableReason"];
     let options: MemberFilterChoice[] = [];
     const operators: MemberFilterOperator[] = [];
+    const bindings = new Map<string, Binding>();
     try {
       for (const { signature, rows: matches } of found) {
         const [, , operatorName] = signature;
@@ -310,22 +462,22 @@ function builtinFields(
           options = choices(record(input.otherGroupID).allowedValues, true);
         const names =
           config.id === "subscribed"
-            ? ["before", "on", "after"]
+            ? [...DATE_OPERATORS.keys()]
             : [operatorName];
         if (config.id === "subscribed") {
           const values = record(input.dateQueryType).allowedValues;
           if (
             !Array.isArray(values) ||
             JSON.stringify(values.map((v) => record(v).value)) !==
-              JSON.stringify([
-                "lessThanEqualToEndOfDay",
-                "onDay",
-                "greaterThanEqualToBeginOfDay",
-              ])
+              JSON.stringify([...DATE_OPERATORS.values()])
           )
             return invalidResponse("search_filter_shape");
         }
-        for (const operator of names)
+        for (const operator of names) {
+          bindings.set(operator, {
+            filterID: nativeId(f.filterID),
+            fixedInputs: {},
+          });
           operators.push({
             operator,
             negation: f.operatorNegated !== undefined,
@@ -334,6 +486,7 @@ function builtinFields(
                 ? "excluded"
                 : "native_unknown",
           });
+        }
       }
     } catch (error) {
       if (!(error instanceof FlockbotError)) throw error;
@@ -353,6 +506,7 @@ function builtinFields(
         operators: reason ? [] : operators,
       },
       choices: reason ? [] : options,
+      bindings,
     });
   }
   return fields;
@@ -406,6 +560,7 @@ function customFields(
       let label = "Unavailable custom field";
       let options: MemberFilterChoice[] = [];
       const operators: MemberFilterOperator[] = [];
+      const bindings = new Map<string, Binding>();
       try {
         label = text(c.displayName);
         const seen = new Set<string>();
@@ -444,6 +599,14 @@ function customFields(
             continue;
           }
           if (equals) options = choices(record(input.listOfIDs).allowedValues);
+          bindings.set(operator, {
+            filterID: nativeId(f.filterID),
+            fixedInputs: {
+              networkFieldID: id,
+              extendedFieldFieldType: "5",
+              fieldTypeInstanceID: current,
+            },
+          });
           operators.push({
             operator,
             negation: f.operatorNegated !== undefined,
@@ -467,6 +630,7 @@ function customFields(
           operators: reason ? [] : operators,
         },
         choices: reason ? [] : options,
+        bindings,
       });
     }
   return fields;
@@ -481,6 +645,171 @@ function catalog(data: Record<string, unknown>): Field[] {
   ].sort((a, b) =>
     a.descriptor.fieldId.localeCompare(b.descriptor.fieldId, "en"),
   );
+}
+
+async function readCatalog(
+  input: MemberFiltersInput,
+  context: ResourceQuery,
+  network: Network,
+) {
+  context.check();
+  const groupId =
+    input.groupId ??
+    (input.groupName === undefined
+      ? (await network.discoverGroups(context)).find((g) => g.isEveryone)?.id
+      : (await network.findGroup(context, input.groupName)).id);
+  if (!groupId) throw new FlockbotError("everyone_not_found");
+  context.check();
+  const data = record(
+    await context.query(
+      `group/${groupId}/people?ajax`,
+      "includeUnsubscribed=0",
+    ),
+  );
+  context.check();
+  if (data.canView === false) throw new FlockbotError("permission_denied");
+  if (data.success === false)
+    throw new FlockbotError(
+      "upstream_rejected",
+      undefined,
+      undefined,
+      undefined,
+      "success_false",
+    );
+  if (data.success !== undefined && data.success !== true)
+    return invalidResponse("expected_success");
+  if (identifier(data.groupID) !== groupId)
+    return invalidResponse("group_identity_mismatch");
+  if (data.includeContacts !== false)
+    return invalidResponse("contacts_included");
+  const includeInactive = memberFlag(data.canViewInactiveMembers);
+  return {
+    groupId,
+    includeInactive,
+    everyone: memberFlag(data.isEveryoneGroup),
+    fields: catalog(data),
+    generalSearchFilter: record(data.peopleFilterInfo).generalSearchFilter,
+  };
+}
+
+function availableField(fields: Field[], fieldId: string): Field {
+  const selected = fields.find((f) => f.descriptor.fieldId === fieldId);
+  if (!selected) throw new FlockbotError("member_filter_unavailable");
+  if (!selected.descriptor.available) {
+    if (selected.descriptor.unavailableReason === "unsupported_definition")
+      return invalidResponse("search_filter_shape");
+    if (selected.descriptor.unavailableReason === "unsafe_label")
+      return invalidResponse("search_filter_label");
+    throw new FlockbotError("member_filter_unavailable");
+  }
+  return selected;
+}
+
+/** Compile only validated catalog bindings; no upstream member records escape. */
+export async function compileMemberCount(
+  input: {
+    groupId?: string | undefined;
+    groupName?: string | undefined;
+    searchTerm?: string | undefined;
+    criteria?: MemberCriteria | undefined;
+    includeInactive: boolean;
+  },
+  context: ResourceQuery,
+  network: Network,
+) {
+  const current = await readCatalog(input, context, network);
+  if (input.includeInactive && !current.includeInactive)
+    throw new FlockbotError("permission_denied");
+  const body = new URLSearchParams({
+    includeInactive: String(input.includeInactive),
+  });
+  const put = (
+    prefix: string,
+    binding: Binding,
+    negated: boolean,
+    values: Record<string, string>,
+  ) => {
+    body.set(`${prefix}[filterID]`, binding.filterID);
+    body.set(`${prefix}[isNegated]`, String(negated));
+    for (const [key, value] of Object.entries({
+      ...binding.fixedInputs,
+      ...values,
+    }))
+      body.set(`${prefix}[inputs][${key}]`, value);
+  };
+  const any = (input.criteria?.any ?? []).map((branch, branchIndex) => ({
+    all: branch.all.map((p, index) => {
+      const field = availableField(current.fields, p.fieldId);
+      const operator = field.descriptor.operators.find(
+        (o) => o.operator === p.operator,
+      );
+      const binding = field.bindings.get(p.operator);
+      if (!operator || !binding || (p.negated && !operator.negation))
+        throw new FlockbotError("member_filter_unavailable");
+      const values: Record<string, string> = {};
+      let choice: MemberFilterChoice | undefined;
+      const rule = OPERATOR_VALUES[p.operator];
+      const value = rule === null ? undefined : memberSearchText(p.value);
+      if (p.operator === "contains" && value !== undefined)
+        values.searchTerm = value;
+      if (p.operator === "equals" || p.operator === "in_group") {
+        choice = field.choices.find((c) => c.id === value);
+        if (!choice) throw new FlockbotError("member_filter_unavailable");
+        values[p.operator === "equals" ? "listOfIDs" : "otherGroupID"] =
+          choice.id;
+      }
+      if (field.descriptor.type === "date") {
+        const dateQueryType = DATE_OPERATORS.get(p.operator);
+        if (value === undefined || dateQueryType === undefined)
+          throw new FlockbotError("member_filter_unavailable");
+        values.groupID = current.groupId;
+        values.date = value;
+        values.dateQueryType = dateQueryType;
+      }
+      put(
+        `request[and][0][or][${branchIndex}][and][${index}]`,
+        binding,
+        p.negated === true,
+        values,
+      );
+      return {
+        ...p,
+        displayName: field.descriptor.displayName,
+        ...(choice ? { choiceLabel: choice.label } : {}),
+        missingValueBehavior: operator.missingValueBehavior,
+      };
+    }),
+  }));
+  if (input.searchTerm !== undefined) {
+    const f = record(current.generalSearchFilter);
+    const search = record(record(f.inputs).searchTerm);
+    if (
+      f.filterName !== "generalPeopleSearch" ||
+      f.operator !== "Search" ||
+      Object.keys(record(f.inputs)).length !== 1 ||
+      search.inputName !== "searchTerm" ||
+      search.dataType !== "text" ||
+      search.allowedValues !== null ||
+      search.allowMultiple !== false
+    )
+      return invalidResponse("search_filter_shape");
+    if (!permitted(f, current.everyone))
+      throw new FlockbotError("member_filter_unavailable");
+    put(
+      `request[and][${any.length ? 1 : 0}][or][0][and][0]`,
+      { filterID: nativeId(f.filterID), fixedInputs: {} },
+      false,
+      { searchTerm: input.searchTerm },
+    );
+  }
+  context.check();
+  const criteriaSummary: MemberCriteriaSummary = {
+    groupId: current.groupId,
+    includeInactive: input.includeInactive,
+    ...(input.searchTerm === undefined ? {} : { searchTerm: input.searchTerm }),
+    any,
+  };
+  return { groupId: current.groupId, body: body.toString(), criteriaSummary };
 }
 
 /** Read-only, scoped catalog projection. Native people rows never enter results. */
@@ -503,10 +832,7 @@ export class MemberFilters {
       offset < 0 ||
       offset > Number.MAX_SAFE_INTEGER - MEMBER_FILTER_PAGE_SIZE ||
       (input.fieldId !== undefined &&
-        (typeof input.fieldId !== "string" ||
-          !/^(?:[a-z_]{1,40}|custom:[1-9]\d{0,127}:select:[1-9]\d{0,127})$/.test(
-            input.fieldId,
-          )))
+        (typeof input.fieldId !== "string" || !FIELD_ID.test(input.fieldId)))
     )
       throw new FlockbotError("invalid_input");
     this.#input = Object.freeze({
@@ -524,52 +850,16 @@ export class MemberFilters {
     context: ResourceQuery,
     network: Network,
   ): Promise<MemberFiltersResult> {
-    context.check();
     const input = this.#input;
-    const groupId =
-      input.groupId ??
-      (input.groupName === undefined
-        ? (await network.discoverGroups(context)).find((g) => g.isEveryone)?.id
-        : (await network.findGroup(context, input.groupName)).id);
-    if (!groupId) throw new FlockbotError("everyone_not_found");
-    context.check();
-    const data = record(
-      await context.query(
-        `group/${groupId}/people?ajax`,
-        "includeUnsubscribed=0",
-      ),
+    const { groupId, includeInactive, fields } = await readCatalog(
+      input,
+      context,
+      network,
     );
-    context.check();
-    if (data.canView === false) throw new FlockbotError("permission_denied");
-    if (data.success === false)
-      throw new FlockbotError(
-        "upstream_rejected",
-        undefined,
-        undefined,
-        undefined,
-        "success_false",
-      );
-    if (data.success !== undefined && data.success !== true)
-      return invalidResponse("expected_success");
-    if (identifier(data.groupID) !== groupId)
-      return invalidResponse("group_identity_mismatch");
-    if (data.includeContacts !== false)
-      return invalidResponse("contacts_included");
-    const includeInactive = memberFlag(data.canViewInactiveMembers);
-    const fields = catalog(data);
     const selected =
       input.fieldId === undefined
         ? undefined
-        : fields.find((f) => f.descriptor.fieldId === input.fieldId);
-    if (input.fieldId !== undefined && !selected)
-      throw new FlockbotError("member_filter_unavailable");
-    if (selected && !selected.descriptor.available) {
-      if (selected.descriptor.unavailableReason === "unsupported_definition")
-        return invalidResponse("search_filter_shape");
-      if (selected.descriptor.unavailableReason === "unsafe_label")
-        return invalidResponse("search_filter_label");
-      throw new FlockbotError("member_filter_unavailable");
-    }
+        : availableField(fields, input.fieldId);
     const offset = input.offset ?? 0;
     const total = selected ? selected.choices.length : fields.length;
     if (offset > total) throw new FlockbotError("invalid_input");

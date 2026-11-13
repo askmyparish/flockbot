@@ -26,7 +26,14 @@ export {
   type MemberSearchInput,
   type MemberSearchField,
   type MemberSearchResult,
+  type MemberCountResult,
+  type MemberSearchResultFor,
 } from "./models/member-search.js";
+export type {
+  MemberPredicate,
+  MemberCriteria,
+  MemberCriteriaSummary,
+} from "./models/member-filters.js";
 export type {
   MemberField,
   GroupMemberField,
