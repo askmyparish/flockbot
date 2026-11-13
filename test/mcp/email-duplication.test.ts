@@ -125,59 +125,66 @@ describe("native published email duplication", () => {
     );
   });
 
-  it("copies raw multi-section content and all ordinary groups, restores sender and verifies new photo identities", async () => {
-    const f = fixture();
-    const original = structuredClone(f.source);
-    f.persisted.noteTargets.reverse();
-    expect(await f.run()).toEqual({
-      sourceNoteId: "801",
-      noteId: "803",
-      autosaveId: "802",
-      groupIds: ["101", "102"],
-      status: "draft",
-      verified: true,
-      url: "https://example-parish.flocknote.com/note/803",
-    });
-    expect(f.source).toEqual(original);
-    expect(f.requests.map((r) => r.path)).toEqual([
-      "composer/editNote",
-      "network/getMetadata",
-      "dashboard",
-      "composer/duplicateNote",
-      "composer/save2",
-      "composer/save2",
-      "composer/editNote",
-    ]);
-    expect(f.requests[3]?.body).toBe("groupID=&noteID=801&fromComposer=1");
-    const saves = f.requests
-      .filter((r) => r.path === "composer/save2")
-      .map((r) => new URLSearchParams(r.body));
-    expect(saves.map((p) => [p.get("ID"), p.get("status")])).toEqual([
-      ["0", "autosaved"],
-      ["803", "draft"],
-    ]);
-    for (const p of saves) {
-      expect(p.get("autosaveID")).toBe("802");
-      expect(p.get("fromName")).toBe("The Choir");
-      expect(p.get("title")).toBe("Annual choir plans");
-      expect([
-        p.get("noteTargets[0][groupID]"),
-        p.get("noteTargets[1][groupID]"),
-      ]).toEqual(["101", "102"]);
-      for (const key of ["schedule", "route2", "voiceCalls"])
-        expect(p.get(`options[${key}]`)).toBe("false");
-      expect(p.get("explicitSaveClick")).toBe("true");
-      expect(p.get("noteTargets[0][ID]")).toBe("");
-      expect(p.get("noteTargets[1][ID]")).toBe("");
-      expect([...p.values()]).not.toContain("801");
-      expect([...p.values()]).not.toContain("841");
-      expect([...p.values()]).not.toContain("842");
-      expect(p.get("returnVoiceData")).toBe("false");
-      expect(
-        [...p.keys()].some((key) => /sections|html|photourl|base64/i.test(key)),
-      ).toBe(false);
-    }
-  });
+  it.each(["The Choir", ""])(
+    "copies raw multi-section content and all ordinary groups with an empty new sender (source: %j)",
+    async (fromName) => {
+      const f = fixture();
+      f.source.fromName = fromName;
+      f.duplicate.fromName = fromName;
+      const original = structuredClone(f.source);
+      f.persisted.noteTargets.reverse();
+      expect(await f.run()).toEqual({
+        sourceNoteId: "801",
+        noteId: "803",
+        autosaveId: "802",
+        groupIds: ["101", "102"],
+        status: "draft",
+        verified: true,
+        url: "https://example-parish.flocknote.com/note/803",
+      });
+      expect(f.source).toEqual(original);
+      expect(f.requests.map((r) => r.path)).toEqual([
+        "composer/editNote",
+        "network/getMetadata",
+        "dashboard",
+        "composer/duplicateNote",
+        "composer/save2",
+        "composer/save2",
+        "composer/editNote",
+      ]);
+      expect(f.requests[3]?.body).toBe("groupID=&noteID=801&fromComposer=1");
+      const saves = f.requests
+        .filter((r) => r.path === "composer/save2")
+        .map((r) => new URLSearchParams(r.body));
+      expect(saves.map((p) => [p.get("ID"), p.get("status")])).toEqual([
+        ["0", "autosaved"],
+        ["803", "draft"],
+      ]);
+      for (const p of saves) {
+        expect(p.get("autosaveID")).toBe("802");
+        expect(p.get("fromName")).toBe("");
+        expect(p.get("title")).toBe("Annual choir plans");
+        expect([
+          p.get("noteTargets[0][groupID]"),
+          p.get("noteTargets[1][groupID]"),
+        ]).toEqual(["101", "102"]);
+        for (const key of ["schedule", "route2", "voiceCalls"])
+          expect(p.get(`options[${key}]`)).toBe("false");
+        expect(p.get("explicitSaveClick")).toBe("true");
+        expect(p.get("noteTargets[0][ID]")).toBe("");
+        expect(p.get("noteTargets[1][ID]")).toBe("");
+        expect([...p.values()]).not.toContain("801");
+        expect([...p.values()]).not.toContain("841");
+        expect([...p.values()]).not.toContain("842");
+        expect(p.get("returnVoiceData")).toBe("false");
+        expect(
+          [...p.keys()].some((key) =>
+            /sections|html|photourl|base64/i.test(key),
+          ),
+        ).toBe(false);
+      }
+    },
+  );
 
   it.each([
     [
@@ -268,6 +275,22 @@ describe("native published email duplication", () => {
           "unknown module": "duplicate_content_unsupported",
           layout: "duplicate_content_unsupported",
         }[name],
+      });
+      expect(f.requests.some((r) => /duplicateNote|save/.test(r.path))).toBe(
+        false,
+      );
+    },
+  );
+
+  it.each([null, undefined, 42])(
+    "rejects a non-string source sender before writes (%j)",
+    async (fromName) => {
+      const f = fixture();
+      Object.assign(f.source, { fromName });
+      await expect(f.run()).rejects.toMatchObject({
+        code: "draft_not_submitted",
+        reason: "duplicate_source_unsupported",
+        outcome: "not_submitted",
       });
       expect(f.requests.some((r) => /duplicateNote|save/.test(r.path))).toBe(
         false,
@@ -448,6 +471,33 @@ describe("native published email duplication", () => {
         reason: "duplicate_verification",
         draftProgress: { noteId: "803", autosaveId: "802", stage: "verify" },
       });
+    },
+  );
+
+  it.each(["The Choir", null, undefined])(
+    "rejects a persisted sender that is not empty (%j)",
+    async (fromName) => {
+      const f = fixture((path, body, response) => {
+        if (
+          path === "composer/editNote" &&
+          new URLSearchParams(body).get("noteID") === "803"
+        )
+          Object.assign((response as { noteInfo: object }).noteInfo, {
+            fromName,
+          });
+        return response;
+      });
+      await expect(f.run()).rejects.toMatchObject({
+        outcome: "unknown",
+        reason: "duplicate_verification",
+        draftProgress: { noteId: "803", autosaveId: "802", stage: "verify" },
+      });
+      expect(
+        f.requests.filter((r) => r.path === "composer/duplicateNote"),
+      ).toHaveLength(1);
+      expect(
+        f.requests.filter((r) => r.path === "composer/save2"),
+      ).toHaveLength(2);
     },
   );
 

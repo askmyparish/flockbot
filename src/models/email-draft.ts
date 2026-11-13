@@ -7,7 +7,7 @@ import {
   type GroupSelector,
 } from "./member-groups.js";
 import type { Network } from "./network.js";
-import { invalidResponse, record, successful, text } from "./parsing.js";
+import { invalidResponse, record, successful } from "./parsing.js";
 import type { ResourceQuery } from "./resource-read.js";
 import {
   encodeDraftText,
@@ -382,7 +382,6 @@ export class EmailDraft {
     )
       return invalidResponse("draft_initialization");
     const selectedTarget = target(note.noteTargets, groupId);
-    const fromName = text(note.fromName);
     const userId = id(note.userID);
     if (!Number.isSafeInteger(note.themeID) || (note.themeID as number) < 0)
       return invalidResponse("draft_initialization");
@@ -393,7 +392,7 @@ export class EmailDraft {
     const payload = {
       type: "email",
       title: input.subject,
-      fromName,
+      fromName: "",
       networkID: networkId,
       userID: userId,
       themeID: note.themeID,
@@ -522,7 +521,7 @@ export class EmailDraft {
       verified.type !== "email" ||
       verified.status !== "draft" ||
       verified.title !== input.subject ||
-      verified.fromName !== fromName ||
+      verified.fromName !== "" ||
       verified.themeID !== note.themeID ||
       options.schedule !== false ||
       options.route2 !== false ||

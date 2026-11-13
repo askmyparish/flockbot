@@ -486,63 +486,71 @@ describe("create-only email drafts", () => {
     expect(JSON.stringify(draft)).toBe('{"type":"EmailDraft"}');
   });
 
-  it("creates one verified draft, preserving literal text and distinct IDs without preview or send", async () => {
-    const f = fixture((path, body, response) =>
-      path === "composer/editNote"
-        ? draftResponse(path, body, draftHtml.replace("A ", "A\t"))
-        : response,
-    );
-    expect(
-      await f.connection.createEmailDraft({
-        ...draftInput,
-        body: draftInput.body.replace("A ", "A\t").replaceAll("\n", "\r\n"),
-      }),
-    ).toEqual({
-      noteId: "803",
-      url: "https://example-parish.flocknote.com/note/803",
-      autosaveId: "801",
-      groupId: "101",
-      status: "draft",
-      verified: true,
-    });
-    expect(f.requests.map((r) => r.path)).toEqual(sequence);
-    const forms = f.requests
-      .filter((r) => r.body)
-      .map((r) => ({ path: r.path, form: new URLSearchParams(r.body) }));
-    expect(
-      forms
-        .find((r) => r.path === "composer/saveModule")
-        ?.form.get("data[html]"),
-    ).toBe(
-      "<div>A\t&amp;#60;b&amp;#62; &amp;#38;lt; &amp;#34;hi&amp;#34;<br><br>**literal** café 🕊<br></div>",
-    );
-    for (const { form } of forms.filter((r) => r.path === "composer/save2")) {
-      expect(form.get("options[schedule]")).toBe("false");
-      expect(form.get("options[route2]")).toBe("false");
-      expect(form.get("options[voiceCalls]")).toBe("false");
-      expect(form.get("noteTargets[0][groupID]")).toBe("101");
-      expect(form.get("fromName")).toBe("Example Parish");
-      expect(form.get("title")).toBe(`Q&A <b> "quoted" O'Neil`);
-    }
-    expect(
-      forms
-        .filter((r) => r.path === "composer/save2")
-        .map((r) => [
-          r.form.get("ID"),
-          r.form.get("autosaveID"),
-          r.form.get("explicitSaveClick"),
-        ]),
-    ).toEqual([
-      [null, null, "false"],
-      [null, "801", "true"],
-      ["803", "801", "true"],
-    ]);
-    expect(
-      forms
-        .find((r) => r.path === "composer/saveLayout")
-        ?.form.get("sections[0][modules][]"),
-    ).toBe("811");
-  });
+  it.each(["Example Parish", ""])(
+    "creates one verified draft, preserving literal text and distinct IDs without preview or send (upstream sender: %j)",
+    async (fromName) => {
+      const f = fixture((path, body, response) => {
+        if (path === "composer/createNote")
+          return {
+            ...draftInitialization(),
+            noteInfo: { ...draftInitialization().noteInfo, fromName },
+          };
+        return path === "composer/editNote"
+          ? draftResponse(path, body, draftHtml.replace("A ", "A\t"))
+          : response;
+      });
+      expect(
+        await f.connection.createEmailDraft({
+          ...draftInput,
+          body: draftInput.body.replace("A ", "A\t").replaceAll("\n", "\r\n"),
+        }),
+      ).toEqual({
+        noteId: "803",
+        url: "https://example-parish.flocknote.com/note/803",
+        autosaveId: "801",
+        groupId: "101",
+        status: "draft",
+        verified: true,
+      });
+      expect(f.requests.map((r) => r.path)).toEqual(sequence);
+      const forms = f.requests
+        .filter((r) => r.body)
+        .map((r) => ({ path: r.path, form: new URLSearchParams(r.body) }));
+      expect(
+        forms
+          .find((r) => r.path === "composer/saveModule")
+          ?.form.get("data[html]"),
+      ).toBe(
+        "<div>A\t&amp;#60;b&amp;#62; &amp;#38;lt; &amp;#34;hi&amp;#34;<br><br>**literal** café 🕊<br></div>",
+      );
+      for (const { form } of forms.filter((r) => r.path === "composer/save2")) {
+        expect(form.get("options[schedule]")).toBe("false");
+        expect(form.get("options[route2]")).toBe("false");
+        expect(form.get("options[voiceCalls]")).toBe("false");
+        expect(form.get("noteTargets[0][groupID]")).toBe("101");
+        expect(form.get("fromName")).toBe("");
+        expect(form.get("title")).toBe(`Q&A <b> "quoted" O'Neil`);
+      }
+      expect(
+        forms
+          .filter((r) => r.path === "composer/save2")
+          .map((r) => [
+            r.form.get("ID"),
+            r.form.get("autosaveID"),
+            r.form.get("explicitSaveClick"),
+          ]),
+      ).toEqual([
+        [null, null, "false"],
+        [null, "801", "true"],
+        ["803", "801", "true"],
+      ]);
+      expect(
+        forms
+          .find((r) => r.path === "composer/saveLayout")
+          ?.form.get("sections[0][modules][]"),
+      ).toBe("811");
+    },
+  );
 
   it.each([
     { subject: "" },
@@ -778,6 +786,8 @@ describe("create-only email drafts", () => {
     "body",
     "injected",
     "sender",
+    "null sender",
+    "missing sender",
     "schedule",
     "type",
     "identity",
@@ -797,6 +807,10 @@ describe("create-only email drafts", () => {
     if (field === "identity") response.noteInfo.ID = 999;
     if (field === "target") response.noteInfo.noteTargets[0]!.groupID = "999";
     if (field === "sender") response.noteInfo.fromName = "Other sender";
+    if (field === "null sender")
+      Object.assign(response.noteInfo, { fromName: null });
+    if (field === "missing sender")
+      Reflect.deleteProperty(response.noteInfo, "fromName");
     if (field === "schedule") response.noteInfo.options.schedule = true;
     if (field === "theme") response.noteInfo.themeID = 99;
     if (field === "route2") response.noteInfo.options.route2 = true;

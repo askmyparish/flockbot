@@ -278,7 +278,8 @@ export class EmailDuplication {
       return invalidResponse("duplicate_targets_unsupported");
     const originalContent = content(source, sourceId, networkId, false);
     text(source.title);
-    text(source.fromName);
+    if (typeof source.fromName !== "string")
+      return invalidResponse("duplicate_source_unsupported");
     if (!Number.isSafeInteger(source.themeID) || Number(source.themeID) < 0)
       return invalidResponse("duplicate_source_unsupported");
     const options = safeOptions(source);
@@ -346,7 +347,7 @@ export class EmailDuplication {
       type: "email",
       status: "autosaved",
       title: source.title,
-      fromName: source.fromName,
+      fromName: "",
       themeID: source.themeID,
       networkID: networkId,
       userID: id(duplicate.userID),
@@ -368,7 +369,7 @@ export class EmailDuplication {
     )
       return invalidResponse("note_identity_mismatch");
     done();
-    // The native first save can omit fromName; the final-ID save restores it.
+    // The native first save can omit fromName; set it on the final-ID save too.
     const final = record(
       (
         await write("metadata", "composer/save2", {
@@ -392,7 +393,7 @@ export class EmailDuplication {
       persisted.duplicate !== false ||
       persisted.autosaveID != null ||
       persisted.title !== source.title ||
-      persisted.fromName !== source.fromName ||
+      persisted.fromName !== "" ||
       persisted.themeID !== source.themeID ||
       !same(targets(persisted.noteTargets), originalTargets) ||
       !same(safeOptions(persisted), options) ||

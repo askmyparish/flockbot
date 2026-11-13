@@ -522,9 +522,10 @@ elements are not supported. File validation errors use `draft_image_file`;
 invalid upload metadata can use `draft_image_upload`.
 
 The writer uses the saved connection, checks the composer entry's readiness and
-billing branches, and inherits Flocknote's sender/theme. It saves a new email-only,
+billing branches, inherits Flocknote's theme, and sets the sender label to empty.
+It saves a new email-only,
 unscheduled draft through the JSON composer endpoints and reads it back to verify
-the ID, draft status, group target, routing, subject, sender/theme, and content before
+the ID, draft status, group target, routing, subject, empty sender label, theme, and content before
 returning `verified: true`, `noteId`, `autosaveId`, and `groupId`. Subsequent editing
 belongs in Flocknote. Sending, scheduling, test delivery, SMS/voice, attachments,
 arbitrary HTML and editing existing notes are not supported.
@@ -551,9 +552,11 @@ the existing shared sanitization. The direct development runner remains read-onl
 
 Use `find_notes` to identify an older email, clarify ambiguous matches, then call
 `duplicate_email_draft` with its `noteId`. This is a native copy, not a Markdown
-reconstruction. It preserves the subject, sender label, theme, ordered raw content
+reconstruction. It preserves the subject, theme, ordered raw content
 and all resolvable original ordinary groups. The groups' current membership applies;
-the original recipient list is not frozen or copied.
+the original recipient list is not frozen or copied. The new draft's sender label
+is cleared, whether the source label is empty or nonempty, and verified as exactly
+empty on read-back. The source label is unchanged.
 
 The initial supported shape is a published email with single-column sections
 (`layout: "1"`), text, photos and URL buttons. Unknown layouts/modules and
