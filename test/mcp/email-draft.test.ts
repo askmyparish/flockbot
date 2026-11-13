@@ -1,4 +1,6 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspect } from "node:util";
@@ -10,6 +12,7 @@ import {
   type EmailDraftInput,
 } from "../../src/index.js";
 import { BrowserConnection } from "../../adapters/mcp/src/browser-connection.js";
+import type { DraftImage } from "../../adapters/mcp/src/draft-images.js";
 import { SerialCoordinator } from "../../adapters/mcp/src/serial-coordinator.js";
 import {
   failureDiagnostic,
@@ -27,6 +30,8 @@ import {
   blockDraftInput,
   blockDraftStored,
   blockDraftResponse,
+  imageDraftInput,
+  imageDraftResponse,
 } from "../fixtures/email-draft.js";
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -39,6 +44,7 @@ function fixture(
     body: string | undefined,
     response: unknown,
     count: number,
+    photo?: DraftImage,
   ) => unknown,
 ) {
   const requests: {
@@ -46,10 +52,17 @@ function fixture(
     method: string;
     body?: string | undefined;
   }[] = [];
-  const request = async (path: string, method = "GET", body?: string) => {
+  const request = async (
+    path: string,
+    method = "GET",
+    body?: string,
+    photo?: DraftImage,
+  ) => {
     requests.push({ path, method, body });
     const response = draftResponse(path, body);
-    return change ? change(path, body, response, requests.length) : response;
+    return change
+      ? change(path, body, response, requests.length, photo)
+      : response;
   };
   const profile = mkdtempSync(join(tmpdir(), "flockbot-draft-"));
   writeFileSync(
@@ -862,5 +875,253 @@ describe("create-only email drafts", () => {
         new Network("example-parish"),
       ),
     ).toMatchObject({ verified: true, noteId: "803" });
+  });
+});
+
+describe("uploaded draft images", () => {
+  function files() {
+    const directory = mkdtempSync(join(tmpdir(), "flockbot-image-test-"));
+    const jpeg = Buffer.from([255, 216, 255, 224, 10, 20, 30]);
+    const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 40, 50]);
+    const first = join(directory, "private-photo.jpg"),
+      second = join(directory, "second.png");
+    writeFileSync(first, jpeg);
+    writeFileSync(second, png);
+    cleanup.push(async () => {
+      rmSync(directory, { recursive: true, force: true });
+    });
+    return { directory, first, second, jpeg, png };
+  }
+
+  it("uploads validated snapshots and verifies interleaved photo identities", async () => {
+    const images = files(),
+      response = imageDraftResponse();
+    const uploads: DraftImage[] = [];
+    const f = fixture((path, body, _r, _n, photo) => {
+      if (path === "dashboard")
+        writeFileSync(images.first, "changed after validation");
+      if (photo) uploads.push(photo);
+      return response(path, body);
+    });
+    expect(
+      await f.connection.createEmailDraft(
+        imageDraftInput(images.first, images.second),
+      ),
+    ).toMatchObject({ verified: true, noteId: "803" });
+    expect(uploads.map((p) => Buffer.from(p.base64, "base64"))).toEqual([
+      images.jpeg,
+      images.png,
+    ]);
+    expect(uploads.map((p) => [p.filename, p.mime])).toEqual([
+      [expect.stringMatching(/^[0-9a-f-]{36}\.jpg$/), "image/jpeg"],
+      [expect.stringMatching(/^[0-9a-f-]{36}\.png$/), "image/png"],
+    ]);
+    const modules = f.requests
+      .filter((r) => r.path === "composer/saveModule")
+      .map((r) => new URLSearchParams(r.body));
+    expect(modules.map((p) => p.get("type"))).toEqual([
+      "photo",
+      "button",
+      "photo",
+    ]);
+    expect(modules.map((p) => p.get("data[photoID]"))).toEqual([
+      "901",
+      null,
+      "902",
+    ]);
+    expect(
+      new URLSearchParams(
+        f.requests.find((r) => r.path === "composer/saveLayout")!.body,
+      ).getAll("sections[0][modules][]"),
+    ).toEqual(["811", "812", "813"]);
+  });
+
+  it("preserves verified success when snapshot cleanup fails", async () => {
+    const images = files(),
+      response = imageDraftResponse();
+    const f = fixture((path, body) => response(path, body));
+    const remove = vi
+      .spyOn(fsPromises, "rm")
+      .mockRejectedValue(Object.assign(new Error("locked"), { code: "EBUSY" }));
+    syncBuiltinESMExports();
+    try {
+      expect(
+        await f.connection.createEmailDraft(
+          imageDraftInput(images.first, images.second),
+        ),
+      ).toMatchObject({ verified: true, noteId: "803" });
+    } finally {
+      const paths = remove.mock.calls.map(([path]) => path);
+      remove.mockRestore();
+      syncBuiltinESMExports();
+      for (const path of paths)
+        await fsPromises.rm(path, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    "missing",
+    "directory",
+    "empty",
+    "mismatch",
+    "unsupported",
+    "relative",
+    "oversized",
+  ])("rejects %s files before any remote request", async (kind) => {
+    const images = files();
+    let second = images.second;
+    if (kind === "missing") second += ".missing.png";
+    if (kind === "directory") {
+      second = join(images.directory, "directory.png");
+      mkdirSync(second);
+    }
+    if (kind === "empty") writeFileSync(second, "");
+    if (kind === "mismatch") writeFileSync(second, images.jpeg);
+    if (kind === "unsupported") {
+      second += ".webp";
+      writeFileSync(second, images.png);
+    }
+    if (kind === "relative") second = "photo.png";
+    if (kind === "oversized") writeFileSync(second, Buffer.alloc(12_000_001));
+    const f = fixture();
+    const error = await f.connection
+      .createEmailDraft(imageDraftInput(images.first, second))
+      .catch((e) => e);
+    expect(error).toMatchObject({
+      code: "invalid_input",
+      reason: "draft_image_file",
+      outcome: "not_submitted",
+    });
+    expect(JSON.stringify(error)).not.toContain(images.directory);
+    expect(f.requests).toEqual([]);
+  });
+
+  it("accepts the exact browser size ceiling and GIF signatures", async () => {
+    const images = files(),
+      data = Buffer.alloc(12_000_000);
+    images.jpeg.copy(data);
+    writeFileSync(images.first, data);
+    const gif = join(images.directory, "animated.gif");
+    writeFileSync(gif, Buffer.from("GIF89a\x01\x00\x01\x00"));
+    const response = imageDraftResponse();
+    const uploads: DraftImage[] = [];
+    const f = fixture((p, b, _r, _n, photo) => {
+      if (photo) uploads.push(photo);
+      return response(p, b);
+    });
+    expect(
+      await f.connection.createEmailDraft(imageDraftInput(images.first, gif)),
+    ).toMatchObject({ verified: true });
+    expect(Buffer.from(uploads[0]!.base64, "base64").length).toBe(12_000_000);
+    expect(uploads[1]!.mime).toBe("image/gif");
+  });
+
+  it.each(["identity", "dimensions", "link", "extra"])(
+    "does not verify changed photo %s",
+    async (kind) => {
+      const images = files(),
+        response = imageDraftResponse();
+      const f = fixture((p, b) => {
+        const r = response(p, b) as ReturnType<typeof draftReadback>;
+        if (p === "composer/editNote") {
+          const data = r.noteInfo.sections[0]!.col1.items[0]!.data as Record<
+            string,
+            unknown
+          >;
+          if (kind === "identity") data.photoID = "999";
+          if (kind === "dimensions")
+            data.photodimensions = { width: 0, height: 120 };
+          if (kind === "link") data.photourl = "javascript:alert(1)";
+          if (kind === "extra") data.photolink = "https://example.test/changed";
+        }
+        return r;
+      });
+      await expect(
+        f.connection.createEmailDraft(
+          imageDraftInput(images.first, images.second),
+        ),
+      ).rejects.toMatchObject({
+        reason: "draft_verification",
+        outcome: "unknown",
+        draftProgress: {
+          stage: "verify",
+          photoIds: ["901", "902"],
+          noteId: "803",
+        },
+      });
+    },
+  );
+
+  it.each(["rejected", "malformed", "transport", "later-save"])(
+    "retains uploaded IDs without replay after %s failure",
+    async (kind) => {
+      const images = files(),
+        response = imageDraftResponse();
+      let uploads = 0;
+      const f = fixture((p, b) => {
+        if (p === "upload/photo/note" && ++uploads === 2) {
+          if (kind === "rejected") return { success: false };
+          if (kind === "malformed") return { success: true, photoID: null };
+          if (kind === "transport") throw new FlockbotError("transport_failed");
+        }
+        if (kind === "later-save" && p === "composer/saveSection")
+          throw new FlockbotError("transport_failed");
+        return response(p, b);
+      });
+      await expect(
+        f.connection.createEmailDraft(
+          imageDraftInput(images.first, images.second),
+        ),
+      ).rejects.toMatchObject({
+        outcome: "unknown",
+        draftProgress: {
+          stage: kind === "later-save" ? "section" : "upload",
+          photoIds: kind === "later-save" ? ["901", "902"] : ["901"],
+          autosaveId: "801",
+        },
+      });
+      expect(uploads).toBe(2);
+      expect(f.requests.some((r) => r.path === "composer/editNote")).toBe(
+        false,
+      );
+    },
+  );
+
+  it("stops after cancellation during upload without a late module save", async () => {
+    const images = files(),
+      response = imageDraftResponse(),
+      controller = new AbortController();
+    let release!: () => void,
+      entered = false;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const f = fixture(async (p, b) => {
+      if (p === "upload/photo/note") {
+        entered = true;
+        await blocked;
+      }
+      return response(p, b);
+    });
+    const result = f.connection
+      .createEmailDraft(imageDraftInput(images.first, images.second), {
+        signal: controller.signal,
+      })
+      .catch((e) => e);
+    await vi.waitFor(() => expect(entered).toBe(true));
+    controller.abort();
+    expect(await result).toMatchObject({
+      code: "operation_cancelled",
+      outcome: "unknown",
+      draftProgress: { stage: "upload", autosaveId: "801" },
+    });
+    release();
+    await f.connection.close();
+    expect(
+      f.requests.filter((r) => r.path === "upload/photo/note"),
+    ).toHaveLength(1);
+    expect(f.requests.some((r) => r.path === "composer/saveModule")).toBe(
+      false,
+    );
   });
 });

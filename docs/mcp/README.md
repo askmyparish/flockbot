@@ -486,6 +486,34 @@ operation-deadline safeguards still apply. Unsupported blocks or conflicting
 body/content representations fail before composer requests. Saved module IDs,
 types, order, text, button destinations and appearance must match before success.
 
+Image blocks use `{"type":"image","path":"/absolute/path/to/photo.jpg"}` in
+the same `content` array. The file must exist on the machine running Flockbot;
+save chat attachments there first. JPEG (`jpg`, `jpeg`, `jfif`), PNG and GIF
+files are supported up to 12,000,000 bytes each, matching the observed Flocknote
+browser uploader limit (not a verified server-side maximum). Missing, empty,
+non-regular, oversized and signature/extension-mismatched files are rejected
+before remote requests. Private temporary snapshots preserve the validated bytes
+until uploading finishes; only paths cross the existing bounded broker request.
+Uploads use randomized filenames with the original extension, not local names or
+a shared fixed basename.
+Snapshot cleanup is best-effort when the operation settles; an operating-system
+cleanup failure does not change the remote draft outcome. Image bytes and local
+paths are excluded from diagnostics, including verbose capture.
+
+The existing 25-second operation deadline includes setup, all uploads and draft
+verification; each browser request also has a 15-second timeout. Large or numerous
+images can exceed that budget even below the per-file limit. A timeout can leave
+uploaded assets or a partial draft: inspect the reported progress and Flocknote
+before resubmitting.
+
+Uploads use the saved browser session and Flocknote's multipart photo endpoint.
+Images become native photo modules with default appearance, retaining their order
+alongside text and buttons. JSON read-back verifies photo IDs, dimensions and safe
+hosted URLs as well as the existing draft checks. Image-only drafts are supported.
+HEIC, WebP, SVG, URL imports, conversion, resizing, image links and HTML `img`
+elements are not supported. File validation errors use `draft_image_file`;
+invalid upload metadata can use `draft_image_upload`.
+
 The writer uses the saved connection, checks the composer entry's readiness and
 billing branches, and inherits Flocknote's sender/theme. It saves a new email-only,
 unscheduled draft through the JSON composer endpoints and reads it back to verify
@@ -501,7 +529,10 @@ the conservative `unknown` outcome rather than promise no upstream side effect.
 
 This is a non-idempotent write. It never retries, resumes or automatically deletes
 partial drafts. Failures include `draftProgress` with the failing `stage`,
-`completedStages`, and any known `noteId`/`autosaveId`. After possible submission,
+`completedStages`, any known `noteId`/`autosaveId`, and `photoIds` returned by
+successful uploads. An interrupted `upload` stage may have created an asset even
+without a returned photo ID. Uploaded assets may remain when a later draft step
+fails; the connector neither deletes them nor claims rollback. After possible submission,
 the module stage is complete only when every requested block was saved; an
 interrupted module stage can leave earlier blocks persisted.
 `outcome: unknown` means a partial draft may remain; inspect Flocknote before

@@ -69,6 +69,7 @@ import {
 } from "../../../src/models/member-search.js";
 import { FlocknoteLogin } from "../../../src/models/flocknote-login.js";
 import { Operation } from "../../../src/operation.js";
+import { DraftImages, type DraftImage } from "./draft-images.js";
 import {
   BrowserAuthenticationError,
   BrowserConnectionError,
@@ -654,8 +655,11 @@ export class BrowserConnection {
       method: "GET" | "POST",
       body?: string,
       writeEntry = false,
+      photo?: DraftImage,
     ) => {
-      const data = await session.request(path, method, body);
+      const data = photo
+        ? await session.request(path, method, body, photo)
+        : await session.request(path, method, body);
       validationSource(path);
       try {
         return accepted(data, path === "dashboard", writeEntry);
@@ -681,6 +685,10 @@ export class BrowserConnection {
           /^network\/\d+\/writeNewNote\?ajax$/.test(path),
         );
       },
+      upload: (photo: DraftImage) => {
+        op.check();
+        return read("upload/photo/note", "POST", undefined, false, photo);
+      },
       check: () => op.check(),
       validationSource,
     };
@@ -699,9 +707,25 @@ export class BrowserConnection {
   ) {
     const draft = new EmailDraft(input);
     try {
-      return await this.#operate(options, (session, op, network) =>
-        draft.create(this.#resources(session, op), network),
-      );
+      return await this.#operate(options, async (session, op, network) => {
+        const images = new DraftImages();
+        try {
+          await images.prepare(draft.toInput(), () => op.check());
+          const resources = this.#resources(session, op);
+          return await draft.create(
+            {
+              ...resources,
+              uploadImage: async (path) => {
+                const photo = await images.read(path);
+                return resources.upload(photo);
+              },
+            },
+            network,
+          );
+        } finally {
+          await images.close();
+        }
+      });
     } catch (error) {
       const outcome = draft.submitted ? "unknown" : "not_submitted";
       if (error instanceof BrowserConnectionError)

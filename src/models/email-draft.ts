@@ -20,6 +20,7 @@ export type EmailDraftBlock =
       readonly body: string;
       readonly bodyFormat?: "text" | "html" | undefined;
     }
+  | { readonly type: "image"; readonly path: string }
   | { readonly type: "button"; readonly text: string; readonly url: string };
 
 export interface EmailDraftInput extends GroupSelector {
@@ -38,6 +39,7 @@ export interface EmailDraftResult {
 export interface DraftContext extends ResourceQuery {
   /** Submit once. The caller owns authentication, coordination and diagnostics. */
   compose(path: string, body: string): Promise<unknown>;
+  uploadImage?(path: string): Promise<unknown>;
 }
 
 const buttonStyle = {
@@ -135,8 +137,9 @@ function persistedText(value: unknown): string {
 export class EmailDraft {
   readonly #input: EmailDraftInput;
   readonly #modules: {
-    type: "text" | "button";
+    type: "text" | "button" | "photo";
     data: Record<string, string>;
+    path?: string | undefined;
     signature?: string | undefined;
     plainText?: string | undefined;
   }[];
@@ -176,6 +179,16 @@ export class EmailDraft {
         if (!value || typeof value !== "object" || Array.isArray(value))
           throw new Error();
         const block = value as Record<string, unknown>;
+        if (block.type === "image") {
+          if (
+            Object.keys(block).some((k) => !["type", "path"].includes(k)) ||
+            typeof block.path !== "string" ||
+            !block.path.trim() ||
+            /[\p{Cc}\p{Cs}]/u.test(block.path)
+          )
+            throw new Error();
+          return Object.freeze({ type: "image", path: block.path });
+        }
         if (block.type === "button") {
           if (
             Object.keys(block).some(
@@ -238,6 +251,8 @@ export class EmailDraft {
       throw new FlockbotError("invalid_input", undefined, "not_submitted");
     }
     this.#modules = normalized.map((block) => {
+      if (block.type === "image")
+        return { type: "photo", path: block.path, data: {} };
       if (block.type === "button")
         return {
           type: "button",
@@ -280,6 +295,9 @@ export class EmailDraft {
     return {
       ...this.#progress,
       completedStages: [...this.#progress.completedStages],
+      ...(this.#progress.photoIds
+        ? { photoIds: [...this.#progress.photoIds] }
+        : {}),
     };
   }
   get submitted(): boolean {
@@ -292,6 +310,11 @@ export class EmailDraft {
   ): Promise<EmailDraftResult> {
     const input = this.#input;
     context.check();
+    if (
+      this.#modules.some((module) => module.type === "photo") &&
+      !context.uploadImage
+    )
+      throw new FlockbotError("invalid_configuration");
     const group = input.groupId
       ? (await network.discoverGroups(context)).find(
           (g) => g.id === input.groupId,
@@ -419,6 +442,20 @@ export class EmailDraft {
     done();
     const moduleIds: string[] = [];
     for (const block of this.#modules) {
+      if (block.type === "photo") {
+        this.#progress = { ...this.#progress, stage: "upload" };
+        context.check();
+        this.#submitted = true;
+        const uploaded = successful(await context.uploadImage!(block.path!));
+        const photoId = id(uploaded.photoID);
+        this.#progress = {
+          ...this.#progress,
+          photoIds: [...(this.#progress.photoIds ?? []), photoId],
+        };
+        if (typeof uploaded.url !== "string" || !safeDraftUrl(uploaded.url))
+          return invalidResponse("draft_image_upload");
+        block.data.photoID = photoId;
+      }
       const module = successful(
         await request("module", "composer/saveModule", {
           noteID: autosaveId,
@@ -433,6 +470,11 @@ export class EmailDraft {
         return invalidResponse("duplicate_identifier");
       moduleIds.push(moduleId);
     }
+    if (this.#progress.photoIds?.length)
+      this.#progress = {
+        ...this.#progress,
+        completedStages: [...this.#progress.completedStages, "upload"],
+      };
     done();
     const section = successful(
       await request("section", "composer/saveSection", {
@@ -521,7 +563,31 @@ export class EmailDraft {
       const data = record(item.data);
       if (item.type !== expected.type || id(data.ID) !== moduleIds[index])
         return invalidResponse("draft_verification");
-      if (expected.type === "button") {
+      if (expected.type === "photo") {
+        const dimensions = record(data.photodimensions);
+        if (
+          id(data.photoID) !== expected.data.photoID ||
+          typeof data.photourl !== "string" ||
+          !safeDraftUrl(data.photourl) ||
+          !Number.isSafeInteger(dimensions.width) ||
+          Number(dimensions.width) <= 0 ||
+          !Number.isSafeInteger(dimensions.height) ||
+          Number(dimensions.height) <= 0 ||
+          Object.keys(data).some(
+            (key) =>
+              ![
+                "photoID",
+                "ID",
+                "noteID",
+                "networkID",
+                "noteType",
+                "photodimensions",
+                "photourl",
+              ].includes(key),
+          )
+        )
+          return invalidResponse("draft_verification");
+      } else if (expected.type === "button") {
         if (
           Object.entries(expected.data).some(
             ([key, value]) => data[key] !== value,

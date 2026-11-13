@@ -37,6 +37,7 @@ export const draftContentSchema = z
           url: z.string().min(1),
         })
         .strict(),
+      z.object({ type: z.literal("image"), path: z.string().min(1) }).strict(),
     ]),
   )
   .min(1)
@@ -53,6 +54,7 @@ const draftProgressSchema = z
       .string()
       .regex(/^\d{1,128}$/)
       .optional(),
+    photoIds: z.array(z.string().regex(/^\d{1,128}$/)).optional(),
   })
   .strict();
 export const brokerRequestSchema = z.discriminatedUnion("action", [

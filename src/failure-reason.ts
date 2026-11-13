@@ -45,6 +45,8 @@ export const FAILURE_REASONS = [
   "draft_html_unsupported",
   "draft_html_unsafe_link",
   "draft_html_empty",
+  "draft_image_file",
+  "draft_image_upload",
   "sending_summary_shape",
   "membership_confirmation",
   "authentication_shape",

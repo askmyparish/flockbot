@@ -38,6 +38,8 @@ import {
   htmlDraftStored,
   blockDraftInput,
   blockDraftResponse,
+  imageDraftInput,
+  imageDraftResponse,
 } from "../fixtures/email-draft.js";
 import { safeDiagnostic } from "../../adapters/mcp/src/diagnostics.js";
 import { FailureLog } from "../../adapters/mcp/src/failure-log.js";
@@ -56,9 +58,19 @@ async function fixture() {
   const visits: { path: string; method: string }[] = [];
   const emailResponses: Record<string, unknown> = latestEmailResponses();
   const blocks = blockDraftResponse();
+  const images = imageDraftResponse();
   const state = {
     draft: false,
     draftBlocks: false,
+    draftImages: false,
+    uploads: [] as {
+      fields: string[];
+      filename: string;
+      mime: string;
+      size: string;
+      bytes: Uint8Array;
+      cookie: string | null;
+    }[],
     draftHtml: undefined as string | undefined,
     launches: 0,
     expired: false,
@@ -173,13 +185,34 @@ async function fixture() {
             await route.fulfill({ contentType: "text/html", body: value });
           else await json(value);
         } else if (state.draft) {
-          const value = state.draftBlocks
-            ? blocks(`${path}${url.search}`, request.postData() ?? undefined)
-            : draftResponse(
-                `${path}${url.search}`,
-                request.postData() ?? undefined,
-                state.draftHtml,
-              );
+          if (path === "upload/photo/note") {
+            const form = await new Response(
+              new Uint8Array(request.postDataBuffer()!),
+              {
+                headers: { "Content-Type": request.headers()["content-type"]! },
+              },
+            ).formData();
+            const file = form.get("qqfile") as File;
+            state.uploads.push({
+              fields: [...form.keys()],
+              filename: file.name,
+              mime: file.type,
+              size: String(form.get("qqtotalfilesize")),
+              bytes: new Uint8Array(await file.arrayBuffer()),
+              cookie: await request.headerValue("cookie"),
+            });
+            expect(form.get("qquuid")).toMatch(/^[0-9a-f-]{36}$/);
+            expect(form.get("qqfilename")).toBe(file.name);
+          }
+          const value = state.draftImages
+            ? images(`${path}${url.search}`, request.postData() ?? undefined)
+            : state.draftBlocks
+              ? blocks(`${path}${url.search}`, request.postData() ?? undefined)
+              : draftResponse(
+                  `${path}${url.search}`,
+                  request.postData() ?? undefined,
+                  state.draftHtml,
+                );
           if (typeof value === "string")
             await route.fulfill({ contentType: "text/html", body: value });
           else await json(value);
@@ -331,6 +364,73 @@ async function fixture() {
 describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
   "real Chromium with offline Flocknote fixtures",
   () => {
+    it("uploads image bytes as authenticated multipart through MCP without leaking file data", async () => {
+      const f = await fixture();
+      await f.signIn();
+      f.state.draft = true;
+      f.state.draftImages = true;
+      const first = join(f.profile, "private-photo.jpg"),
+        second = join(f.profile, "other.png");
+      const jpeg = Buffer.from([
+        255, 216, 255, 224, 13, 10, 0, 128, 255, 34, 65,
+      ]);
+      const png = Buffer.from([
+        137, 80, 78, 71, 13, 10, 26, 10, 255, 0, 13, 10,
+      ]);
+      writeFileSync(first, jpeg);
+      writeFileSync(second, png);
+      const server = createFlocknoteServer(f.connection);
+      const client = new Client({
+        name: "fictional-image-client",
+        version: "1",
+      });
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      await server.connect(a);
+      await client.connect(b);
+      cleanup.unshift(() => client.close());
+      const result = await client.callTool({
+        name: "create_email_draft",
+        arguments: {
+          ...imageDraftInput(first, second),
+          verboseDiagnostics: true,
+        },
+      });
+      expect(result.structuredContent).toMatchObject({
+        ok: true,
+        verified: true,
+        noteId: "803",
+      });
+      expect(f.state.uploads.map((x) => Buffer.from(x.bytes))).toEqual([
+        jpeg,
+        png,
+      ]);
+      expect(f.state.uploads.map((x) => [x.filename, x.mime, x.size])).toEqual([
+        [
+          expect.stringMatching(/^[0-9a-f-]{36}\.jpg$/),
+          "image/jpeg",
+          String(jpeg.length),
+        ],
+        [
+          expect.stringMatching(/^[0-9a-f-]{36}\.png$/),
+          "image/png",
+          String(png.length),
+        ],
+      ]);
+      for (const upload of f.state.uploads) {
+        expect(upload.fields).toEqual([
+          "qquuid",
+          "qqfilename",
+          "qqtotalfilesize",
+          "qqfile",
+        ]);
+        expect(upload.cookie).toContain("Flocknote=fictional-browser-session");
+      }
+      expect(JSON.stringify(result)).not.toContain(first);
+      expect(JSON.stringify(result)).not.toContain(jpeg.toString("base64"));
+      expect(JSON.stringify(result)).not.toContain("fictional-browser-session");
+      expect(f.state.external).toBe(0);
+    });
+
     it.each([draftInput, htmlDraftInput, blockDraftInput])(
       "creates an unscheduled draft through the actual browser fetch allowlist: $bodyFormat",
       async (input) => {

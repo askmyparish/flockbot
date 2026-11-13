@@ -271,3 +271,31 @@ initialization and save responses.
   recent-color collection scope/lifecycle.
 - Actual sending, test sends, queued scheduling, and cancellation; none is
   established by these editing requests.
+
+## Uploaded photo modules
+
+A later image capture establishes a multipart `POST /upload/photo/note` with
+`qquuid`, `qqfilename`, `qqtotalfilesize` and binary `qqfile`. A rejected WebP
+upload returned HTTP 200 with `success: false`; a JPEG upload returned
+`success: true`, numeric `photoID`, hosted `url` and `s3: true`. HTTP success
+alone does not establish an accepted upload. The captured browser uploader sets
+`sizeLimit: 12000000`; the server's exact byte boundary remains unverified.
+
+The composer saves the image with `POST /composer/saveModule`, using
+`noteType=email`, `type=photo`, `column=1`, `noteID` and `data[photoID]`.
+The returned module ID goes into the existing `saveLayout` module list. The UI
+first saved an empty photo placeholder, then replaced its layout reference after
+uploading. Controlled disposable test-parish probes confirmed that directly
+saving the populated module works without that placeholder.
+
+JPEG, PNG and GIF uploads were accepted in those probes. Reopening through
+`composer/editNote` returned the saved photo IDs in the requested order, with
+`data.ID`, `noteID`, `networkID`, `photodimensions` (numeric `width`/`height`) and
+`photourl`. Preview also included `noteType`; reopened data did not require it.
+Only default appearance was exercised. Cropping, linked images, custom dimensions,
+HEIC conversion, animation fidelity and delivered-email rendering remain unverified.
+
+Uploads and module saves are separate writes. An upload timeout can leave its
+outcome unknown, and an uploaded asset can survive a later draft failure. Neither
+this capture nor the probes establish an asset rollback/delete contract. Do not
+replay an uncertain upload or infer its absence solely from recent-image listings.

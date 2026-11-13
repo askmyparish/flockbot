@@ -14,6 +14,7 @@ import {
   draftResponse,
   htmlDraftStored,
   blockDraftResponse,
+  imageDraftResponse,
 } from "../../fixtures/email-draft.js";
 import { recordResponse } from "../../../adapters/mcp/src/diagnostics.js";
 import {
@@ -33,15 +34,26 @@ if (role === "broker") {
     factory: async () => {
       appendFileSync(join(profile, "events"), "launch\n");
       const blocks = blockDraftResponse();
+      const images = imageDraftResponse();
       return {
         signIn: async () => undefined,
         close: async () => {
           appendFileSync(join(profile, "events"), "close\n");
         },
-        request: async (path, method = "GET", body) => {
+        request: async (path, method = "GET", body, photo) => {
           appendFileSync(join(profile, "events"), `${method} ${path}\n`);
           const data = await (async () => {
             if (existsSync(join(profile, "draft"))) {
+              if (existsSync(join(profile, "draft-images"))) {
+                if (path === "upload/photo/note" && !photo?.base64)
+                  throw new Error("Missing fictional image bytes");
+                if (
+                  existsSync(join(profile, "draft-failure")) &&
+                  path === "composer/saveSection"
+                )
+                  return { success: false };
+                return images(path, body);
+              }
               if (
                 existsSync(join(profile, "draft-failure")) &&
                 path === "composer/saveModule"

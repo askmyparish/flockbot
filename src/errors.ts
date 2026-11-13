@@ -6,6 +6,7 @@ export const DRAFT_STAGES = [
   "entry",
   "initialize",
   "autosave",
+  "upload",
   "module",
   "section",
   "layout",
@@ -18,6 +19,7 @@ export interface DraftProgress {
   readonly completedStages: readonly (typeof DRAFT_STAGES)[number][];
   readonly autosaveId?: string | undefined;
   readonly noteId?: string | undefined;
+  readonly photoIds?: readonly string[] | undefined;
 }
 
 export type ErrorCode =

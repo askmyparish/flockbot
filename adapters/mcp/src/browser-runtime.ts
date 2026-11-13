@@ -6,6 +6,7 @@ import type { chromium, BrowserContext, Page } from "playwright";
 import { FlockbotError } from "../../../src/index.js";
 import { safeFailureReason } from "../../../src/failure-reason.js";
 import { recordResponse, responseError } from "./diagnostics.js";
+import type { DraftImage } from "./draft-images.js";
 
 const ANCHOR = "/__flockbot_request_context__";
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -15,6 +16,7 @@ export interface BrowserSession {
     path: string,
     method?: "GET" | "POST",
     body?: string,
+    photo?: DraftImage,
   ): Promise<unknown>;
   signIn(): Promise<void>;
   finishSignIn?(): Promise<void>;
@@ -161,8 +163,15 @@ export async function openBrowserSession(
         !page.isClosed() &&
         (browser.browser()?.isConnected() ?? false) &&
         !(signInPage?.isClosed() ?? false),
-      async request(path, method = "GET", body) {
-        if (!allowed(path, method)) throw new FlockbotError("invalid_path");
+      async request(path, method = "GET", body, photo) {
+        if (
+          photo
+            ? path !== "upload/photo/note" ||
+              method !== "POST" ||
+              body !== undefined
+            : !allowed(path, method)
+        )
+          throw new FlockbotError("invalid_path");
         const started = performance.now();
         let result: {
           data?: unknown;
@@ -175,7 +184,7 @@ export async function openBrowserSession(
         };
         try {
           result = await page.evaluate(
-            async ({ origin, path, method, body, limit }) => {
+            async ({ origin, path, method, body, photo, limit }) => {
               if (location.origin !== origin)
                 return { error: "invalid_response", reason: "origin_mismatch" };
               const controller = new AbortController();
@@ -186,20 +195,37 @@ export async function openBrowserSession(
                 bytes?: number;
               } = {};
               try {
+                let multipart: FormData | undefined;
+                if (photo) {
+                  const bytes = Uint8Array.from(atob(photo.base64), (c) =>
+                    c.charCodeAt(0),
+                  );
+                  multipart = new FormData();
+                  multipart.set("qquuid", crypto.randomUUID());
+                  multipart.set("qqfilename", photo.filename);
+                  multipart.set("qqtotalfilesize", String(bytes.length));
+                  multipart.set(
+                    "qqfile",
+                    new Blob([bytes], { type: photo.mime }),
+                    photo.filename,
+                  );
+                }
                 const response = await fetch(`${origin}/${path}`, {
                   method,
                   credentials: "same-origin",
                   redirect: "manual",
                   cache: "no-store",
                   signal: controller.signal,
-                  ...(body === undefined
-                    ? {}
-                    : {
-                        headers: {
-                          "Content-Type": "application/x-www-form-urlencoded",
-                        },
-                        body,
-                      }),
+                  ...(multipart
+                    ? { body: multipart }
+                    : body === undefined
+                      ? {}
+                      : {
+                          headers: {
+                            "Content-Type": "application/x-www-form-urlencoded",
+                          },
+                          body,
+                        }),
                 });
                 if (response.status >= 100 && response.status <= 599)
                   metadata.status = response.status;
@@ -306,6 +332,7 @@ export async function openBrowserSession(
               path,
               method,
               body,
+              photo,
               limit: MAX_BODY_BYTES,
             },
           );
