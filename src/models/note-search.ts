@@ -34,7 +34,14 @@ export interface NoteSearchResult {
   readonly limitations: readonly string[];
 }
 
-const filters = ["note", "event", "file", "user", "group", "comment"];
+const excludedFilters = [
+  "event",
+  "file",
+  "user",
+  "group",
+  "comment",
+  "userDocument",
+];
 
 function optionalText(value: unknown): string | null {
   return typeof value === "string" && !/\p{Cc}/u.test(value)
@@ -71,7 +78,7 @@ function groupTargets(
   return { groupTargets: targets, groupTargetsTruncated: clipped };
 }
 
-/** One broad parish query, projecting only note summaries from its mixed results. */
+/** One note-only parish query, projecting bounded summaries without enrichment. */
 export class NoteSearch {
   readonly #term: string;
   constructor(input: NoteSearchInput) {
@@ -99,8 +106,8 @@ export class NoteSearch {
     const body = new URLSearchParams({
       searchTerm: this.#term,
       networkID: networkId,
+      "filters[]": "note",
     });
-    for (const filter of filters) body.append("filters[]", filter);
     const response = await context.query(
       "supersearch/query?ajax",
       body.toString(),
@@ -111,9 +118,8 @@ export class NoteSearch {
       return invalidResponse("search_echo_mismatch");
     const echoed = record(data.searchFilters);
     if (
-      filters.some((key) => echoed[key] !== true) ||
-      (echoed.userDocument !== undefined &&
-        typeof echoed.userDocument !== "boolean")
+      echoed.note !== true ||
+      excludedFilters.some((key) => echoed[key] !== false)
     )
       return invalidResponse("search_filter_shape");
     if (!Array.isArray(data.searchResults))
@@ -185,7 +191,7 @@ export class NoteSearch {
       observedAt: new Date().toISOString(),
       limitations: [
         "One visible search page in upstream order, not chronological or an exhaustive note archive. An empty note result does not establish absence.",
-        "totalHits covers all requested entity kinds, not only notes. partial means more broad hits or locally clipped notes; equality does not prove completeness.",
+        "totalHits is Flocknote's reported count for the note-only search. partial means more upstream hits or locally clipped notes; equality does not prove completeness. Unexpected non-note rows are omitted and counted in omittedNonNoteCount.",
         "type preserves recognized search labels, not delivery status; scheduled does not establish sending. date is raw upstream evidence, not a proven original-send timestamp.",
         "Only targets with type group and an explicit groupID are included. Missing or malformed optional target metadata is unknown, not proof of no recipients. No recipient identities or bodies are returned.",
       ],

@@ -249,14 +249,7 @@ async function fixture({ onTestFinished, expect }: TestContext) {
         } else if (path === "supersearch/query" && url.search === "?ajax") {
           expect(request.method()).toBe("POST");
           const form = new URLSearchParams(request.postData() ?? "");
-          expect(form.getAll("filters[]")).toEqual([
-            "note",
-            "event",
-            "file",
-            "user",
-            "group",
-            "comment",
-          ]);
+          expect(form.getAll("filters[]")).toEqual(["note"]);
           expect(form.get("networkID")).toBe("201");
           expect(form.get("searchTerm")).toBe("choir + plans");
           await json(noteSearchResponse());

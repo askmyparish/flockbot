@@ -35,14 +35,14 @@ function fixture() {
 }
 
 describe("bounded parish note search", () => {
-  it("sends the established broad form and projects mixed results in upstream order without private payloads", async () => {
+  it("requests only notes and omits unexpected non-note results without private payloads", async () => {
     const f = fixture();
     const result = await f.run();
     expect(f.requests).toEqual([
       { path: "network/getMetadata" },
       {
         path: "supersearch/query?ajax",
-        body: "searchTerm=choir+%2B+plans&networkID=201&filters%5B%5D=note&filters%5B%5D=event&filters%5B%5D=file&filters%5B%5D=user&filters%5B%5D=group&filters%5B%5D=comment",
+        body: "searchTerm=choir+%2B+plans&networkID=201&filters%5B%5D=note",
       },
     ]);
     expect(result).toMatchObject({
@@ -123,7 +123,7 @@ describe("bounded parish note search", () => {
     expect(JSON.stringify(result)).not.toContain("HIDDEN_");
   });
 
-  it("separates broad incompleteness, empty results and local clipping", async () => {
+  it("separates upstream incompleteness, empty results and local clipping", async () => {
     const f = fixture();
     const base = noteSearchResponse();
     f.state.response = { ...base, totalHits: 0, searchResults: [] };
@@ -261,6 +261,25 @@ describe("bounded parish note search", () => {
       expect(f.requests).toHaveLength(2);
     }
   });
+
+  it.each(["event", "file", "user", "group", "comment", "userDocument"])(
+    "rejects an enabled, missing or malformed %s filter instead of accepting a broader search",
+    async (filter) => {
+      for (const value of [true, undefined, "false"]) {
+        const f = fixture();
+        const response = noteSearchResponse();
+        f.state.response = {
+          ...response,
+          searchFilters: { ...response.searchFilters, [filter]: value },
+        };
+        await expect(f.run()).rejects.toMatchObject({
+          code: "invalid_response",
+          reason: "search_filter_shape",
+        });
+        expect(f.requests).toHaveLength(2);
+      }
+    },
+  );
 
   it("validates every note identity including beyond the cap", async () => {
     const base = noteSearchResponse();
