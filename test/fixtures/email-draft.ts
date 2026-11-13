@@ -53,6 +53,7 @@ export function draftReadback() {
       autosaveID: 801,
       newNote: false,
       status: "draft",
+      fromName: "",
       title: `Q&A <b> "quoted" O'Neil`,
       options: { schedule: false, route2: false, voiceCalls: false },
       sections: [
