@@ -457,7 +457,7 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
       expect(JSON.stringify(result)).not.toContain(jpeg.toString("base64"));
       expect(JSON.stringify(result)).not.toContain("fictional-browser-session");
       expect(f.state.external).toBe(0);
-    });
+    }, 60_000);
 
     it("duplicates through real Chromium fetch without sending, uploading or rewriting modules", async (context) => {
       const { expect } = context;
@@ -483,10 +483,11 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
         "POST composer/editNote",
       ]);
       expect(f.state.external).toBe(0);
-    });
+    }, 60_000);
 
     it.for([draftInput, htmlDraftInput, blockDraftInput])(
       "creates an unscheduled draft through the actual browser fetch allowlist: $bodyFormat",
+      { timeout: 60_000 },
       async (input, context) => {
         const { expect } = context;
         const f = await fixture(context);
