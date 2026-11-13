@@ -88,6 +88,7 @@ describe("explicit read-only development runner", () => {
       "find_notes",
       "note",
       "email_recipients",
+      "member_filters",
     ]) {
       expect(() => parseDevelopmentArgs(["--tool", tool])).toThrow();
       expect(

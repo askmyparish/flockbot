@@ -71,6 +71,10 @@ import {
   MemberSearch,
   type MemberSearchInput,
 } from "../../../src/models/member-search.js";
+import {
+  MemberFilters,
+  type MemberFiltersInput,
+} from "../../../src/models/member-filters.js";
 import { FlocknoteLogin } from "../../../src/models/flocknote-login.js";
 import { Operation } from "../../../src/operation.js";
 import { DraftImages, type DraftImage } from "./draft-images.js";
@@ -790,6 +794,16 @@ export class BrowserConnection {
         })),
       };
     });
+  }
+
+  async memberFilters(
+    input: MemberFiltersInput = {},
+    options: OperationOptions = {},
+  ) {
+    const catalog = new MemberFilters(input);
+    return this.#operate(options, (session, op, network) =>
+      catalog.read(this.#resources(session, op), network),
+    );
   }
 
   async findMembers(input: MemberSearchInput, options: OperationOptions = {}) {

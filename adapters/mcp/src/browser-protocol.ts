@@ -3,6 +3,7 @@ import { AsyncResource } from "node:async_hooks";
 import net from "node:net";
 import { z } from "zod";
 import { FlockbotError } from "../../../src/index.js";
+import { MEMBER_FILTER_PAGE_SIZE } from "../../../src/models/member-filters.js";
 import { DRAFT_STAGES, type DraftProgress } from "../../../src/errors.js";
 import { BrowserConnectionError } from "./browser-runtime.js";
 import {
@@ -80,6 +81,20 @@ export const brokerRequestSchema = z.discriminatedUnion("action", [
     .object({
       action: z.literal("find_notes"),
       searchTerm: z.string().min(1).max(256),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("member_filters"),
+      groupId: z.string().min(1).max(128).optional(),
+      groupName: z.string().min(1).max(256).optional(),
+      fieldId: z.string().min(1).max(280).optional(),
+      offset: z
+        .number()
+        .int()
+        .min(0)
+        .max(Number.MAX_SAFE_INTEGER - MEMBER_FILTER_PAGE_SIZE)
+        .optional(),
     })
     .strict(),
   z

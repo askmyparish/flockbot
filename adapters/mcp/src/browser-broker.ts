@@ -27,6 +27,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   FlockbotError,
   MemberSearch,
+  MemberFilters,
   MemberProfile,
   MemberGroups,
   MemberCommunicationStatus,
@@ -334,6 +335,11 @@ export async function runBrowserBroker(options: BrokerOptions): Promise<void> {
                   case "find_members": {
                     const { action: _, ...input } = request;
                     value = await connection.findMembers(input, { signal });
+                    break;
+                  }
+                  case "member_filters": {
+                    const { action: _, ...input } = request;
+                    value = await connection.memberFilters(input, { signal });
                     break;
                   }
                   case "member":
@@ -717,6 +723,16 @@ export class BrowserService {
       { ...prepared, action: "find_notes" },
       options.signal,
     )) as Awaited<ReturnType<BrowserConnection["findNotes"]>>;
+  }
+  async memberFilters(
+    input: Parameters<BrowserConnection["memberFilters"]>[0] = {},
+    options: OperationOptions = {},
+  ) {
+    const prepared = new MemberFilters(input).toInput();
+    return (await this.#call(
+      { ...prepared, action: "member_filters" },
+      options.signal,
+    )) as Awaited<ReturnType<BrowserConnection["memberFilters"]>>;
   }
   async findMembers(
     input: Parameters<BrowserConnection["findMembers"]>[0],

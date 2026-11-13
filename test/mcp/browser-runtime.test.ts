@@ -24,6 +24,7 @@ import {
 } from "../../adapters/mcp/src/browser-runtime.js";
 import { createFlocknoteServer } from "../../adapters/mcp/src/flocknote-server.js";
 import { searchMetadata, searchRow } from "../fixtures/member-search.js";
+import { filterCatalog } from "../fixtures/member-filters.js";
 import { profileResponse } from "../fixtures/member-profile.js";
 import { membershipResponse } from "../fixtures/member-groups.js";
 import { rosterPage, rosterRow } from "../fixtures/group-members.js";
@@ -263,6 +264,16 @@ async function fixture() {
           expect(form.get("networkID")).toBe("201");
           expect(form.get("searchTerm")).toBe("choir + plans");
           await json(noteSearchResponse());
+        } else if (
+          path === "group/104/people" &&
+          url.search === "?ajax" &&
+          request.method() === "POST"
+        ) {
+          await json({
+            ...filterCatalog(),
+            groupID: "104",
+            isEveryoneGroup: 0,
+          });
         } else if (
           (path === "group/101/people" || path === "group/102/people") &&
           url.search === "?ajax" &&
@@ -1129,6 +1140,37 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
         },
       });
       expect(f.visits).toEqual([{ path: "group/101/notes", method: "GET" }]);
+      expect(f.state.external).toBe(0);
+    }, 60_000);
+
+    it("discovers catalog fields and choices through intercepted Chromium without exposing bundled members", async () => {
+      const f = await fixture();
+      await f.signIn();
+      f.visits.length = 0;
+      const server = createFlocknoteServer(f.connection);
+      const client = new Client({
+        name: "fictional-catalog-workflow",
+        version: "1",
+      });
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      await server.connect(a);
+      await client.connect(b);
+      cleanup.unshift(() => client.close());
+      const result = await client.callTool({
+        name: "member_filters",
+        arguments: { groupId: "104", fieldId: "membership" },
+      });
+      expect(result.structuredContent).toMatchObject({
+        ok: true,
+        groupId: "104",
+        includeInactive: false,
+        total: 1,
+        choices: [{ id: "102", label: "Choir" }],
+      });
+      expect(JSON.stringify(result)).not.toMatch(
+        /alex@|Example|555|private-|permissions|subscribedMembers/,
+      );
+      expect(f.visits).toEqual([{ path: "group/104/people", method: "POST" }]);
       expect(f.state.external).toBe(0);
     }, 60_000);
 

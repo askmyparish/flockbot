@@ -692,6 +692,31 @@ describe.skipIf(process.platform === "win32")(
       expect(f.events()).toEqual([]);
     });
 
+    it("projects catalog data before private IPC without member records or a filter request", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
+      await expect(
+        f.service.memberFilters({ groupId: "101", groupName: "Choir" }),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      expect(f.launches()).toBe(0);
+      const result = await f.service.memberFilters({
+        groupId: "104",
+        fieldId: "custom:201:select:501",
+      });
+      expect(result).toMatchObject({
+        groupId: "104",
+        total: 2,
+        choices: [
+          { id: "1", label: "Same label" },
+          { id: "2", label: "Same label" },
+        ],
+      });
+      expect(JSON.stringify(result)).not.toMatch(
+        /alex@|Rivera|555|<script|private-|https:|permissions|filterID|subscribedMembers/,
+      );
+      expect(f.events()).toEqual(["launch", "POST group/104/people?ajax"]);
+    });
+
     it("routes member search through actual private IPC without authentication preflight", async (context) => {
       const { expect } = context;
       const f = await fixture(context);

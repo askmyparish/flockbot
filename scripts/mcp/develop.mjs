@@ -13,6 +13,7 @@ const tools = new Set([
   "groups",
   "subscriber_count",
   "find_members",
+  "member_filters",
   "member",
   "member_groups",
   "member_communication_status",

@@ -28,6 +28,7 @@ export const FAILURE_REASONS = [
   "missing_name",
   "search_filter_shape",
   "search_filter_identifier",
+  "search_filter_label",
   "expected_results_array",
   "expected_notes_array",
   "invalid_result_count",

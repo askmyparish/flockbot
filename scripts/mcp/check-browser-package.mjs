@@ -36,6 +36,7 @@ export const FLOCKNOTE_TOOLS = [
   "is_member",
   "member",
   "member_communication_status",
+  "member_filters",
   "member_groups",
   "member_latest_email_status",
   "note",

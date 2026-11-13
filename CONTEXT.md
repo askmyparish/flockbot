@@ -66,6 +66,12 @@ _Avoid_: Login or account when referring to the person represented in parish rec
 A relationship linking a user to a particular Flocknote group, with preferences and roles when established. A requested membership remains an intent until Flocknote confirms the addition.
 _Avoid_: Group participation when describing the domain concept
 
+**Group subscription date**:
+The calendar date Flocknote reports for a user's subscription to a particular group. It is distinct from the date a contact field was updated and does not establish when the person first joined the parish.
+
+**Contact verification status**:
+Flocknote's reported verification state for an email address or phone number. An unverified contact is distinct from a missing contact; verification alone does not establish that a communication will be delivered.
+
 **Test parish**:
 A Flocknote parish network reserved for verifying integration behavior with test records, separate from networks used for real parish work.
 _Avoid_: Fake account when referring to the test parish network

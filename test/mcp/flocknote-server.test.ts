@@ -314,6 +314,7 @@ describe("Flocknote MCP contract", () => {
         ["connect", "connect", { subdomain: "example-parish" }],
         ["groups", "groups", {}],
         ["subscriber_count", "count", { groupId: "101" }],
+        ["member_filters", "memberFilters", { groupId: "101" }],
         [
           "find_members",
           "findMembers",
@@ -410,7 +411,7 @@ describe("Flocknote MCP contract", () => {
         );
         spy.mockRestore();
       }
-      expect(ids.size).toBe(14);
+      expect(ids.size).toBe(calls.length);
       const stored = (await failureLog.read())
         ?.trim()
         .split("\n")
@@ -1125,6 +1126,7 @@ describe("Flocknote MCP contract", () => {
       "is_member",
       "member",
       "member_communication_status",
+      "member_filters",
       "member_groups",
       "member_latest_email_status",
       "note",

@@ -23,6 +23,7 @@ published by these changes.
 | `groups` | Return group identifiers, names and Everyone status; optional `refresh` |
 | `subscriber_count` | Fetch a current count without member records |
 | `find_members` | Search active members in a selected group or Everyone; return bounded identities and selected contacts or group subscription dates |
+| `member_filters` | Discover supported member-filter fields and choices in a selected group, without member records |
 | `member` | Read one identified member's identity and explicitly selected stored email/mobile phone with status |
 | `member_groups` | List a chosen member's explicit group subscriptions with bounded output and visibility limits |
 | `member_communication_status` | Read one member/group's email/SMS preferences and contact warnings without promising delivery |
@@ -92,6 +93,41 @@ that match. Assistants may continue the requested
 lookup with that identifier; duplicate, similar or incomplete matches require
 clarification. Empty results are scoped to the query, not proof that a person
 has no parish record.
+
+`member_filters` discovers the currently available criteria without running a
+member search. Supply `groupId` or a unique `groupName`, or omit both to discover
+Everyone. Without `fieldId`, it returns at most 50 `fields`; with a returned
+`fieldId`, it returns that `field` and at most 50 `choices`. Both forms return
+`groupId`, `offset`, `total`, `hasMore` and `nextOffset`. Pass `nextOffset` back
+with the same group and field to continue. An offset at the total is an empty
+terminal page; negative, fractional or beyond-total offsets fail.
+
+Descriptors contain stable builtin IDs or opaque custom IDs bound to the
+network field and select-list type metadata. They report operator availability,
+native negation and known missing-value behavior. Repeated native filter IDs
+do not merge custom fields. Choice IDs identify values only within the selected
+field; duplicate labels remain distinct. Labels are bounded untrusted text, not
+instructions. Labels with markup, controls, web URLs or more than 256 characters
+make the field unavailable (`unsafe_label`), never silently truncated; requesting
+it reports `search_filter_label` without echoing the unsafe value.
+`includeInactive` describes the login's capability, not a request to include
+inactive people. Catalog visibility does not grant permissions. Each call reads
+the current catalog; changing choices can change subsequent pages.
+
+Only name, email, phone, ordinary-group membership, group subscription dates and
+Personal Info select-list criteria are described. Specialized categories are
+omitted. Contact-update dates remain explicitly unavailable pending independent
+semantic verification. Missing phone numbers are not unverified phones; other
+uncharacterized missing-value behavior is reported as `native_unknown`.
+Unavailable requested fields, including unverified permission requirements, fail
+with refresh guidance. An explicit upstream access denial remains
+`permission_denied`; malformed definitions remain `invalid_response`. Missing
+group identity, contact-view or capability flags fail closed rather than guessing
+scope or treating an unknown capability as false. Native member rows,
+contact values, HTML/assets and permission dictionaries are discarded before
+catalog IPC and MCP results. Existing request caps and deadlines still apply.
+This discovery tool does not yet enable advanced `find_members` expressions;
+simple lookups continue directly without a preliminary catalog call.
 
 Member IDs are internal lookup keys, not choices to present to parish staff.
 Before asking the user to distinguish same-name records, repeat the search in
