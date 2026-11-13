@@ -30,6 +30,7 @@ import { rosterPage, rosterRow } from "../fixtures/group-members.js";
 import { latestEmailResponses } from "../fixtures/latest-email.js";
 import { noteSearchResponse } from "../fixtures/note-search.js";
 import { noteResponse } from "../fixtures/note.js";
+import { duplicationFixture } from "../fixtures/email-duplication.js";
 import { recipientPage } from "../fixtures/email-recipients.js";
 import {
   draftInput,
@@ -54,7 +55,9 @@ async function fixture({ onTestFinished, expect }: TestContext) {
   const emailResponses: Record<string, unknown> = latestEmailResponses();
   const blocks = blockDraftResponse();
   const images = imageDraftResponse();
+  const duplication = duplicationFixture();
   const state = {
+    duplicate: false,
     draft: false,
     draftBlocks: false,
     draftImages: false,
@@ -176,6 +179,14 @@ async function fixture({ onTestFinished, expect }: TestContext) {
             expect(request.method()).toBe("POST");
             expect(request.postData()).toBe("s=Rivera");
           } else expect(request.method()).toBe("GET");
+          if (typeof value === "string")
+            await route.fulfill({ contentType: "text/html", body: value });
+          else await json(value);
+        } else if (state.duplicate) {
+          const value = duplication.response(
+            path,
+            request.postData() ?? undefined,
+          );
           if (typeof value === "string")
             await route.fulfill({ contentType: "text/html", body: value });
           else await json(value);
@@ -425,6 +436,32 @@ describe.skipIf(process.env.FLOCKBOT_BROWSER_TESTS !== "1")(
       expect(JSON.stringify(result)).not.toContain(first);
       expect(JSON.stringify(result)).not.toContain(jpeg.toString("base64"));
       expect(JSON.stringify(result)).not.toContain("fictional-browser-session");
+      expect(f.state.external).toBe(0);
+    });
+
+    it("duplicates through real Chromium fetch without sending, uploading or rewriting modules", async (context) => {
+      const { expect } = context;
+      const f = await fixture(context);
+      await f.signIn();
+      f.state.duplicate = true;
+      f.visits.length = 0;
+      expect(
+        await f.connection.duplicateEmailDraft({ noteId: "801" }),
+      ).toMatchObject({
+        noteId: "803",
+        status: "draft",
+        verified: true,
+        groupIds: ["101", "102"],
+      });
+      expect(f.visits.map((v) => `${v.method} ${v.path}`)).toEqual([
+        "POST composer/editNote",
+        "GET network/getMetadata",
+        "GET dashboard",
+        "POST composer/duplicateNote",
+        "POST composer/save2",
+        "POST composer/save2",
+        "POST composer/editNote",
+      ]);
       expect(f.state.external).toBe(0);
     });
 

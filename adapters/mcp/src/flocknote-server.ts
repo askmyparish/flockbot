@@ -21,7 +21,7 @@ import {
 
 const INSTRUCTIONS =
   "Use these tools for the user's Flocknote parish requests. Trust the saved session and call the requested tool directly; no preliminary status or authentication check is needed. " +
-  "Use the returned url for note links from note, find_notes, group_notes and successful draft creation; no separate link lookup is needed. Unavailable note reads and group-list rows with unestablished non-published identities return url:null; do not construct a link for those results. A link does not establish publication, delivery, public access or edit permission. " +
+  "Use the returned url for note links from note, find_notes, group_notes, create_email_draft and duplicate_email_draft; no separate link lookup is needed. Unavailable note reads and group-list rows with unestablished non-published identities return url:null; do not construct a link for those results. A link does not establish publication, delivery, public access or edit permission. " +
   "Enable verboseDiagnostics only when the user explicitly requests verbose diagnostic capture for this call. It saves bounded credential-redacted request/response data locally, including personal data, for this operation only. Never automatically enable it or replay a failed write for diagnostics. " +
   "Member IDs are internal: identify people to the user by name and distinguishing contact details, not numeric IDs. " +
   "If sign-in is needed, ask for the parish subdomain and call connect; the user signs in on Flocknote's real website. " +
@@ -71,6 +71,8 @@ const MESSAGES: Readonly<Record<string, string>> = {
     "Check the tool arguments, including the selected group and required fields.",
   request_not_sent:
     "The request was not submitted. Check its arguments and transport-size diagnostic; content was not truncated.",
+  draft_not_submitted:
+    "No draft was submitted. The source email, content, delivery settings or original groups could not be validated for duplication. Check the diagnostic reason; choose a supported published email or copy it in Flocknote.",
   invalid_configuration:
     "Supply only the parish subdomain, such as example-parish.",
   invalid_response:
@@ -121,6 +123,7 @@ export type FlocknoteConnection = Pick<
   | "findNotes"
   | "note"
   | "createEmailDraft"
+  | "duplicateEmailDraft"
   | "groupMembers"
   | "isMember"
   | "addMember"
@@ -809,6 +812,32 @@ export function createFlocknoteServer(
         async () => ({
           ok: true,
           ...(await connection.createEmailDraft(input, {
+            signal: extra.signal,
+          })),
+        }),
+        verboseDiagnostics,
+      ),
+  );
+  server.registerTool(
+    "duplicate_email_draft",
+    {
+      title: "Copy a published email into an unsent draft",
+      description:
+        "Use only when the user requests a copy of one known published email. Supply noteId; discover candidates with bounded find_notes and clarify ambiguous matches before writing. Native duplication preserves subject, sender label, raw content, theme and all resolvable original ordinary groups. Groups use current membership, not historical recipients. Supports observed single-column layouts with text, photos and URL buttons; unsupported modules, layouts, delivery settings or smart/filtered/contact audiences fail before duplication. No content or audience overrides, sending, scheduling, source edits or image uploads. Success returns a verified unscheduled draft and its url; access depends on Flocknote permissions. Multi-group preservation is tested offline only. On unknown outcome, inspect known draftProgress IDs in Flocknote before any manual retry; never automatically repeat this write. draft_not_submitted means source validation stopped before writes; choose a supported email or use Flocknote directly. duplicate_verification means copied or persisted data did not verify after a write, not that nothing was created.",
+      inputSchema: z.object({ verboseDiagnostics, noteId: groupId }).strict(),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
+    },
+    async ({ verboseDiagnostics, ...input }, extra) =>
+      guarded(
+        "duplicate_email_draft",
+        async () => ({
+          ok: true,
+          ...(await connection.duplicateEmailDraft(input, {
             signal: extra.signal,
           })),
         }),

@@ -34,6 +34,7 @@ import {
   EmailAnalytics,
   EmailRecipients,
   EmailDraft,
+  EmailDuplication,
   GroupNotes,
   NoteSearch,
   Note,
@@ -393,6 +394,13 @@ export async function runBrowserBroker(options: BrokerOptions): Promise<void> {
                   case "create_email_draft": {
                     const { action: _, ...input } = request;
                     value = await connection.createEmailDraft(input, {
+                      signal,
+                    });
+                    break;
+                  }
+                  case "duplicate_email_draft": {
+                    const { action: _, ...input } = request;
+                    value = await connection.duplicateEmailDraft(input, {
                       signal,
                     });
                     break;
@@ -848,6 +856,16 @@ export class BrowserService {
       { ...prepared, action: "create_email_draft" },
       options.signal,
     )) as Awaited<ReturnType<BrowserConnection["createEmailDraft"]>>;
+  }
+  async duplicateEmailDraft(
+    input: Parameters<BrowserConnection["duplicateEmailDraft"]>[0],
+    options: OperationOptions = {},
+  ) {
+    const prepared = new EmailDuplication(input).toInput();
+    return (await this.#call(
+      { ...prepared, action: "duplicate_email_draft" },
+      options.signal,
+    )) as Awaited<ReturnType<BrowserConnection["duplicateEmailDraft"]>>;
   }
   async addMemberByName(
     groupName: string,

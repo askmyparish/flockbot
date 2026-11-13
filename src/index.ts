@@ -69,6 +69,10 @@ export {
 } from "./models/group-notes.js";
 export { Note, type NoteInput, type NoteResult } from "./models/note.js";
 export {
+  EmailDuplication,
+  type EmailDuplicationInput,
+} from "./models/email-duplication.js";
+export {
   EmailDraft,
   type EmailDraftBlock,
   type EmailDraftInput,

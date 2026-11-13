@@ -33,13 +33,15 @@ published by these changes.
 | `find_notes` | Find note summaries by parish-wide keyword search, without confusing broad hit counts with note totals |
 | `note` | Read one identified email/SMS note as bounded Markdown, with explicit unavailable/partial results |
 | `create_email_draft` | Create a text or basic-HTML email draft for one explicit group, then verify its persisted content and unscheduled state |
+| `duplicate_email_draft` | Copy one published email into a verified unscheduled draft with its original ordinary groups and content |
 | `group_members` | List a named group's subscribed members in bounded pages, with names by default |
 | `is_member` | Check one chosen member/group relationship as `member`, `not_member`, or `unknown` |
 | `add_member` | Add once by `groupId` or case-insensitive unique `groupName`; return only success |
 
 The MCP server publishes input schemas and workflow instructions. It offers no raw
 HTTP, arbitrary URL, script evaluation, credential or browser-inspection tool.
-`note`, `find_notes`, `group_notes` and successful `create_email_draft` results
+`note`, `find_notes`, `group_notes` and successful `create_email_draft` and
+`duplicate_email_draft` results
 include a parish-scoped `url` without an additional request. Unavailable note
 reads and group-list rows with unestablished non-published identities return
 `url: null`. Links do not establish publication, delivery, public
@@ -544,6 +546,36 @@ interrupted module stage can leave earlier blocks persisted.
 deciding to submit again. A lost IPC reply may leave IDs unavailable to the caller.
 Default diagnostics exclude authored content; explicitly verbose diagnostics use
 the existing shared sanitization. The direct development runner remains read-only.
+
+### Copy a previous email
+
+Use `find_notes` to identify an older email, clarify ambiguous matches, then call
+`duplicate_email_draft` with its `noteId`. This is a native copy, not a Markdown
+reconstruction. It preserves the subject, sender label, theme, ordered raw content
+and all resolvable original ordinary groups. The groups' current membership applies;
+the original recipient list is not frozen or copied.
+
+The initial supported shape is a published email with single-column sections
+(`layout: "1"`), text, photos and URL buttons. Unknown layouts/modules and
+smart, filtered, contact or unresolved audiences fail before duplication.
+Source emails with enabled scheduling, secondary delivery or giving options
+also stop before duplication; their native-copy behavior is not established.
+There are no subject, body or target overrides; edit the returned draft in Flocknote.
+Native section/module/photo identities may change, but copied authored data and
+persisted photo identity must verify. The original is never edited. The operation
+does not send, schedule, rebuild modules or upload images.
+
+Success returns `sourceNoteId`, `noteId`, `autosaveId`, `groupIds`, `status: "draft"`,
+`verified: true` and `url`. Failures before the first write are `not_submitted`;
+later failures are `unknown`, with known IDs in `draftProgress`. Inspect Flocknote
+before any manual retry. There is no automatic replay or cleanup of partial drafts.
+Unsupported-source failures use `draft_not_submitted` with a diagnostic reason;
+post-write validation failures use `duplicate_verification`, not an unsupported-source
+reason. Transport, authentication and malformed pre-write responses retain their
+existing diagnostics.
+Multi-group preservation is covered offline; live characterization established
+one ordinary group only. Installed-client operation and delivered-email rendering
+remain unverified. Existing operation deadlines still apply.
 
 ## Develop and verify
 

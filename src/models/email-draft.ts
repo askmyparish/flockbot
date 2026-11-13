@@ -1,6 +1,7 @@
 import { parseFragment, type DefaultTreeAdapterMap } from "parse5";
 import { FlockbotError, type DraftProgress } from "../errors.js";
 import { identifier } from "./identifier.js";
+import { composerForm as form } from "./composer-form.js";
 import {
   membershipGroupSelector,
   type GroupSelector,
@@ -50,23 +51,6 @@ const buttonStyle = {
   backgroundColor: "336699",
   textColor: "ffffff",
 };
-
-function form(value: Record<string, unknown>): string {
-  const data = new URLSearchParams();
-  const append = (key: string, item: unknown) => {
-    if (Array.isArray(item)) {
-      item.forEach((child, i) => {
-        append(`${key}[${typeof child === "object" ? i : ""}]`, child);
-      });
-    } else if (item !== null && typeof item === "object") {
-      for (const [name, child] of Object.entries(item))
-        append(`${key}[${name}]`, child);
-    } else if (item !== undefined)
-      data.append(key, item === null ? "" : String(item));
-  };
-  for (const [key, item] of Object.entries(value)) append(key, item);
-  return data.toString();
-}
 
 function id(value: unknown): string {
   const result = identifier(value);

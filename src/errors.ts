@@ -3,6 +3,8 @@ import { safeFailureReason, type FailureReason } from "./failure-reason.js";
 
 export const DRAFT_STAGES = [
   "resolve_group",
+  "resolve_source",
+  "duplicate",
   "entry",
   "initialize",
   "autosave",
@@ -32,6 +34,7 @@ export type ErrorCode =
   | "operation_timeout"
   | "operation_cancelled"
   | "request_not_sent"
+  | "draft_not_submitted"
   | "write_outcome_unknown"
   | "permission_denied"
   | "invalid_configuration"

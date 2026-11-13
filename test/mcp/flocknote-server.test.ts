@@ -19,6 +19,7 @@ import {
   type BrowserSession,
 } from "../../adapters/mcp/src/browser-runtime.js";
 import { waitFor } from "./support.js";
+import { duplicationFixture } from "../fixtures/email-duplication.js";
 import { FlockbotError } from "../../src/errors.js";
 import {
   draftInput,
@@ -81,6 +82,74 @@ async function fixture(
 }
 
 describe("Flocknote MCP contract", () => {
+  it("duplicates a selected email through MCP with safe unknown-write progress", async () => {
+    const data = duplicationFixture();
+    let fail = false;
+    const f = await fixture({
+      factory: async () => ({
+        signIn: async () => {},
+        close: async () => {},
+        request: async (path, _method, body) => {
+          if (fail && path === "composer/save2")
+            throw new FlockbotError("transport_failed");
+          return data.response(path, body);
+        },
+      }),
+    });
+    await f.connection.connect("example-parish");
+    await waitFor(async () =>
+      expect(await f.connection.status()).toMatchObject({ state: "ready" }),
+    );
+    expect(
+      (
+        await f.client.callTool({
+          name: "duplicate_email_draft",
+          arguments: { noteId: "801" },
+        })
+      ).structuredContent,
+    ).toMatchObject({
+      ok: true,
+      sourceNoteId: "801",
+      noteId: "803",
+      groupIds: ["101", "102"],
+      verified: true,
+      url: "https://example-parish.flocknote.com/note/803",
+    });
+    data.source.status = "draft";
+    const unsupported = await f.client.callTool({
+      name: "duplicate_email_draft",
+      arguments: { noteId: "801" },
+    });
+    expect(unsupported.structuredContent).toMatchObject({
+      code: "draft_not_submitted",
+      outcome: "not_submitted",
+      diagnostic: { final: { reason: "duplicate_source_unsupported" } },
+      message: expect.stringMatching(/^No draft was submitted\./),
+    });
+    data.source.status = "published";
+    fail = true;
+    const failure = await f.client.callTool({
+      name: "duplicate_email_draft",
+      arguments: { noteId: "801" },
+    });
+    expect(failure.structuredContent).toMatchObject({
+      ok: false,
+      outcome: "unknown",
+      draftProgress: { stage: "materialize", autosaveId: "802" },
+    });
+    expect(JSON.stringify(failure)).not.toMatch(
+      /The Choir|Annual choir|base64Gradient|photourl/,
+    );
+    expect(
+      (
+        await f.client.callTool({
+          name: "duplicate_email_draft",
+          arguments: { noteId: "801", subject: "Override" },
+        })
+      ).isError,
+    ).toBe(true);
+  });
+
   it("creates drafts through MCP and returns safe partial progress on failures", async () => {
     let fail = false;
     let html = false;
@@ -1045,6 +1114,7 @@ describe("Flocknote MCP contract", () => {
       "add_member",
       "connect",
       "create_email_draft",
+      "duplicate_email_draft",
       "email_analytics",
       "email_recipients",
       "find_members",
@@ -1101,6 +1171,13 @@ describe("Flocknote MCP contract", () => {
     });
     expect(
       tools.find(({ name }) => name === "create_email_draft")?.annotations,
+    ).toMatchObject({
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+    });
+    expect(
+      tools.find(({ name }) => name === "duplicate_email_draft")?.annotations,
     ).toMatchObject({
       readOnlyHint: false,
       destructiveHint: false,

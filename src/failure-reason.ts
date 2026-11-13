@@ -41,6 +41,10 @@ export const FAILURE_REASONS = [
   "draft_entry_blocked",
   "draft_initialization",
   "draft_verification",
+  "duplicate_source_unsupported",
+  "duplicate_content_unsupported",
+  "duplicate_targets_unsupported",
+  "duplicate_verification",
   "draft_html_malformed",
   "draft_html_unsupported",
   "draft_html_unsafe_link",
@@ -68,6 +72,19 @@ export const FAILURE_REASONS = [
 ] as const;
 
 export type FailureReason = (typeof FAILURE_REASONS)[number];
+
+export const TRANSPORT_REASONS: ReadonlySet<FailureReason> = new Set([
+  "origin_mismatch",
+  "missing_response_body",
+  "response_too_large",
+  "invalid_json",
+  "empty_response",
+  "redirect",
+  "http_rejection",
+  "request_timeout",
+  "fetch_failed",
+  "evaluation_failed",
+]);
 
 export function safeFailureReason(value: unknown): FailureReason | undefined {
   return FAILURE_REASONS.find((reason) => reason === value);
