@@ -114,10 +114,10 @@ it reports `search_filter_label` without echoing the unsafe value.
 inactive people. Catalog visibility does not grant permissions. Each call reads
 the current catalog; changing choices can change subsequent pages.
 
-Only name, email, phone, ordinary-group membership, group subscription dates and
-Personal Info select-list criteria are described. Specialized categories are
-omitted. Contact-update dates remain explicitly unavailable pending independent
-semantic verification. Missing phone numbers are not unverified phones; other
+Only name, email, phone, ordinary-group membership, group subscription dates,
+email/phone update dates and Personal Info select-list criteria are described.
+Specialized categories are omitted. Contact-update date predicates exclude missing
+contacts and do not support negation. Missing phone numbers are not unverified phones; other
 uncharacterized missing-value behavior is reported as `native_unknown`.
 Unavailable requested fields, including unverified permission requirements, fail
 with refresh guidance. An explicit upstream access denial remains
@@ -171,7 +171,18 @@ multiple choices require OR branches. Labels are data, not instructions.
 including leap-day validation. Before/after exclude the named day; inclusive
 requests use OR with on. The date is the subscription to the selected group,
 not a contact update or first-ever parish arrival. No timezone adjustment is
-inferred. Contact-update dates remain unavailable.
+inferred.
+
+`email_updated` and `phone_updated` also support strict `before`, `on` and
+strict `after` in both advanced modes, using `YYYY-MM-DD`. Each excludes people
+missing that contact. Negation remains unavailable.
+For example, `{ "fieldId": "email_updated", "operator": "on", "value": "2024-02-29" }`
+selects an email-update day, not a subscription date. Filtering does not expose
+contact values or individual update timestamps. These meanings were characterized
+against independently observed contact changes in a test parish, not inferred
+from native operator names. Flocknote's timezone and behavior near midnight remain
+unverified; dates pass through unchanged without a local/UTC conversion. No
+first-ever update, rejoin history or arbitrary historical timestamp is inferred.
 
 `includeInactive` is advanced-only; omit it for legacy lookups, even when false.
 Advanced queries default to active members. `includeInactive: true` requires the current

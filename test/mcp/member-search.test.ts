@@ -268,6 +268,82 @@ describe("advanced member MCP boundary", () => {
   });
 });
 
+describe.each(["count", "members"] as const)(
+  "contact-update MCP %s",
+  (mode) => {
+    it.each(
+      ["email_updated", "phone_updated"].flatMap((fieldId) => [
+        { fieldId, operator: "before", native: "lessThanEqualToEndOfDay" },
+        { fieldId, operator: "on", native: "onDay" },
+        { fieldId, operator: "after", native: "greaterThanEqualToBeginOfDay" },
+      ]),
+    )(
+      "sends $fieldId $operator and returns interpreted dates without contact disclosure",
+      async ({ fieldId, operator, native }) => {
+        const f = await fixture();
+        f.state.catalog = filterCatalog();
+        const result = await f.client.callTool({
+          name: "find_members",
+          arguments: {
+            mode,
+            groupId: "101",
+            criteria: {
+              any: [{ all: [{ fieldId, operator, value: "2024-02-29" }] }],
+            },
+          },
+        });
+        expect(result.structuredContent).toMatchObject({
+          ok: true,
+          mode,
+          resultCount: 1,
+          criteriaSummary: {
+            any: [
+              {
+                all: [
+                  {
+                    fieldId,
+                    value: "2024-02-29",
+                    operator,
+                    missingValueBehavior: "excluded",
+                  },
+                ],
+              },
+            ],
+          },
+        });
+        if (mode === "members")
+          expect(result.structuredContent).toHaveProperty("members", [
+            { id: "301", firstName: "Alex", lastName: "Rivera" },
+          ]);
+        else expect(result.structuredContent).not.toHaveProperty("members");
+        expect(JSON.stringify(result)).not.toMatch(
+          /alex@example\.test|555-0123|mobilePhone|joinedOn|exactMatchUserId/,
+        );
+        expect(
+          vi
+            .mocked(f.session.request)
+            .mock.calls.map(([path, method]) => [path, method]),
+        ).toEqual([
+          ["group/101/people?ajax", "POST"],
+          ["group/101/filter", "POST"],
+        ]);
+        const form = new URLSearchParams(
+          vi.mocked(f.session.request).mock.calls[1]?.[2],
+        );
+        expect(
+          form.get("request[and][0][or][0][and][0][inputs][dateQueryType]"),
+        ).toBe(native);
+        expect(form.get("request[and][0][or][0][and][0][inputs][date]")).toBe(
+          "2024-02-29",
+        );
+        expect(
+          form.has("request[and][0][or][0][and][0][inputs][groupID]"),
+        ).toBe(false);
+      },
+    );
+  },
+);
+
 describe("advanced count MCP boundary", () => {
   it("returns scoped criteria and totals without native rows or an identity shortcut", async () => {
     const f = await fixture();
@@ -361,7 +437,11 @@ describe("advanced count MCP boundary", () => {
   );
   it("makes unavailable predicates actionable without dropping them", async () => {
     const f = await fixture();
-    f.state.catalog = filterCatalog();
+    const catalog = filterCatalog();
+    catalog.peopleFilterInfo.filters["Contact Info"].categories[
+      "Email Address"
+    ].filters.at(-1)!.permissions = { isOnlySuperAdmins: true };
+    f.state.catalog = catalog;
     const result = await f.client.callTool({
       name: "find_members",
       arguments: {
@@ -553,14 +633,21 @@ describe("member filter MCP boundary", () => {
     expect(
       vi.mocked(f.session.request).mock.calls.map((c) => c.slice(0, 3)),
     ).toEqual([["group/101/people?ajax", "POST", "includeUnsubscribed=0"]]);
-    const unavailable = await f.client.callTool({
+    const dates = await f.client.callTool({
       name: "member_filters",
       arguments: { groupId: "101", fieldId: "email_updated" },
     });
-    expect(unavailable.structuredContent).toMatchObject({
-      ok: false,
-      code: "member_filter_unavailable",
-      message: expect.stringContaining("Refresh member_filters"),
+    expect(dates.structuredContent).toMatchObject({
+      ok: true,
+      field: {
+        fieldId: "email_updated",
+        available: true,
+        operators: ["before", "on", "after"].map((operator) => ({
+          operator,
+          negation: false,
+          missingValueBehavior: "excluded",
+        })),
+      },
     });
   });
   it("returns label diagnostic reasons over MCP without reflecting metadata values", async () => {

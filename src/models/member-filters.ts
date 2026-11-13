@@ -264,7 +264,6 @@ const FIELDS: readonly {
     type: "date",
     section: "Contact Info",
     category: "Email Address",
-    unverified: true,
     definitions: [
       [
         "Email Last Updated",
@@ -280,7 +279,6 @@ const FIELDS: readonly {
     type: "date",
     section: "Contact Info",
     category: "Phone Number",
-    unverified: true,
     definitions: [
       [
         "Phone Last Updated",
@@ -460,11 +458,11 @@ function builtinFields(
             return invalidResponse("search_filter_shape");
         if (config.id === "membership")
           options = choices(record(input.otherGroupID).allowedValues, true);
+        const contactDate =
+          config.id === "email_updated" || config.id === "phone_updated";
         const names =
-          config.id === "subscribed"
-            ? [...DATE_OPERATORS.keys()]
-            : [operatorName];
-        if (config.id === "subscribed") {
+          config.type === "date" ? [...DATE_OPERATORS.keys()] : [operatorName];
+        if (config.type === "date") {
           const values = record(input.dateQueryType).allowedValues;
           if (
             !Array.isArray(values) ||
@@ -480,9 +478,10 @@ function builtinFields(
           });
           operators.push({
             operator,
-            negation: f.operatorNegated !== undefined,
+            // Contact-date negation has not been characterized.
+            negation: !contactDate && f.operatorNegated !== undefined,
             missingValueBehavior:
-              config.id === "phone" && operator === "verified"
+              contactDate || (config.id === "phone" && operator === "verified")
                 ? "excluded"
                 : "native_unknown",
           });
@@ -768,7 +767,7 @@ export async function compileMemberSearch(
         const dateQueryType = DATE_OPERATORS.get(p.operator);
         if (value === undefined || dateQueryType === undefined)
           throw new FlockbotError("member_filter_unavailable");
-        values.groupID = current.groupId;
+        if (p.fieldId === "subscribed") values.groupID = current.groupId;
         values.date = value;
         values.dateQueryType = dateQueryType;
       }
