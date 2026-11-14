@@ -40,7 +40,7 @@
   },
   "dependencies": {
     "parse5": "7.3.0",
-    "tough-cookie": "6.0.2"
+    "tough-cookie": "6.1.0"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.4",
