@@ -16,7 +16,7 @@ additions verified on macOS. It remains a private candidate.
 
 ## TypeScript development
 
-You'll need Node.js 22.13+ and npm.
+You'll need Node.js 22.19+ and npm.
 
 ```sh
 bin/setup       # Install locked npm dependencies

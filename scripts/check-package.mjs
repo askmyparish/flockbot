@@ -14,6 +14,7 @@ execFileSync(
   process.execPath,
   [
     "node_modules/typescript/bin/tsc",
+    "--ignoreConfig",
     "--noEmit",
     "--strict",
     "--module",
