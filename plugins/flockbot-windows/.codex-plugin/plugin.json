@@ -1,6 +1,6 @@
 {
   "name": "flockbot-windows",
-  "version": "0.2.1-dev.13",
+  "version": "0.3.0-beta.14",
   "description": "Unofficial Flocknote tools using a dedicated local browser session. Windows x64 support is unverified.",
   "author": {
     "name": "AskMyParish",
