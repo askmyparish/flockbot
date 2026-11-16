@@ -5,11 +5,10 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BrowserConnection } from "../../adapters/mcp/src/browser-connection.js";
+import { ParishConnection } from "../../adapters/mcp/src/connection.js";
 import { createFlocknoteServer } from "../../adapters/mcp/src/flocknote-server.js";
-import { brokerRequestSchema } from "../../adapters/mcp/src/browser-protocol.js";
 import { SerialCoordinator } from "../../adapters/mcp/src/serial-coordinator.js";
-import type { BrowserSession } from "../../adapters/mcp/src/browser-runtime.js";
+import type { FlocknoteSession } from "../../adapters/mcp/src/session.js";
 import type { GroupMembersResult } from "../../src/models/group-members.js";
 import { rosterPage, rosterRow } from "../fixtures/group-members.js";
 import { waitFor } from "./support.js";
@@ -36,7 +35,7 @@ async function fixture() {
     verification: { success: true, userID: 201 },
     pages: new Map([["group/102/people?ajax", rosterPage()]]),
   };
-  const session: BrowserSession = {
+  const session: FlocknoteSession = {
     signIn: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
     request: vi.fn(async (path) => {
@@ -56,7 +55,7 @@ async function fixture() {
     }),
   };
   const factory = vi.fn(async () => session);
-  const connection = new BrowserConnection({
+  const connection = new ParishConnection({
     profile,
     factory,
     coordinator: new SerialCoordinator(),
@@ -206,26 +205,6 @@ describe("group-members MCP workflow", () => {
         code: "invalid_input",
       });
     expect(f.factory).not.toHaveBeenCalled();
-    expect(
-      brokerRequestSchema.safeParse({
-        action: "group_members",
-        groupId: "102",
-        offset: 100,
-        fields: ["email", "mobilePhone", "joinedOn"],
-      }).success,
-    ).toBe(true);
-    for (const extra of [
-      { path: "arbitrary" },
-      { fields: ["unknown"] },
-      { offset: 1.5 },
-    ])
-      expect(
-        brokerRequestSchema.safeParse({
-          action: "group_members",
-          groupId: "102",
-          ...extra,
-        }).success,
-      ).toBe(false);
   });
 
   it("only returns contact fields when explicitly requested", async () => {

@@ -10,11 +10,11 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { FlockbotError } from "../../src/index.js";
-import { BrowserConnection } from "../../adapters/mcp/src/browser-connection.js";
+import { ParishConnection } from "../../adapters/mcp/src/connection.js";
 import {
-  BrowserAuthenticationError,
-  BrowserConnectionError,
-} from "../../adapters/mcp/src/browser-runtime.js";
+  AuthenticationSuspectedError,
+  ConnectionError,
+} from "../../adapters/mcp/src/session.js";
 import { httpSessionFactory } from "../../adapters/mcp/src/http-session.js";
 import { MCP_VERSION } from "../../adapters/mcp/src/version.js";
 import { SerialCoordinator } from "../../adapters/mcp/src/serial-coordinator.js";
@@ -55,7 +55,7 @@ function json(data: unknown, cookies: readonly string[] = [], status = 200) {
 }
 
 const directories: string[] = [];
-const connections: BrowserConnection[] = [];
+const connections: ParishConnection[] = [];
 afterEach(async () => {
   await Promise.all(
     connections.splice(0).map((connection) => connection.close()),
@@ -144,7 +144,7 @@ function fixture() {
     });
   };
   const connect = () => {
-    const connection = new BrowserConnection({
+    const connection = new ParishConnection({
       profile,
       factory,
       pollMs: 5,
@@ -316,7 +316,7 @@ describe("plain-HTTP local connection", () => {
       interactive: true,
     });
     const error: unknown = await session.signIn().catch((error) => error);
-    expect(error).toBeInstanceOf(BrowserConnectionError);
+    expect(error).toBeInstanceOf(ConnectionError);
     expect(error).toMatchObject({
       code: "browser_unavailable",
       stage: "sign_in",
@@ -355,14 +355,14 @@ describe("plain-HTTP local connection", () => {
     const redirected: unknown = await session
       .request("dashboard")
       .catch((error) => error);
-    expect(redirected).toBeInstanceOf(BrowserAuthenticationError);
+    expect(redirected).toBeInstanceOf(AuthenticationSuspectedError);
     expect(redirected).toMatchObject({ code: "redirect_rejected" });
 
     f.routes["GET dashboard"] = () => json({}, [], 403);
     const denied: unknown = await session
       .request("dashboard")
       .catch((error) => error);
-    expect(denied).toBeInstanceOf(BrowserAuthenticationError);
+    expect(denied).toBeInstanceOf(AuthenticationSuspectedError);
     expect(denied).toMatchObject({ code: "permission_denied", status: 403 });
 
     f.routes["GET dashboard"] = () => json({}, [], 500);
@@ -370,7 +370,7 @@ describe("plain-HTTP local connection", () => {
       .request("dashboard")
       .catch((error) => error);
     expect(failed).toBeInstanceOf(FlockbotError);
-    expect(failed).not.toBeInstanceOf(BrowserAuthenticationError);
+    expect(failed).not.toBeInstanceOf(AuthenticationSuspectedError);
     expect(failed).toMatchObject({ code: "upstream_rejected", status: 500 });
   });
 

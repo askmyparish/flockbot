@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FlockbotError } from "../../src/index.js";
-import { BrowserConnection } from "../../adapters/mcp/src/browser-connection.js";
+import { ParishConnection } from "../../adapters/mcp/src/connection.js";
 import { waitFor } from "./support.js";
 import { noteResponse } from "../fixtures/note.js";
 import { SerialCoordinator } from "../../adapters/mcp/src/serial-coordinator.js";
@@ -12,15 +12,14 @@ import {
   failureDiagnostic,
 } from "../../adapters/mcp/src/diagnostics.js";
 import {
-  BrowserAuthenticationError,
-  BrowserConnectionError,
-  openBrowserSession,
-  type BrowserFactory,
-  type BrowserSession,
-} from "../../adapters/mcp/src/browser-runtime.js";
+  AuthenticationSuspectedError,
+  ConnectionError,
+  type SessionFactory,
+  type FlocknoteSession,
+} from "../../adapters/mcp/src/session.js";
 
 const directories: string[] = [];
-const connections: BrowserConnection[] = [];
+const connections: ParishConnection[] = [];
 afterEach(async () => {
   await Promise.all(
     connections.splice(0).map((connection) => connection.close()),
@@ -48,7 +47,7 @@ function fixture(options: { now?: () => number; setupMs?: number } = {}) {
   const requests: { path: string; method: string; body?: string }[] = [];
   const isOpen = vi.fn(() => true);
   const finishSignIn = vi.fn(async () => undefined);
-  const session: BrowserSession = {
+  const session: FlocknoteSession = {
     request: vi.fn(async (path, method = "GET", body) => {
       requests.push({ path, method, ...(body === undefined ? {} : { body }) });
       const response = responses[path];
@@ -62,10 +61,10 @@ function fixture(options: { now?: () => number; setupMs?: number } = {}) {
     finishSignIn,
     isOpen,
   };
-  const factory = vi.fn<BrowserFactory>(async () => session);
+  const factory = vi.fn<SessionFactory>(async () => session);
   const coordinator = new SerialCoordinator();
   const create = () => {
-    const connection = new BrowserConnection({
+    const connection = new ParishConnection({
       profile,
       factory,
       pollMs: 5,
@@ -90,7 +89,7 @@ function fixture(options: { now?: () => number; setupMs?: number } = {}) {
   };
 }
 
-async function ready(connection: BrowserConnection) {
+async function ready(connection: ParishConnection) {
   expect(await connection.connect("example-parish")).toEqual({
     state: "pending",
     parish: "example-parish",
@@ -179,11 +178,11 @@ describe("browser-owned local connection", () => {
     );
     const first = f.connection.connect("example-parish").then(
       (status) => status.state,
-      (error: unknown) => (error as BrowserConnectionError).code,
+      (error: unknown) => (error as ConnectionError).code,
     );
     const second = f.connection.connect("example-parish").then(
       (status) => status.state,
-      (error: unknown) => (error as BrowserConnectionError).code,
+      (error: unknown) => (error as ConnectionError).code,
     );
     try {
       expect(await second).toBe("connection_busy");
@@ -265,10 +264,10 @@ describe("browser-owned local connection", () => {
     new FlockbotError("operation_timeout"),
     new FlockbotError("upstream_rejected", 503),
     new FlockbotError("authentication_protocol_error"),
-    new BrowserAuthenticationError("upstream_rejected"),
-    new BrowserAuthenticationError("permission_denied"),
-    new BrowserAuthenticationError("redirect_rejected"),
-    new BrowserAuthenticationError("invalid_response"),
+    new AuthenticationSuspectedError("upstream_rejected"),
+    new AuthenticationSuspectedError("permission_denied"),
+    new AuthenticationSuspectedError("redirect_rejected"),
+    new AuthenticationSuspectedError("invalid_response"),
   ])(
     "keeps sign-in open through an inconclusive poll (%#)",
     async (failure) => {
@@ -388,7 +387,7 @@ describe("browser-owned local connection", () => {
       return { success: true, userID: 201 };
     };
     f.finishSignIn.mockRejectedValue(
-      new BrowserConnectionError("browser_unavailable", undefined, "close"),
+      new ConnectionError("browser_unavailable", undefined, "close"),
     );
     await f.connection.connect("example-parish");
     await waitFor(async () =>
@@ -479,8 +478,8 @@ describe("browser-owned local connection", () => {
   it.each([
     { success: false, authorized: false },
     "<!doctype html><html><form>Fictional sign-in</form></html>",
-    new BrowserAuthenticationError("upstream_rejected"),
-    new BrowserAuthenticationError("permission_denied"),
+    new AuthenticationSuspectedError("upstream_rejected"),
+    new AuthenticationSuspectedError("permission_denied"),
   ])(
     "diagnoses a failed membership request without replaying it (%#)",
     async (response) => {
@@ -538,14 +537,14 @@ describe("browser-owned local connection", () => {
     [new FlockbotError("transport_failed"), "inconclusive"],
     [{}, "inconclusive"],
     [{ success: true, userID: 201, authorized: false }, "denied"],
-    [new BrowserAuthenticationError("permission_denied"), "denied"],
+    [new AuthenticationSuspectedError("permission_denied"), "denied"],
   ])(
     "does not infer expiry when an auth-failure diagnostic is inconclusive (%#)",
     async (verification, authentication) => {
       const f = fixture();
       await ready(f.connection);
       f.responses["group/101/getSubscriberCount"] =
-        new BrowserAuthenticationError("permission_denied");
+        new AuthenticationSuspectedError("permission_denied");
       f.responses["user/userData"] = verification;
       f.requests.length = 0;
       const diagnostic = await runDiagnostic("subscriber_count", async () => {
@@ -575,7 +574,7 @@ describe("browser-owned local connection", () => {
     const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
     f.responses["group/101/getSubscriberCount"] = () => {
       now = 25_001;
-      throw new BrowserAuthenticationError("permission_denied");
+      throw new AuthenticationSuspectedError("permission_denied");
     };
     f.requests.length = 0;
     try {
@@ -801,26 +800,6 @@ describe("browser-owned local connection", () => {
     );
     expect(f.session.close).toHaveBeenCalledTimes(1);
   });
-  it("reports a fixed browser startup stage without copying launcher exception details", async () => {
-    const failed = openBrowserSession(
-      {
-        profile: "unused-fictional-profile",
-        origin: "https://example-parish.flocknote.com",
-        interactive: false,
-      },
-      async () => {
-        throw new Error("fictional-secret-not-for-diagnostics");
-      },
-    );
-    await expect(failed).rejects.toMatchObject({
-      code: "browser_unavailable",
-      stage: "launch",
-    });
-    await failed.catch((error: unknown) => {
-      expect(String(error)).not.toContain("fictional-secret");
-      expect(JSON.stringify(error)).not.toContain("fictional-secret");
-    });
-  });
   it("status before setup opens no browser and writes no profile state", async () => {
     const f = fixture();
     expect(await f.connection.status()).toEqual({ state: "not_configured" });
@@ -899,7 +878,7 @@ describe("browser-owned local connection", () => {
     });
     expect(f.requests).toHaveLength(0);
     f.responses["group/101/getSubscriberCount"] =
-      new BrowserAuthenticationError("upstream_rejected");
+      new AuthenticationSuspectedError("upstream_rejected");
     await expect(f.connection.count("101")).rejects.toMatchObject({
       code: "authentication_required",
     });
@@ -938,7 +917,7 @@ describe("browser-owned local connection", () => {
       "group/101/getSubscriberCount",
     ]);
     f.responses["group/101/getSubscriberCount"] =
-      new BrowserAuthenticationError("permission_denied");
+      new AuthenticationSuspectedError("permission_denied");
     f.responses["user/userData"] = {
       success: true,
       userID: 201,
@@ -958,10 +937,10 @@ describe("browser-owned local connection", () => {
     await ready(f.connection);
     await expect(
       f.connection.connect("different-parish"),
-    ).rejects.toBeInstanceOf(BrowserConnectionError);
+    ).rejects.toBeInstanceOf(ConnectionError);
     f.responses["user/userData"] = { success: true, userID: 202 };
     f.responses["group/101/getSubscriberCount"] =
-      new BrowserAuthenticationError("permission_denied");
+      new AuthenticationSuspectedError("permission_denied");
     f.requests.length = 0;
     await expect(f.connection.count("101")).rejects.toMatchObject({
       code: "connection_changed",

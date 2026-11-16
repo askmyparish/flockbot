@@ -2,14 +2,15 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { FlockbotError } from "../../../src/index.js";
-import { MEMBER_FILTER_PAGE_SIZE } from "../../../src/models/member-filters.js";
+import {
+  MEMBER_FILTER_PAGE_SIZE,
+  MEMBER_OPERATORS,
+} from "../../../src/models/member-filters.js";
 import { Operation } from "../../../src/operation.js";
 import { setTimeout as delay } from "node:timers/promises";
-import type { BrowserConnection, BrowserStatus } from "./browser-connection.js";
-import { BrowserConnectionError } from "./browser-runtime.js";
-import { draftContentSchema, memberSearchShape } from "./browser-protocol.js";
+import type { ParishConnection, ConnectionStatus } from "./connection.js";
+import { ConnectionError } from "./session.js";
 import { MCP_VERSION } from "./version.js";
-import { UpdateChecker, type UpdateNotifications } from "./update-check.js";
 import { FailureLog } from "./failure-log.js";
 import {
   runDiagnostic,
@@ -21,17 +22,86 @@ import {
 } from "./diagnostics.js";
 
 /** Where the user types their Flocknote password during connect. */
-export type SignInSurface = "flocknote_website" | "local_page";
-
-const WEBSITE_SIGN_IN = "the user signs in on Flocknote's real website.";
-const LOCAL_PAGE_SIGN_IN =
+const memberSearchShape = {
+  mode: z.enum(["count", "members"]).optional(),
+  searchTerm: z.string().min(1).max(256).optional(),
+  groupId: z.string().min(1).max(128).optional(),
+  groupName: z.string().min(1).max(256).optional(),
+  fields: z
+    .array(z.enum(["email", "mobilePhone", "joinedOn"]))
+    .max(3)
+    .optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+  continuation: z
+    .object({
+      offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+      resultCount: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+      queryKey: z.string().regex(/^[a-f0-9]{64}$/),
+      previousPageKey: z.string().regex(/^[a-f0-9]{64}$/),
+    })
+    .strict()
+    .optional(),
+  includeInactive: z.boolean().optional(),
+  criteria: z
+    .object({
+      any: z
+        .array(
+          z
+            .object({
+              all: z
+                .array(
+                  z
+                    .object({
+                      fieldId: z.string().min(1).max(280),
+                      operator: z.enum(MEMBER_OPERATORS),
+                      value: z.string().min(1).max(256).optional(),
+                      negated: z.boolean().optional(),
+                    })
+                    .strict(),
+                )
+                .min(1)
+                .max(20)
+                .readonly(),
+            })
+            .strict(),
+        )
+        .min(1)
+        .max(8)
+        .readonly(),
+    })
+    .strict()
+    .optional(),
+};
+const draftContentSchema = z
+  .array(
+    z.union([
+      z
+        .object({
+          type: z.literal("text"),
+          body: z.string().min(1),
+          bodyFormat: z.enum(["text", "html"]).optional(),
+        })
+        .strict(),
+      z
+        .object({
+          type: z.literal("button"),
+          text: z.string().min(1),
+          url: z.string().min(1),
+        })
+        .strict(),
+      z.object({ type: z.literal("image"), path: z.string().min(1) }).strict(),
+    ]),
+  )
+  .min(1)
+  .readonly();
+const SIGN_IN =
   "the user signs in on a Flockbot sign-in page that opens in their own browser on this computer and sends the password only to Flocknote.";
 const INSTRUCTIONS =
   "Use these tools for the user's Flocknote parish requests. Trust the saved session and call the requested tool directly; no preliminary status or authentication check is needed. " +
   "Use the returned url for note links from note, find_notes, group_notes, create_email_draft and duplicate_email_draft; no separate link lookup is needed. Unavailable note reads and group-list rows with unestablished non-published identities return url:null; do not construct a link for those results. A link does not establish publication, delivery, public access or edit permission. " +
   "Enable verboseDiagnostics only when the user explicitly requests verbose diagnostic capture for this call. It saves bounded credential-redacted request/response data locally, including personal data, for this operation only. Never automatically enable it or replay a failed write for diagnostics. " +
   "Member IDs are internal: identify people to the user by name and distinguishing contact details, not numeric IDs. " +
-  `If sign-in is needed, ask for the parish subdomain and call connect; ${WEBSITE_SIGN_IN} ` +
+  `If sign-in is needed, ask for the parish subdomain and call connect; ${SIGN_IN} ` +
   "The connect call waits briefly for sign-in. When it returns ready, continue the user's original request without asking them to say they are signed in. Sign-in alone does not finish their parish task. " +
   "Only if connect still returns pending should you ask the user to finish sign-in and let you know, then check status once. " +
   "Never request passwords, codes, cookies, browser storage, arbitrary URLs or scripts. " +
@@ -42,7 +112,6 @@ const INSTRUCTIONS =
   "Use member_groups to list a selected person's explicitly confirmed subscriptions, and is_member for one selected group. Missing groups mean unknown, not nonmembership. Proxy-only relationships with isSubscribed false are not subscriptions. Membership-read failures never mean no membership. " +
   "For who belongs to a group, use group_members with the user's groupName directly. Return names, keeping IDs internal and contact fields omitted unless requested. Follow nextOffset with the returned groupId until hasMore is false before presenting the full visible list. Track member IDs internally across pages; if a page repeats records, fails, or membership changes prevent consistent paging, stop and explain that the list is partial. Never present the first page as the whole group while hasMore is true. Pending and unsubscribed people are not included, and the login's permissions may limit visibility. " +
   'For when someone joined a group, request fields:["joinedOn"] with group_members in that group, or use find_members within that requested group with fields:["email","joinedOn"] when identifying by email. On follow-up questions, reuse the already selected person and group. An omitted joinedOn means it was not requested, not that Flocknote has no date: fetch it before answering. Only a requested joinedOn returned as null means the date is unavailable. To check whether any group members have dates, request joinedOn on every page before making a group-wide claim. joinedOn is Flocknote\'s reported subscription date for the selected group, not a profile creation date or another group\'s date. Report only the calendar date: no precise time, timezone, who added them, or first-ever/rejoin history is established. Resolve the person before answering, keep member IDs internal and never guess a date. ' +
-  "When a tool includes update metadata, answer the parish request first, then briefly mention the available Flockbot version (label prereleases) and say ‘Update Flockbot’ to install it. Mention it once per conversation unless asked again. Do not interrupt sign-in, hide an error or unknown write outcome, or install automatically. For an explicit update request, follow the canonical Flockbot guide, not the older installed setup script. " +
   "Add members only when requested, after resolving the parish, group and contact details. " +
   "Never repeat a write with outcome unknown: tell the user to check Flocknote before deciding what to do.";
 
@@ -50,23 +119,21 @@ const MESSAGES: Readonly<Record<string, string>> = {
   not_configured:
     "Ask for the parish subdomain, then open Flocknote sign-in with connect.",
   pending:
-    "Finish sign-in in the Flocknote browser window on this computer. When reconnecting, use the original Flocknote login; switch logins on the website if needed. Keep credentials and codes out of chat, then check status.",
+    "Finish sign-in on the Flockbot sign-in page that opened in the browser on this computer. When reconnecting, use the original Flocknote login. Keep the password out of chat, then check status.",
   ready:
     "The saved local Flocknote session is ready for use. Authentication is checked only after a relevant operation fails.",
   action_required:
-    "Sign in again using connect. Enter passwords and codes only on Flocknote's website.",
+    "Sign in again using connect. Enter the password only on the Flockbot sign-in page that connect opens.",
   authentication_required:
-    "The session needs sign-in. Use connect to open Flocknote on this computer.",
+    "The session needs sign-in. Use connect to open the Flockbot sign-in page on this computer.",
   connection_changed:
-    "The selected parish or Flocknote login differs from the saved connection. Restore the original login in the sign-in window, or explicitly forget the old connection through local setup before replacing it.",
+    "The selected parish or Flocknote login differs from the saved connection. Sign in with the original login, or explicitly forget the old connection through local setup before replacing it.",
   connection_busy:
-    "Another local Flockbot operation or sign-in is using the browser. Wait for it to finish.",
+    "Another local Flockbot operation or sign-in is in progress. Wait for it to finish.",
   browser_unavailable:
-    "The dedicated browser could not be used. Check for browser or OS prompts, then retry from this computer's desktop. Run plugin setup if the browser runtime is missing.",
+    "The sign-in page could not be opened in this computer's default browser. Retry from this computer's desktop.",
   profile_unavailable:
-    "The local browser profile could not be accessed. Check this OS user's profile permissions.",
-  broker_unavailable:
-    "The local browser owner is unavailable. A later request can reconnect; never repeat a write with outcome unknown.",
+    "The saved local connection could not be accessed. Check this OS user's file permissions.",
   group_not_found:
     "No group matches that name (matching ignores case). List groups and select the intended identifier.",
   everyone_not_found:
@@ -102,30 +169,11 @@ const MESSAGES: Readonly<Record<string, string>> = {
     "The write may have completed. Check Flocknote before deciding whether to submit it again.",
 };
 
-/** Replaces only the wording that names where sign-in happens. */
-const LOCAL_PAGE_MESSAGES: Readonly<Record<string, string>> = {
-  pending:
-    "Finish sign-in on the Flockbot sign-in page that opened in the browser on this computer. When reconnecting, use the original Flocknote login. Keep the password out of chat, then check status.",
-  action_required:
-    "Sign in again using connect. Enter the password only on the Flockbot sign-in page that connect opens.",
-  authentication_required:
-    "The session needs sign-in. Use connect to open the Flockbot sign-in page on this computer.",
-  connection_changed:
-    "The selected parish or Flocknote login differs from the saved connection. Sign in with the original login, or explicitly forget the old connection through local setup before replacing it.",
-  connection_busy:
-    "Another local Flockbot operation or sign-in is in progress. Wait for it to finish.",
-  browser_unavailable:
-    "The sign-in page could not be opened in this computer's default browser. Retry from this computer's desktop.",
-  profile_unavailable:
-    "The saved local connection could not be accessed. Check this OS user's file permissions.",
-};
-const LOCAL_PAGE_CONNECT =
+const CONNECT =
   "Opens a Flockbot sign-in page in the default browser on this computer and waits briefly for sign-in.";
-const WEBSITE_CONNECT =
-  "Opens Flocknote's real website in a dedicated local browser and waits briefly for sign-in.";
 
 function statusMessage(
-  status: BrowserStatus,
+  status: ConnectionStatus,
   messages: Readonly<Record<string, string>>,
 ): string | undefined {
   const diagnostic = status.setupError
@@ -145,7 +193,7 @@ function result(body: Record<string, unknown>, isError = false) {
 }
 
 export type FlocknoteConnection = Pick<
-  BrowserConnection,
+  ParishConnection,
   | "status"
   | "connect"
   | "groups"
@@ -176,15 +224,15 @@ async function connectForTurn(
   signal: AbortSignal,
   waitMs: number,
   pollMs: number,
-): Promise<BrowserStatus> {
+): Promise<ConnectionStatus> {
   // Keep the original MCP call alive, not a new authentication request or a
-  // background chat-wakeup service. Browser ownership/setup keeps its own budget.
+  // background chat-wakeup service. Sign-in keeps its own budget.
   const op = new Operation(
     { timeoutMs: waitMs, maxReadRetries: 0 },
     undefined,
     { signal },
   );
-  let latest: BrowserStatus | undefined;
+  let latest: ConnectionStatus | undefined;
   try {
     return await op.run(async () => {
       op.check();
@@ -192,13 +240,13 @@ async function connectForTurn(
       op.check();
       const parish = subdomain.toLowerCase();
       if (latest.state !== "not_configured" && latest.parish !== parish)
-        throw new BrowserConnectionError("connection_changed");
+        throw new ConnectionError("connection_changed");
       if (latest.state !== "pending") return latest;
       while (true) {
         const status = await connection.status({ signal: op.signal });
         op.check();
         if (status.state !== "not_configured" && status.parish !== parish)
-          throw new BrowserConnectionError("connection_changed");
+          throw new ConnectionError("connection_changed");
         latest = status;
         if (status.state !== "pending") return status;
         await delay(pollMs, undefined, { signal: op.signal }).catch(
@@ -226,15 +274,9 @@ export function createFlocknoteServer(
   options: {
     signInWaitMs?: number;
     signInPollMs?: number;
-    updates?: UpdateNotifications;
     failureLog?: Pick<FailureLog, "save">;
-    signIn?: SignInSurface;
   } = {},
 ) {
-  const localPage = options.signIn === "local_page";
-  const messages = localPage
-    ? { ...MESSAGES, ...LOCAL_PAGE_MESSAGES }
-    : MESSAGES;
   // Leave headroom below Codex's documented default 60-second tool timeout.
   const waitMs = options.signInWaitMs ?? 45_000;
   const pollMs = options.signInPollMs ?? 500;
@@ -249,20 +291,11 @@ export function createFlocknoteServer(
   const server = new McpServer(
     { name: "flockbot", version: MCP_VERSION },
     {
-      instructions: localPage
-        ? INSTRUCTIONS.replace(WEBSITE_SIGN_IN, LOCAL_PAGE_SIGN_IN)
-        : INSTRUCTIONS,
+      instructions: INSTRUCTIONS,
     },
   );
-  const respond = (body: Record<string, unknown>, isError = false) => {
-    // Update discovery is optional; it must never replace a parish result/error.
-    try {
-      const update = options.updates?.notice();
-      return result({ ...body, ...(update ? { update } : {}) }, isError);
-    } catch {
-      return result(body, isError);
-    }
-  };
+  const respond = (body: Record<string, unknown>, isError = false) =>
+    result(body, isError);
   const save = async (record: unknown): Promise<boolean> => {
     const logging = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -305,11 +338,6 @@ export function createFlocknoteServer(
       operation,
       async () => {
         try {
-          options.updates?.touch();
-        } catch {
-          /* Optional update check. */
-        }
-        try {
           const body = await work();
           if (!verbose) return respond(body);
           const record = verboseDiagnostic("success");
@@ -320,10 +348,9 @@ export function createFlocknoteServer(
           });
         } catch (error) {
           const known =
-            error instanceof FlockbotError ||
-            error instanceof BrowserConnectionError;
+            error instanceof FlockbotError || error instanceof ConnectionError;
           const code =
-            known && messages[error.code]
+            known && MESSAGES[error.code]
               ? error.code
               : "connector_unavailable";
           const diagnostic = failureDiagnostic(error);
@@ -334,9 +361,9 @@ export function createFlocknoteServer(
               ok: false,
               code,
               message:
-                messages[code] ??
+                MESSAGES[code] ??
                 "The local connector could not complete the operation.",
-              ...(error instanceof BrowserConnectionError && error.stage
+              ...(error instanceof ConnectionError && error.stage
                 ? { stage: error.stage }
                 : {}),
               ...(known && error.outcome ? { outcome: error.outcome } : {}),
@@ -383,7 +410,7 @@ export function createFlocknoteServer(
           return {
             ok: true,
             ...status,
-            message: statusMessage(status, messages),
+            message: statusMessage(status, MESSAGES),
           };
         },
         verboseDiagnostics,
@@ -393,7 +420,7 @@ export function createFlocknoteServer(
     "connect",
     {
       title: "Sign in to Flocknote",
-      description: `Use when sign-in is needed for the user's request, or to connect/reconnect. ${localPage ? LOCAL_PAGE_CONNECT : WEBSITE_CONNECT} On ready, continue the original task without asking for a done message. If still pending, finish sign-in and check status later. Takes no credentials. Never repeat a write with unknown outcome.`,
+      description: `Use when sign-in is needed for the user's request, or to connect/reconnect. ${CONNECT} On ready, continue the original task without asking for a done message. If still pending, finish sign-in and check status later. Takes no credentials. Never repeat a write with unknown outcome.`,
       inputSchema: {
         verboseDiagnostics,
         subdomain: z
@@ -425,7 +452,7 @@ export function createFlocknoteServer(
             message:
               status.state === "ready"
                 ? "Sign-in is complete. Continue the user's original request now without asking them to confirm sign-in. Never repeat a write with unknown outcome."
-                : statusMessage(status, messages),
+                : statusMessage(status, MESSAGES),
           };
         },
         verboseDiagnostics,
@@ -917,11 +944,6 @@ export function createFlocknoteServer(
       ),
   );
   server.server.onclose = () => {
-    try {
-      options.updates?.close();
-    } catch {
-      /* Optional update check. */
-    }
     void connection.close();
   };
   return server;
@@ -929,12 +951,9 @@ export function createFlocknoteServer(
 
 export async function serveFlocknote(
   connection: FlocknoteConnection,
-  options: { signIn?: SignInSurface; updates?: boolean } = {},
 ): Promise<void> {
   const server = createFlocknoteServer(connection, {
-    ...(options.updates === false ? {} : { updates: new UpdateChecker() }),
     failureLog: new FailureLog(),
-    ...(options.signIn ? { signIn: options.signIn } : {}),
   });
   const close = async () => {
     await connection.close();

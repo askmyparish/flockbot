@@ -79,12 +79,11 @@ import { FlocknoteLogin } from "../../../src/models/flocknote-login.js";
 import { Operation } from "../../../src/operation.js";
 import { DraftImages, type DraftImage } from "./draft-images.js";
 import {
-  BrowserAuthenticationError,
-  BrowserConnectionError,
-  openBrowserSession,
-  type BrowserFactory,
-  type BrowserSession,
-} from "./browser-runtime.js";
+  AuthenticationSuspectedError,
+  ConnectionError,
+  type SessionFactory,
+  type FlocknoteSession,
+} from "./session.js";
 import { QueueWaitTimeoutError } from "./serial-coordinator.js";
 import { connectionProfileDirectory } from "./profile.js";
 import {
@@ -112,8 +111,7 @@ const SETUP_STAGES = ["launch", "request_context", "sign_in", "close"] as const;
 type SetupStage = (typeof SETUP_STAGES)[number];
 function setupFailure(error: unknown): SetupError {
   if (
-    (error instanceof FlockbotError ||
-      error instanceof BrowserConnectionError) &&
+    (error instanceof FlockbotError || error instanceof ConnectionError) &&
     SETUP_ERRORS.some((code) => code === error.code)
   )
     return error.code as SetupError;
@@ -124,8 +122,7 @@ function requiresSignIn(error: unknown): boolean {
   return (
     (error instanceof FlockbotError &&
       error.code === "authentication_required") ||
-    (error instanceof BrowserConnectionError &&
-      error.code === "connection_changed")
+    (error instanceof ConnectionError && error.code === "connection_changed")
   );
 }
 
@@ -139,7 +136,7 @@ interface Connection {
   readonly setupStage?: SetupStage;
 }
 
-export interface BrowserStatus {
+export interface ConnectionStatus {
   readonly state: "not_configured" | "pending" | "ready" | "action_required";
   readonly parish?: string;
   readonly setupError?: SetupError;
@@ -158,7 +155,7 @@ function accepted(
       data.authorized === false) ||
     (!allowHtml && typeof data === "string" && data.trimStart().startsWith("<"))
   )
-    throw new BrowserAuthenticationError(
+    throw new AuthenticationSuspectedError(
       typeof data === "string" ? "invalid_response" : "upstream_rejected",
       typeof data === "string" ? "unexpected_html" : "authorization_false",
     );
@@ -179,7 +176,7 @@ function accepted(
   return data;
 }
 
-export function prepareBrowserProfile(profile: string): void {
+export function prepareProfile(profile: string): void {
   try {
     for (const directory of [profile, join(profile, "browser")]) {
       mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -194,31 +191,30 @@ export function prepareBrowserProfile(profile: string): void {
     for (const path of [
       join(profile, "connection.json"),
       join(profile, "coordination.sqlite"),
-      join(profile, "broker-start.sqlite"),
     ]) {
       if (existsSync(path) && !lstatSync(path).isFile()) throw new Error();
     }
   } catch {
-    throw new BrowserConnectionError("profile_unavailable");
+    throw new ConnectionError("profile_unavailable");
   }
 }
 
 /**
- * Coordinates one OS user's saved parish connection and browser profile.
+ * Coordinates one OS user's saved parish connection and session.
  * Owns sign-in, session lifecycle, auth-failure diagnostics and write outcomes;
- * shared resource models own domain requests and parsing. Reused browser sessions
- * run inside the broker's lifetime OS lock and its serialized operation queue.
+ * shared resource models own domain requests and parsing. Operations run
+ * through the supplied coordinator's serialized queue.
  */
-export class BrowserConnection {
+export class ParishConnection {
   readonly #profile: string;
   readonly #metadata: string;
   readonly #coordinator: SessionCoordinator;
-  readonly #factory: BrowserFactory;
+  readonly #factory: SessionFactory;
   readonly #setupMs: number;
   readonly #pollMs: number;
   readonly #now: () => number;
   #session:
-    | { generation: string; interactive: boolean; session: BrowserSession }
+    | { generation: string; interactive: boolean; session: FlocknoteSession }
     | undefined;
   #network: { generation: string; model: Network } | undefined;
   #setup:
@@ -226,13 +222,13 @@ export class BrowserConnection {
         controller: AbortController;
         task: Promise<void>;
         parish: string;
-        started: Promise<BrowserStatus>;
+        started: Promise<ConnectionStatus>;
       }
     | undefined;
 
   constructor(options: {
     profile?: string;
-    factory?: BrowserFactory;
+    factory: SessionFactory;
     setupMs?: number;
     pollMs?: number;
     coordinator: SessionCoordinator;
@@ -243,20 +239,20 @@ export class BrowserConnection {
     this.#metadata = join(this.#profile, "connection.json");
     this.#coordinator = options.coordinator;
     this.#now = options.now ?? (() => performance.now());
-    this.#factory = options.factory ?? openBrowserSession;
+    this.#factory = options.factory;
     this.#setupMs = options.setupMs ?? 5 * 60_000;
     this.#pollMs = options.pollMs ?? 1000;
   }
 
   toJSON(): object {
-    return { type: "BrowserConnection" };
+    return { type: "ParishConnection" };
   }
   [Symbol.for("nodejs.util.inspect.custom")](): string {
-    return "BrowserConnection {}";
+    return "ParishConnection {}";
   }
 
   #ensure(): void {
-    prepareBrowserProfile(this.#profile);
+    prepareProfile(this.#profile);
   }
 
   /** The shared owner prepares the profile before taking its lifetime OS lock. */
@@ -274,7 +270,7 @@ export class BrowserConnection {
   async #open(
     saved: Connection,
     interactive: boolean,
-  ): Promise<BrowserSession> {
+  ): Promise<FlocknoteSession> {
     if (this.#session) {
       if (
         this.#session.generation === saved.generation &&
@@ -318,7 +314,7 @@ export class BrowserConnection {
         throw new Error();
       return value;
     } catch {
-      throw new BrowserConnectionError("profile_unavailable");
+      throw new ConnectionError("profile_unavailable");
     }
   }
 
@@ -337,7 +333,7 @@ export class BrowserConnection {
       });
       renameSync(temporary, this.#metadata);
     } catch {
-      throw new BrowserConnectionError("profile_unavailable");
+      throw new ConnectionError("profile_unavailable");
     } finally {
       rmSync(temporary, { force: true });
     }
@@ -349,7 +345,7 @@ export class BrowserConnection {
       return await this.#coordinator.runExclusive("browser", signal, work);
     } catch (error) {
       if (error instanceof QueueWaitTimeoutError)
-        throw new BrowserConnectionError("connection_busy");
+        throw new ConnectionError("connection_busy");
       throw error;
     }
   }
@@ -368,25 +364,25 @@ export class BrowserConnection {
     return this.#network.model;
   }
 
-  async #verify(session: BrowserSession, saved: Connection): Promise<void> {
+  async #verify(session: FlocknoteSession, saved: Connection): Promise<void> {
     const userId = FlocknoteLogin.fromResponse(
       await session.request("user/userData"),
     ).id;
     if (saved.userId !== null && userId !== saved.userId)
-      throw new BrowserConnectionError("connection_changed");
+      throw new ConnectionError("connection_changed");
   }
 
   async #operate<T>(
     options: OperationOptions,
     work: (
-      session: BrowserSession,
+      session: FlocknoteSession,
       op: Operation,
       network: Network,
       connectionGeneration: string,
     ) => Promise<T>,
   ): Promise<T> {
     if (options.signal?.aborted) throw new FlockbotError("operation_cancelled");
-    if (this.#setup) throw new BrowserConnectionError("connection_busy");
+    if (this.#setup) throw new ConnectionError("connection_busy");
     let acquired = false;
     const op = new Operation(
       { timeoutMs: 25_000, maxReadRetries: 0 },
@@ -399,7 +395,7 @@ export class BrowserConnection {
           acquired = true;
           op.check();
           const saved = this.#read();
-          if (!saved) throw new BrowserConnectionError("not_configured");
+          if (!saved) throw new ConnectionError("not_configured");
           if (saved.state !== "ready")
             throw new FlockbotError("authentication_required");
           const session = await this.#open(saved, false);
@@ -416,7 +412,7 @@ export class BrowserConnection {
             let failure = error;
             captureFailure(error);
             if (
-              error instanceof BrowserAuthenticationError &&
+              error instanceof AuthenticationSuspectedError &&
               !op.signal.aborted
             ) {
               // A successful operation never pays for a preflight. Only diagnose
@@ -456,12 +452,12 @@ export class BrowserConnection {
         error instanceof FlockbotError &&
         error.code === "operation_timeout"
       )
-        throw new BrowserConnectionError("connection_busy");
+        throw new ConnectionError("connection_busy");
       throw error;
     }
   }
 
-  async status(options: OperationOptions = {}): Promise<BrowserStatus> {
+  async status(options: OperationOptions = {}): Promise<ConnectionStatus> {
     if (options.signal?.aborted) throw new FlockbotError("operation_cancelled");
     if (!existsSync(this.#profile)) return { state: "not_configured" };
     this.#ensure();
@@ -483,8 +479,7 @@ export class BrowserConnection {
       } catch (error) {
         if (
           !(
-            error instanceof BrowserConnectionError &&
-            error.code === "connection_busy"
+            error instanceof ConnectionError && error.code === "connection_busy"
           ) &&
           !(
             error instanceof FlockbotError &&
@@ -517,17 +512,17 @@ export class BrowserConnection {
   }
 
   /** Returns once the real sign-in window is open; no credential enters MCP. */
-  async connect(subdomain: string): Promise<BrowserStatus> {
+  async connect(subdomain: string): Promise<ConnectionStatus> {
     const selected = normalizeSubdomain(subdomain);
     if (this.#setup) {
       if (this.#setup.parish !== selected)
-        throw new BrowserConnectionError("connection_changed");
+        throw new ConnectionError("connection_changed");
       return this.#setup.started;
     }
     const controller = new AbortController();
-    let resolveStarted: (value: BrowserStatus) => void = () => undefined;
+    let resolveStarted: (value: ConnectionStatus) => void = () => undefined;
     let rejectStarted: (error: unknown) => void = () => undefined;
-    const started = new Promise<BrowserStatus>((resolve, reject) => {
+    const started = new Promise<ConnectionStatus>((resolve, reject) => {
       resolveStarted = resolve;
       rejectStarted = reject;
     });
@@ -540,7 +535,7 @@ export class BrowserConnection {
       async () => {
         const previous = this.#read();
         if (previous && previous.parish !== selected)
-          throw new BrowserConnectionError("connection_changed");
+          throw new ConnectionError("connection_changed");
         const saved: Connection = {
           version: 1,
           generation: previous?.generation ?? randomUUID(),
@@ -552,7 +547,7 @@ export class BrowserConnection {
         let lastFailure: SetupError | undefined;
         let failureStage: SetupStage | undefined;
         let authenticatedUser: string | undefined;
-        let session: BrowserSession | undefined;
+        let session: FlocknoteSession | undefined;
         this.#save({ ...saved, state: "pending" });
         try {
           if (signal.aborted) throw new FlockbotError("operation_cancelled");
@@ -562,7 +557,7 @@ export class BrowserConnection {
           resolveStarted({ state: "pending", parish: selected });
           while (!signal.aborted) {
             if (session.isOpen?.() === false)
-              throw new BrowserConnectionError(
+              throw new ConnectionError(
                 "browser_unavailable",
                 undefined,
                 "sign_in",
@@ -572,7 +567,7 @@ export class BrowserConnection {
                 await session.request("user/userData"),
               ).id;
               if (session.isOpen?.() === false)
-                throw new BrowserConnectionError(
+                throw new ConnectionError(
                   "browser_unavailable",
                   undefined,
                   "sign_in",
@@ -596,11 +591,11 @@ export class BrowserConnection {
               // the user's window open until the setup deadline or cancellation.
               if (
                 error instanceof FlockbotError &&
-                !(error instanceof BrowserAuthenticationError) &&
+                !(error instanceof AuthenticationSuspectedError) &&
                 error.code === "permission_denied"
               )
                 throw error;
-              if (error instanceof BrowserConnectionError) throw error;
+              if (error instanceof ConnectionError) throw error;
             }
             await delay(this.#pollMs, undefined, { signal }).catch(
               () => undefined,
@@ -608,8 +603,7 @@ export class BrowserConnection {
           }
         } catch (error) {
           lastFailure = setupFailure(error);
-          if (error instanceof BrowserConnectionError)
-            failureStage = error.stage;
+          if (error instanceof ConnectionError) failureStage = error.stage;
           throw error;
         } finally {
           try {
@@ -626,8 +620,7 @@ export class BrowserConnection {
             }
           } catch (error) {
             lastFailure ??= setupFailure(error);
-            if (error instanceof BrowserConnectionError)
-              failureStage ??= error.stage;
+            if (error instanceof ConnectionError) failureStage ??= error.stage;
             // Setup may already have returned pending. Preserve its terminal
             // diagnostic below without replacing an earlier failure in finally.
             rejectStarted(error);
@@ -663,7 +656,7 @@ export class BrowserConnection {
     );
   }
 
-  #resources(session: BrowserSession, op: Operation) {
+  #resources(session: FlocknoteSession, op: Operation) {
     const read = async (
       path: string,
       method: "GET" | "POST",
@@ -761,7 +754,7 @@ export class BrowserConnection {
     draft: EmailDraft | EmailDuplication,
     options: OperationOptions,
     work: (
-      session: BrowserSession,
+      session: FlocknoteSession,
       op: Operation,
       network: Network,
     ) => Promise<T>,
@@ -770,8 +763,8 @@ export class BrowserConnection {
       return await this.#operate(options, work);
     } catch (error) {
       const outcome = draft.submitted ? "unknown" : "not_submitted";
-      if (error instanceof BrowserConnectionError)
-        throw new BrowserConnectionError(
+      if (error instanceof ConnectionError)
+        throw new ConnectionError(
           error.code,
           outcome,
           error.stage,
@@ -997,8 +990,8 @@ export class BrowserConnection {
           undefined,
           error.reason,
         );
-      if (error instanceof BrowserConnectionError)
-        throw new BrowserConnectionError(
+      if (error instanceof ConnectionError)
+        throw new ConnectionError(
           error.code,
           submitted ? "unknown" : "not_submitted",
           error.stage,

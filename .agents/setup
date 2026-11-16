@@ -26,11 +26,3 @@ npm --version
 
 echo "Installing locked workspace dependencies"
 time bin/setup
-
-echo "Preparing Chromium for offline MCP browser tests"
-if ! node node_modules/playwright/cli.js install-deps --dry-run chromium; then
-  time node node_modules/playwright/cli.js install-deps chromium
-fi
-# Match scripts/mcp/test-browser.mjs; never use an authenticated browser profile.
-export PLAYWRIGHT_BROWSERS_PATH="$PWD/adapters/mcp/.cache/browsers"
-time node node_modules/playwright/cli.js install chromium --no-shell

@@ -1,14 +1,23 @@
 import { join } from "node:path";
-import { BrowserConnection } from "./browser-connection.js";
+import { ParishConnection } from "./connection.js";
+import { FailureLog } from "./failure-log.js";
 import { serveFlocknote } from "./flocknote-server.js";
 import { httpSessionFactory } from "./http-session.js";
 import { connectionProfileDirectory } from "./profile.js";
 import { SerialCoordinator } from "./serial-coordinator.js";
 
-// Runs in the assistant's own Node process: no browser runtime, no owner
-// process. The connection lives beside, not inside, the browser-backed profile.
+// Runs in the assistant's own Node process. Sign-in uses a local page in the
+// default browser; every Flocknote request after that is plain HTTP.
 async function main(): Promise<void> {
-  const connection = new BrowserConnection({
+  if (process.argv[2] === "diagnostics") {
+    const records = await new FailureLog().read();
+    if (records === undefined) {
+      process.stderr.write("Local diagnostic storage is unavailable.\n");
+      process.exitCode = 1;
+    } else process.stdout.write(records);
+    return;
+  }
+  const connection = new ParishConnection({
     profile: join(connectionProfileDirectory(), "http-v1"),
     factory: httpSessionFactory(),
     coordinator: new SerialCoordinator(),
@@ -20,7 +29,7 @@ async function main(): Promise<void> {
     );
     return;
   }
-  await serveFlocknote(connection, { signIn: "local_page", updates: false });
+  await serveFlocknote(connection);
 }
 
 main().catch(() => {

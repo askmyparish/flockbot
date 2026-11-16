@@ -22,11 +22,11 @@ import { safeFailureReason } from "../../../src/failure-reason.js";
 import { Network } from "../../../src/models/network.js";
 import {
   allowedEndpoint,
-  BrowserAuthenticationError,
-  BrowserConnectionError,
-  type BrowserFactory,
-  type BrowserSession,
-} from "./browser-runtime.js";
+  AuthenticationSuspectedError,
+  ConnectionError,
+  type SessionFactory,
+  type FlocknoteSession,
+} from "./session.js";
 import { recordResponse, responseError } from "./diagnostics.js";
 import { SerialCoordinator } from "./serial-coordinator.js";
 import {
@@ -88,7 +88,7 @@ class SessionFile implements SessionStore {
         state: value.state as SessionState | null,
       };
     } catch {
-      throw new BrowserConnectionError("profile_unavailable");
+      throw new ConnectionError("profile_unavailable");
     }
   }
 
@@ -180,7 +180,7 @@ interface Exchange {
  */
 export function httpSessionFactory(
   dependencies: HttpSessionDependencies = {},
-): BrowserFactory {
+): SessionFactory {
   const underlying = dependencies.fetch ?? fetch;
   // The one path to Flocknote: sign-in and every later request identify alike.
   const send: typeof fetch = (input, init) => {
@@ -245,7 +245,7 @@ export function httpSessionFactory(
       path: string,
       method: "GET" | "POST",
       body: string | undefined,
-      photo: Parameters<BrowserSession["request"]>[3],
+      photo: Parameters<FlocknoteSession["request"]>[3],
     ): Promise<Exchange> => {
       const url = `${options.origin}/${path}`;
       const saved = file.read();
@@ -454,7 +454,7 @@ export function httpSessionFactory(
           case "upstream_rejected":
             if (result.authentication)
               throw responseError(
-                new BrowserAuthenticationError(
+                new AuthenticationSuspectedError(
                   result.error,
                   reason,
                   result.status,
@@ -495,7 +495,7 @@ export function httpSessionFactory(
           await open(page.url);
         } catch {
           await closePage().catch(() => undefined);
-          throw new BrowserConnectionError(
+          throw new ConnectionError(
             "browser_unavailable",
             undefined,
             "sign_in",
