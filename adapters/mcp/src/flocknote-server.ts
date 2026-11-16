@@ -20,12 +20,18 @@ import {
   type DiagnosticOperation,
 } from "./diagnostics.js";
 
+/** Where the user types their Flocknote password during connect. */
+export type SignInSurface = "flocknote_website" | "local_page";
+
+const WEBSITE_SIGN_IN = "the user signs in on Flocknote's real website.";
+const LOCAL_PAGE_SIGN_IN =
+  "the user signs in on a Flockbot sign-in page that opens in their own browser on this computer and sends the password only to Flocknote.";
 const INSTRUCTIONS =
   "Use these tools for the user's Flocknote parish requests. Trust the saved session and call the requested tool directly; no preliminary status or authentication check is needed. " +
   "Use the returned url for note links from note, find_notes, group_notes, create_email_draft and duplicate_email_draft; no separate link lookup is needed. Unavailable note reads and group-list rows with unestablished non-published identities return url:null; do not construct a link for those results. A link does not establish publication, delivery, public access or edit permission. " +
   "Enable verboseDiagnostics only when the user explicitly requests verbose diagnostic capture for this call. It saves bounded credential-redacted request/response data locally, including personal data, for this operation only. Never automatically enable it or replay a failed write for diagnostics. " +
   "Member IDs are internal: identify people to the user by name and distinguishing contact details, not numeric IDs. " +
-  "If sign-in is needed, ask for the parish subdomain and call connect; the user signs in on Flocknote's real website. " +
+  `If sign-in is needed, ask for the parish subdomain and call connect; ${WEBSITE_SIGN_IN} ` +
   "The connect call waits briefly for sign-in. When it returns ready, continue the user's original request without asking them to say they are signed in. Sign-in alone does not finish their parish task. " +
   "Only if connect still returns pending should you ask the user to finish sign-in and let you know, then check status once. " +
   "Never request passwords, codes, cookies, browser storage, arbitrary URLs or scripts. " +
@@ -96,13 +102,38 @@ const MESSAGES: Readonly<Record<string, string>> = {
     "The write may have completed. Check Flocknote before deciding whether to submit it again.",
 };
 
-function statusMessage(status: BrowserStatus): string | undefined {
+/** Replaces only the wording that names where sign-in happens. */
+const LOCAL_PAGE_MESSAGES: Readonly<Record<string, string>> = {
+  pending:
+    "Finish sign-in on the Flockbot sign-in page that opened in the browser on this computer. When reconnecting, use the original Flocknote login. Keep the password out of chat, then check status.",
+  action_required:
+    "Sign in again using connect. Enter the password only on the Flockbot sign-in page that connect opens.",
+  authentication_required:
+    "The session needs sign-in. Use connect to open the Flockbot sign-in page on this computer.",
+  connection_changed:
+    "The selected parish or Flocknote login differs from the saved connection. Sign in with the original login, or explicitly forget the old connection through local setup before replacing it.",
+  connection_busy:
+    "Another local Flockbot operation or sign-in is in progress. Wait for it to finish.",
+  browser_unavailable:
+    "The sign-in page could not be opened in this computer's default browser. Retry from this computer's desktop.",
+  profile_unavailable:
+    "The saved local connection could not be accessed. Check this OS user's file permissions.",
+};
+const LOCAL_PAGE_CONNECT =
+  "Opens a Flockbot sign-in page in the default browser on this computer and waits briefly for sign-in.";
+const WEBSITE_CONNECT =
+  "Opens Flocknote's real website in a dedicated local browser and waits briefly for sign-in.";
+
+function statusMessage(
+  status: BrowserStatus,
+  messages: Readonly<Record<string, string>>,
+): string | undefined {
   const diagnostic = status.setupError
-    ? MESSAGES[status.setupError]
+    ? messages[status.setupError]
     : undefined;
   return diagnostic && status.state === "action_required"
-    ? `${diagnostic} ${MESSAGES.action_required}`
-    : MESSAGES[status.state];
+    ? `${diagnostic} ${messages.action_required}`
+    : messages[status.state];
 }
 
 function result(body: Record<string, unknown>, isError = false) {
@@ -197,8 +228,13 @@ export function createFlocknoteServer(
     signInPollMs?: number;
     updates?: UpdateNotifications;
     failureLog?: Pick<FailureLog, "save">;
+    signIn?: SignInSurface;
   } = {},
 ) {
+  const localPage = options.signIn === "local_page";
+  const messages = localPage
+    ? { ...MESSAGES, ...LOCAL_PAGE_MESSAGES }
+    : MESSAGES;
   // Leave headroom below Codex's documented default 60-second tool timeout.
   const waitMs = options.signInWaitMs ?? 45_000;
   const pollMs = options.signInPollMs ?? 500;
@@ -212,7 +248,11 @@ export function createFlocknoteServer(
     throw new FlockbotError("invalid_configuration");
   const server = new McpServer(
     { name: "flockbot", version: MCP_VERSION },
-    { instructions: INSTRUCTIONS },
+    {
+      instructions: localPage
+        ? INSTRUCTIONS.replace(WEBSITE_SIGN_IN, LOCAL_PAGE_SIGN_IN)
+        : INSTRUCTIONS,
+    },
   );
   const respond = (body: Record<string, unknown>, isError = false) => {
     // Update discovery is optional; it must never replace a parish result/error.
@@ -283,7 +323,7 @@ export function createFlocknoteServer(
             error instanceof FlockbotError ||
             error instanceof BrowserConnectionError;
           const code =
-            known && MESSAGES[error.code]
+            known && messages[error.code]
               ? error.code
               : "connector_unavailable";
           const diagnostic = failureDiagnostic(error);
@@ -294,7 +334,7 @@ export function createFlocknoteServer(
               ok: false,
               code,
               message:
-                MESSAGES[code] ??
+                messages[code] ??
                 "The local connector could not complete the operation.",
               ...(error instanceof BrowserConnectionError && error.stage
                 ? { stage: error.stage }
@@ -343,7 +383,7 @@ export function createFlocknoteServer(
           return {
             ok: true,
             ...status,
-            message: statusMessage(status),
+            message: statusMessage(status, messages),
           };
         },
         verboseDiagnostics,
@@ -353,8 +393,7 @@ export function createFlocknoteServer(
     "connect",
     {
       title: "Sign in to Flocknote",
-      description:
-        "Use when sign-in is needed for the user's request, or to connect/reconnect. Opens Flocknote's real website in a dedicated local browser and waits briefly for sign-in. On ready, continue the original task without asking for a done message. If still pending, finish sign-in and check status later. Takes no credentials. Never repeat a write with unknown outcome.",
+      description: `Use when sign-in is needed for the user's request, or to connect/reconnect. ${localPage ? LOCAL_PAGE_CONNECT : WEBSITE_CONNECT} On ready, continue the original task without asking for a done message. If still pending, finish sign-in and check status later. Takes no credentials. Never repeat a write with unknown outcome.`,
       inputSchema: {
         verboseDiagnostics,
         subdomain: z
@@ -386,7 +425,7 @@ export function createFlocknoteServer(
             message:
               status.state === "ready"
                 ? "Sign-in is complete. Continue the user's original request now without asking them to confirm sign-in. Never repeat a write with unknown outcome."
-                : statusMessage(status),
+                : statusMessage(status, messages),
           };
         },
         verboseDiagnostics,
@@ -890,10 +929,12 @@ export function createFlocknoteServer(
 
 export async function serveFlocknote(
   connection: FlocknoteConnection,
+  options: { signIn?: SignInSurface; updates?: boolean } = {},
 ): Promise<void> {
   const server = createFlocknoteServer(connection, {
-    updates: new UpdateChecker(),
+    ...(options.updates === false ? {} : { updates: new UpdateChecker() }),
     failureLog: new FailureLog(),
+    ...(options.signIn ? { signIn: options.signIn } : {}),
   });
   const close = async () => {
     await connection.close();

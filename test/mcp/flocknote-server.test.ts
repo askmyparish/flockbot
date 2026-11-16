@@ -52,6 +52,7 @@ async function fixture(
     signInPollMs?: number;
     updates?: UpdateNotifications;
     failureLog?: Pick<FailureLog, "save">;
+    signIn?: "flocknote_website" | "local_page";
   } = {},
 ) {
   const profile = mkdtempSync(join(tmpdir(), "flockbot-server-test-"));
@@ -1188,6 +1189,46 @@ describe("Flocknote MCP contract", () => {
     expect(client.getInstructions()).toMatch(
       /Never repeat a write with outcome unknown/,
     );
+  });
+
+  it("names the local sign-in page, not Flocknote's website, when that is where sign-in happens", async () => {
+    const website = /Flocknote's (?:real )?website|Flocknote browser window/;
+    // Sign-in stays open: the person has not finished it yet.
+    const waiting = {
+      factory: async () => ({
+        signIn: async () => {},
+        close: async () => {},
+        request: async () => {
+          throw new FlockbotError("authentication_required");
+        },
+      }),
+      signInWaitMs: 30,
+      signInPollMs: 5,
+    };
+    const local = await fixture({ ...waiting, signIn: "local_page" });
+    const text = async (client: typeof local.client) => [
+      client.getInstructions() ?? "",
+      (await client.listTools()).tools.find(({ name }) => name === "connect")
+        ?.description ?? "",
+      JSON.stringify(
+        (
+          await client.callTool({
+            name: "connect",
+            arguments: { subdomain: "example-parish" },
+          })
+        ).structuredContent,
+      ),
+    ];
+    for (const part of await text(local.client)) {
+      expect(part).toContain("Flockbot sign-in page");
+      expect(part).not.toMatch(website);
+    }
+    // The browser-backed connector keeps its existing wording.
+    const browser = await fixture(waiting);
+    for (const part of await text(browser.client)) {
+      expect(part).toMatch(website);
+      expect(part).not.toContain("Flockbot sign-in page");
+    }
   });
 
   it.each([
