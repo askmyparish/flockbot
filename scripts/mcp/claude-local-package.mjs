@@ -1,10 +1,9 @@
 import { cp, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { build } from "esbuild";
 import { zipDirectory } from "./archive.mjs";
 import { releaseVersion } from "./release-version.mjs";
 
-// Claude Desktop replaces this placeholder with the installed extension's path.
+// Run after npm run build:mcp. Claude Desktop replaces this placeholder with the installed extension's path.
 const EXTENSION_DIRECTORY = ["$", "{__dirname}"].join("");
 
 const version = await releaseVersion();
@@ -13,21 +12,10 @@ const artifact = `adapters/mcp/artifacts/claude-local/flockbot-local-${version}.
 
 await rm(staging, { recursive: true, force: true });
 await mkdir(join(staging, "server"), { recursive: true });
-await build({
-  entryPoints: ["adapters/mcp/src/local-main.ts"],
-  outfile: join(staging, "server", "index.mjs"),
-  bundle: true,
-  // Reachable only through the browser-backed factory, which this entry replaces.
-  external: ["playwright"],
-  platform: "node",
-  target: "node22",
-  format: "esm",
-  logLevel: "warning",
-  legalComments: "eof",
-  banner: {
-    js: 'import { createRequire as __createRequire } from "node:module"; const require = __createRequire(import.meta.url);',
-  },
-});
+await cp(
+  "adapters/mcp/dist/server/index.mjs",
+  join(staging, "server", "index.mjs"),
+);
 await cp("assets/flockbot.png", join(staging, "flockbot.png"));
 await writeFile(
   join(staging, "manifest.json"),

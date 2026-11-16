@@ -69,31 +69,22 @@ jobs:
         run: node scripts/mcp/release-info.mjs --tag "$RELEASE_TAG"
       - run: npm ci --ignore-scripts
       - run: npm run check
-      - name: Install Chromium for intercepted offline fixtures
-        run: npx --no-install playwright install --with-deps chromium
-        env:
-          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/flockbot-browsers
-      - run: npm run test:mcp:browser
-        env:
-          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/flockbot-browsers
-      - name: Rebuild both platforms and verify committed checksums
-        run: npm run package:codex -- --verify-pins
-      - name: Audit guide-based setup artifacts
-        run: npm run check:setup-package
-      - name: Attest the archive bytes built from the reviewed merge commit
+      - name: Package the Claude Desktop extension from the reviewed merge commit
+        run: |
+          npm run package:claude-local
+          cd adapters/mcp/artifacts/claude-local
+          sha256sum flockbot-local-*.mcpb > SHA256SUMS
+      - name: Attest the extension bytes built from the reviewed merge commit
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: adapters/mcp/artifacts/codex/*.zip
+          subject-path: adapters/mcp/artifacts/claude-local/*.mcpb
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mcp-release
           path: |
-            adapters/mcp/artifacts/codex/flockbot-codex-*.zip
-            adapters/mcp/artifacts/codex/flockbot-setup-*.zip
-            adapters/mcp/artifacts/codex/flockbot-setup-*.md
-            adapters/mcp/artifacts/codex/SHA256SUMS
-            adapters/mcp/artifacts/codex/artifacts.json
-            adapters/mcp/artifacts/codex/release-notes.md
+            adapters/mcp/artifacts/claude-local/flockbot-local-*.mcpb
+            adapters/mcp/artifacts/claude-local/SHA256SUMS
+            adapters/mcp/artifacts/claude-local/release-notes.md
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -115,7 +106,7 @@ jobs:
         with:
           name: mcp-release
           path: release
-      - name: Verify archives after transfer
+      - name: Verify the extension after transfer
         working-directory: release
         run: sha256sum --check SHA256SUMS
       - name: Create the release tag or verify its existing target
@@ -142,7 +133,7 @@ jobs:
           RELEASE_TAG: ${{ needs.source.outputs.tag }}
           PRERELEASE: ${{ needs.source.outputs.prerelease }}
         run: |
-          gh release create "$RELEASE_TAG" flockbot-codex-*.zip flockbot-setup-*.zip flockbot-setup-*.md SHA256SUMS artifacts.json --verify-tag --draft --title "Flockbot MCP $RELEASE_TAG" --notes-file release-notes.md
+          gh release create "$RELEASE_TAG" flockbot-local-*.mcpb SHA256SUMS --verify-tag --draft --title "Flockbot MCP $RELEASE_TAG" --notes-file release-notes.md
           if [[ "$PRERELEASE" == true ]]; then
             gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false
           else

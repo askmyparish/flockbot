@@ -100,7 +100,10 @@ it("derives an automatic release tag from the reviewed version and refuses a mis
   expect(await readFile(output, "utf8")).toBe(
     "tag=mcp-v0.3.0-beta.0\nprerelease=true\n",
   );
-  const notes = join(root, "adapters/mcp/artifacts/codex/release-notes.md");
+  const notes = join(
+    root,
+    "adapters/mcp/artifacts/claude-local/release-notes.md",
+  );
   expect(await readFile(notes, "utf8")).toBe("- Reviewed feature.\n");
   expect(
     spawnSync(process.execPath, [script, "--tag", "mcp-v99.0.0"], options)
