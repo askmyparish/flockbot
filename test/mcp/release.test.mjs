@@ -15,7 +15,6 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { unzipSync } from "fflate";
 import {
-  PLUGINS,
   releaseNotes,
   releaseVersion,
   syncVersions,
@@ -36,40 +35,15 @@ async function fixture(version = "0.3.0-beta.0") {
     join(root, "adapters/mcp/package.json"),
     JSON.stringify({ version }),
   );
-  for (const name of PLUGINS) {
-    const folder = join(root, "plugins", name, ".codex-plugin");
-    await mkdir(folder, { recursive: true });
-    await writeFile(
-      join(folder, "plugin.json"),
-      JSON.stringify({
-        name,
-        version: "0.2.0",
-        description: "Preserve this field",
-      }),
-    );
-  }
   return root;
 }
 
 it.each(["0.2.1", "0.3.0-beta.0", "1.0.0-rc.12"])(
-  "synchronizes every version consumer without changing unrelated metadata (%s)",
+  "synchronizes the generated version module (%s)",
   async (version) => {
     const root = await fixture(version);
     expect(await syncVersions(root)).toBe(version);
     await expect(syncVersions(root, true)).resolves.toBe(version);
-    for (const name of PLUGINS) {
-      expect(
-        await readFile(join(root, "plugins", name, "runtime.version"), "utf8"),
-      ).toBe(`${version}\n`);
-      expect(
-        JSON.parse(
-          await readFile(
-            join(root, "plugins", name, ".codex-plugin/plugin.json"),
-            "utf8",
-          ),
-        ),
-      ).toMatchObject({ version, description: "Preserve this field" });
-    }
     expect(
       await readFile(join(root, "adapters/mcp/src/version.ts"), "utf8"),
     ).toContain(`MCP_VERSION = "${version}"`);
@@ -79,12 +53,12 @@ it.each(["0.2.1", "0.3.0-beta.0", "1.0.0-rc.12"])(
 it("fails closed for version drift without repairing files during a check", async () => {
   const root = await fixture();
   await syncVersions(root);
-  const path = join(root, "plugins/flockbot-macos/runtime.version");
-  await writeFile(path, "0.1.0\n");
-  await expect(syncVersions(root, true)).rejects.toThrow(
-    "runtime.version is stale",
+  const path = join(root, "adapters/mcp/src/version.ts");
+  await writeFile(path, 'export const MCP_VERSION = "0.1.0";\n');
+  await expect(syncVersions(root, true)).rejects.toThrow("version.ts is stale");
+  expect(await readFile(path, "utf8")).toBe(
+    'export const MCP_VERSION = "0.1.0";\n',
   );
-  expect(await readFile(path, "utf8")).toBe("0.1.0\n");
 });
 
 it.each([
