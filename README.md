@@ -9,10 +9,10 @@ through its internal API.
 
 The TypeScript client supports password login, saved sessions, coordinated recovery,
 group discovery, subscriber counts, member additions, and HTTP requests. A private
-Zapier candidate is available for offline development. A private
-[Codex MCP candidate](./docs/mcp/README.md) uses a dedicated local browser session
-with test-parish sign-in, read operations and explicitly requested membership
-additions verified on macOS. It remains a private candidate.
+Zapier candidate is available for offline development. A
+[local MCP connector preview](./docs/mcp/README.md) signs in through a page served
+on the staff member's own Mac and then uses plain HTTP; it is packaged as a
+Claude Desktop extension.
 
 ## TypeScript development
 
@@ -36,14 +36,12 @@ Use `npm run format` to format files, or run individual checks with
 and `npm run test:package` (after building). To run a focused test:
 
 ```sh
-bin/test test/mcp/browser-connection.test.ts
+bin/test test/mcp/connection.test.ts
 bin/test -t "reuses cookies"
 ```
 
 Passing a file runs only that spec; add `-t` to narrow it to a test name. The full
-offline suite remains `bin/test`. Real Chromium fixtures run separately with
-`npm run test:mcp:browser`, using up to three concurrent browsers (bounded by
-available CPUs), each with its own disposable profile and cleanup.
+offline suite remains `bin/test`.
 
 Tests reuse workers and imported modules to avoid repeated startup costs. Keep
 fixtures local to each test and clean up timers, environment changes, and resources;
@@ -55,13 +53,10 @@ Use `bin/test --isolate` to diagnose shared-state failures, or
 
 ### Amp orbs
 
-`.agents/setup` installs the Node.js version from `.node-version`, locked npm
-workspace dependencies, and Playwright's Chromium with its Debian system
-dependencies. It can be rerun safely and uses the browser cache expected by
-`npm run test:mcp:browser`. Run `npm run check` and `npm run test:mcp:browser`
-to verify the environment; neither requires live Flocknote access or credentials.
-No background services or resume hook are needed for offline development.
-Native macOS and Windows installation checks still require those platforms.
+`.agents/setup` installs the Node.js version from `.node-version` and locked npm
+workspace dependencies. It can be rerun safely. Run `npm run check` to verify the
+environment; it requires no live Flocknote access or credentials. No background
+services or resume hook are needed for offline development.
 
 ### Resource models
 
@@ -76,8 +71,8 @@ the corresponding API result. Neither constructor proves an existing record.
 
 Adapters supply requests within their own session, deadline and coordination
 boundary. The HTTP client retains staged cookie persistence and bounded password
-recovery; the browser adapter retains browser-owned cookies and failure-driven
-authentication checks. Model code imports neither adapter nor MCP/browser APIs.
+recovery; the MCP connection keeps its own saved session and failure-driven
+authentication checks. Model code imports neither adapter nor MCP APIs.
 Notes, households and other resources will gain implementations as their contracts
 are established; no speculative resource classes are provided.
 
@@ -267,7 +262,7 @@ Provide first and last names and at least one contact method. The client checks
 the session before submitting and returns only confirmed success. A submitted
 write is never automatically repeated; preserve an error's `outcome` in adapters.
 
-Name-based selection in the browser connector requires a unique case-insensitive
+Name-based selection in the MCP connector requires a unique case-insensitive
 match after trimming surrounding whitespace. It never picks between groups whose
 names differ only by case. `group_not_found` means no match and `group_ambiguous`
 means multiple matches; select an explicit group ID to resolve ambiguity. Both
@@ -406,37 +401,25 @@ never change the write outcome, infer an email-validation rule, or permit replay
 
 </details>
 
-### Private Codex MCP candidate
+### Local MCP connector preview
 
-The [Codex MCP candidate](./docs/mcp/README.md) exposes group discovery, subscriber
-counts and member additions through a dedicated local browser session. Staff sign
-in directly on Flocknote's website; credentials and cookies stay outside chat.
+The [local MCP connector](./docs/mcp/README.md) exposes group discovery, counts,
+member search and reads, notes, email analytics, email drafts and member additions
+to a local assistant over stdio. Staff sign in on a Flockbot page served from their
+own Mac; the password goes only to Flocknote and is not saved. The resulting
+session cookies stay in an owner-only file on that Mac, and every later request is
+plain HTTP to fixed Flocknote endpoints.
 
-Member search can locate active members in a selected group or Everyone, returning
-bounded identities and only explicitly requested contact fields. It distinguishes
-complete scoped results from truncated matches; see the
-[MCP tool contract](./docs/mcp/README.md#tools).
-For a chosen member ID, `member` reads identity and explicitly selected
-stored email/mobile phone details, preserving verification and bad-email status.
-Contact editing remains separate from these read operations.
-`member_groups` lists explicit subscriptions, while `is_member` checks one chosen
-group and preserves `unknown` when the response cannot establish membership.
-`group_members` answers who belongs to a named group, returning names by default
-and explicit offsets for additional pages rather than silently truncating a list.
-Request its `joinedOn` field for each person's reported subscription date in that
-group; an omitted field in the default roster does not mean no date is available.
+Member search returns bounded identities and only explicitly requested contact
+fields; see the [MCP tool contract](./docs/mcp/README.md#tools). Writes with an
+unknown outcome are never repeated automatically.
 
-`npm run check` builds/tests its stdio contract and packaging offline. The opt-in
-`npm run test:mcp:browser` uses real Chromium with intercepted fictional responses.
-Initial live sign-in, session reuse, group discovery and counts passed on macOS.
-Explicitly requested live member additions also returned confirmed success.
-The local browser owner is shared across MCP sessions, and additions can resolve
-a case-insensitive unique group name within one call. Locked/denied credential-store behavior,
-Windows execution and clean staff installation remain unverified.
-Start with the [Flockbot setup guide](./guide.md).
-See [setup details and recovery](./docs/mcp/setup.md) for contributor instructions.
-The [release runbook](./docs/mcp/releases.md) covers versioned CI artifacts,
-changelogs, reviewed release PRs and publishing GitHub release downloads.
+`npm run check` tests the tool contract offline and starts the built server once
+over stdio. `npm run package:claude-local` builds the Claude Desktop extension
+(`.mcpb`). Test-parish password sign-in, session reuse and counts passed in
+Claude Desktop on macOS. Emailed sign-in codes, Codex and Windows are not yet
+supported. Merging a Changesets release PR publishes the `.mcpb` as a GitHub
+release.
 
 ### Private Zapier candidate
 
