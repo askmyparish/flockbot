@@ -31,6 +31,7 @@
     "build:mcp": "node scripts/mcp/build.mjs",
     "dev:mcp": "node scripts/mcp/develop.mjs",
     "package:codex": "node scripts/mcp/codex-package.mjs",
+    "package:claude-local": "node scripts/mcp/claude-local-package.mjs",
     "test:mcp:browser": "node scripts/mcp/test-browser.mjs",
     "changeset": "changeset",
     "release:sync": "node scripts/mcp/sync-version.mjs",
