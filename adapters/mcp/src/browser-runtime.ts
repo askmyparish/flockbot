@@ -59,7 +59,7 @@ export class BrowserConnectionError extends Error {
 export { AuthenticationSuspectedError as BrowserAuthenticationError } from "../../../src/errors.js";
 
 /** Internal endpoints only. Neither an MCP tool nor its arguments can set a URL. */
-function allowed(path: string, method: string): boolean {
+export function allowedEndpoint(path: string, method: string): boolean {
   if (method === "GET")
     return (
       [
@@ -170,7 +170,7 @@ export async function openBrowserSession(
             ? path !== "upload/photo/note" ||
               method !== "POST" ||
               body !== undefined
-            : !allowed(path, method)
+            : !allowedEndpoint(path, method)
         )
           throw new FlockbotError("invalid_path");
         const started = performance.now();
