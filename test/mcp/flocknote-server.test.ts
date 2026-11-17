@@ -1055,7 +1055,7 @@ describe("Flocknote MCP contract", () => {
     );
   });
 
-  it("names the local sign-in page, not Flocknote's website, as where sign-in happens", async () => {
+  it("names Flockbot's own sign-in, not Flocknote's website, as where sign-in happens", async () => {
     const website = /Flocknote's (?:real )?website|Flocknote browser window/;
     // Sign-in stays open: the person has not finished it yet.
     const waiting = {
@@ -1084,7 +1084,7 @@ describe("Flocknote MCP contract", () => {
       ),
     ];
     for (const part of await text(local.client)) {
-      expect(part).toContain("Flockbot sign-in page");
+      expect(part).toContain("Flockbot's sign-in");
       expect(part).not.toMatch(website);
     }
   });

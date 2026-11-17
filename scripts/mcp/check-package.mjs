@@ -23,7 +23,7 @@ try {
     name: "flockbot",
     version: await releaseVersion(),
   });
-  assert.match(client.getInstructions() ?? "", /Flockbot sign-in page/);
+  assert.match(client.getInstructions() ?? "", /Flockbot's sign-in/);
   const { tools } = await client.listTools();
   for (const name of ["status", "connect", "groups", "add_member"])
     assert.ok(

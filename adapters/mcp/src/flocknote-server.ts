@@ -95,7 +95,7 @@ const draftContentSchema = z
   .min(1)
   .readonly();
 const SIGN_IN =
-  "the user signs in on a Flockbot sign-in page that opens in their own browser on this computer and sends the password only to Flocknote.";
+  "the user signs in with Flockbot's sign-in on this computer, which sends the password only to Flocknote.";
 const INSTRUCTIONS =
   "Use these tools for the user's Flocknote parish requests. Trust the saved session and call the requested tool directly; no preliminary status or authentication check is needed. " +
   "Name the parish only from Flockbot: successful results carry the signed-in parish subdomain in parish. Never name a parish from memory or other context. " +
@@ -120,19 +120,19 @@ const MESSAGES: Readonly<Record<string, string>> = {
   not_configured:
     "Ask for the parish subdomain, then open Flocknote sign-in with connect.",
   pending:
-    "Finish sign-in on the Flockbot sign-in page that opened in the browser on this computer. When reconnecting, use the original Flocknote login. Keep the password out of chat, then check status.",
+    "Finish sign-in with Flockbot's sign-in that opened on this computer. When reconnecting, use the original Flocknote login. Keep the password out of chat, then check status.",
   ready:
     "The saved local Flocknote session is ready for use. Authentication is checked only after a relevant operation fails.",
   action_required:
-    "Sign in again using connect. Enter the password only on the Flockbot sign-in page that connect opens.",
+    "Sign in again using connect. Enter the password only in Flockbot's sign-in that connect opens.",
   authentication_required:
-    "The session needs sign-in. Use connect to open the Flockbot sign-in page on this computer.",
+    "The session needs sign-in. Use connect to open Flockbot's sign-in on this computer.",
   connection_changed:
     "The selected parish or Flocknote login differs from the saved connection. Sign in with the original login, or explicitly forget the old connection through local setup before replacing it.",
   connection_busy:
     "Another local Flockbot operation or sign-in is in progress. Wait for it to finish.",
   browser_unavailable:
-    "The sign-in page could not be opened in this computer's default browser. Retry from this computer's desktop.",
+    "Flockbot's sign-in could not be opened on this computer. Retry from this computer's desktop.",
   profile_unavailable:
     "The saved local connection could not be accessed. Check this OS user's file permissions.",
   group_not_found:
@@ -171,7 +171,7 @@ const MESSAGES: Readonly<Record<string, string>> = {
 };
 
 const CONNECT =
-  "Opens a Flockbot sign-in page in the default browser on this computer and waits briefly for sign-in.";
+  "Opens Flockbot's sign-in on this computer, in the Flockbot app or the default browser, and waits briefly for sign-in.";
 
 function statusMessage(
   status: ConnectionStatus,
