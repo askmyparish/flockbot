@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -971,6 +972,75 @@ describe("browser-owned local connection", () => {
       state: "action_required",
       parish: "example-parish",
     });
+  });
+
+  it("leaves a setup pending while another live process owns it", async () => {
+    const f = fixture();
+    await ready(f.connection);
+    const file = join(f.profile, "connection.json");
+    const metadata = JSON.parse(readFileSync(file, "utf8"));
+    // Connectors in separate processes share this profile; the parent process
+    // stands in for one that is still signing in.
+    writeFileSync(
+      file,
+      JSON.stringify({ ...metadata, state: "pending", owner: process.ppid }),
+    );
+    expect(await f.create().status()).toEqual({
+      state: "pending",
+      parish: "example-parish",
+    });
+    expect(JSON.parse(readFileSync(file, "utf8")).state).toBe("pending");
+    const exited = spawnSync(process.execPath, ["-e", ""]).pid;
+    writeFileSync(
+      file,
+      JSON.stringify({ ...metadata, state: "pending", owner: exited }),
+    );
+    expect(await f.create().status()).toMatchObject({
+      state: "action_required",
+    });
+  });
+
+  it("leaves a connection another process forgets or replaces during setup", async () => {
+    for (const replace of [false, true]) {
+      const f = fixture();
+      f.responses["user/userData"] = {
+        success: true,
+        userID: null,
+        authorized: false,
+      };
+      await f.connection.connect("example-parish");
+      const elsewhere = new ParishConnection({
+        profile: f.profile,
+        factory: f.factory,
+        coordinator: new SerialCoordinator(),
+      });
+      connections.push(elsewhere);
+      const file = join(f.profile, "connection.json");
+      const replacement = {
+        version: 1,
+        generation: "00000000-0000-4000-8000-000000000002",
+        parish: "other-parish",
+        userId: "302",
+        state: "ready",
+      };
+      // The other process acts while this setup is finishing its sign-in.
+      f.finishSignIn.mockImplementationOnce(async () => {
+        await elsewhere.forget();
+        if (replace) writeFileSync(file, JSON.stringify(replacement));
+      });
+      f.responses["user/userData"] = { success: true, userID: 201 };
+      await waitFor(async () => expect(f.finishSignIn).toHaveBeenCalled());
+      await waitFor(async () =>
+        expect(await f.connection.status()).not.toMatchObject({
+          state: "pending",
+        }),
+      );
+      expect(await f.create().status()).toEqual(
+        replace
+          ? { state: "ready", parish: "other-parish" }
+          : { state: "not_configured" },
+      );
+    }
   });
 
   it("keeps reconnect open while another login is present, then accepts the original login", async () => {

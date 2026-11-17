@@ -134,6 +134,21 @@ interface Connection {
   readonly state: "pending" | "ready" | "action_required";
   readonly setupError?: SetupError;
   readonly setupStage?: SetupStage;
+  /** Process running a pending setup. Connectors share one profile, so another
+   * process's coordinator can't tell a live setup from an abandoned one. */
+  readonly owner?: number;
+}
+
+/** Whether another live process owns this pending setup. */
+function ownedElsewhere(owner: number | undefined): boolean {
+  if (owner === undefined || owner === process.pid) return false;
+  try {
+    process.kill(owner, 0);
+    return true;
+  } catch (error) {
+    // EPERM: the process exists but belongs to someone else.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 export interface ConnectionStatus {
@@ -309,6 +324,8 @@ export class ParishConnection {
           !SETUP_ERRORS.includes(value.setupError)) ||
         (value.setupStage !== undefined &&
           !SETUP_STAGES.includes(value.setupStage)) ||
+        (value.owner !== undefined &&
+          !(Number.isSafeInteger(value.owner) && value.owner > 0)) ||
         (value.state === "ready" && value.userId === null)
       )
         throw new Error();
@@ -323,6 +340,11 @@ export class ParishConnection {
       const copy = { ...value };
       delete copy.setupError;
       delete copy.setupStage;
+      value = copy;
+    }
+    if (value.state !== "pending") {
+      const copy = { ...value };
+      delete copy.owner;
       value = copy;
     }
     const temporary = join(this.#profile, `${randomUUID()}.json`);
@@ -467,11 +489,11 @@ export class ParishConnection {
     if (this.#setup) return { state: "pending", parish: this.#setup.parish };
     let saved = this.#read();
     if (!saved) return { state: "not_configured" };
-    if (saved.state === "pending") {
+    if (saved.state === "pending" && !ownedElsewhere(saved.owner)) {
       try {
         await this.#exclusive(AbortSignal.timeout(100), async () => {
           saved = this.#read();
-          if (saved?.state === "pending") {
+          if (saved?.state === "pending" && !ownedElsewhere(saved.owner)) {
             saved = { ...saved, state: "action_required" };
             this.#save(saved);
           }
@@ -548,7 +570,7 @@ export class ParishConnection {
         let failureStage: SetupStage | undefined;
         let authenticatedUser: string | undefined;
         let session: FlocknoteSession | undefined;
-        this.#save({ ...saved, state: "pending" });
+        this.#save({ ...saved, state: "pending", owner: process.pid });
         try {
           if (signal.aborted) throw new FlockbotError("operation_cancelled");
           this.#network?.model.clearGroups();
@@ -606,11 +628,27 @@ export class ParishConnection {
           if (error instanceof ConnectionError) failureStage = error.stage;
           throw error;
         } finally {
+          // Another process may forget or replace the connection while this
+          // setup runs. Only this setup's own pending record may take its
+          // result, checked again right before each save.
+          const ours = (): boolean => {
+            try {
+              const current = this.#read();
+              return (
+                current?.generation === saved.generation &&
+                current.state === "pending" &&
+                current.owner === process.pid
+              );
+            } catch {
+              return false;
+            }
+          };
+          if (!ours()) authenticatedUser = undefined;
           try {
             if (authenticatedUser !== undefined && !signal.aborted)
               await session?.finishSignIn?.();
             else await this.#dropSession();
-            if (authenticatedUser !== undefined && !signal.aborted) {
+            if (authenticatedUser !== undefined && !signal.aborted && ours()) {
               this.#save({
                 ...saved,
                 userId: authenticatedUser,
@@ -625,7 +663,7 @@ export class ParishConnection {
             // diagnostic below without replacing an earlier failure in finally.
             rejectStarted(error);
           } finally {
-            if (!ready)
+            if (!ready && ours())
               this.#save({
                 ...saved,
                 state: "action_required",
