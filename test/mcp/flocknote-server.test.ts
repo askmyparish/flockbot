@@ -46,6 +46,7 @@ async function fixture(
     signInWaitMs?: number;
     signInPollMs?: number;
     failureLog?: Pick<FailureLog, "save">;
+    parish?: string;
   } = {},
 ) {
   const profile = mkdtempSync(join(tmpdir(), "flockbot-server-test-"));
@@ -562,6 +563,36 @@ describe("Flocknote MCP contract", () => {
       expect(JSON.stringify(result)).not.toContain("alex@");
     },
   );
+
+  it("names the signed-in parish in instructions and in each result", async () => {
+    const { client, connection } = await fixture({ parish: "first-parish" });
+    expect(client.getInstructions()).toMatch(
+      /^This computer is signed in to the Flocknote parish first-parish \(first-parish\.flocknote\.com\)\./,
+    );
+    // Results use the saved connection now, not the parish at startup.
+    vi.spyOn(connection, "status").mockResolvedValue({
+      state: "ready",
+      parish: "second-parish",
+    });
+    vi.spyOn(connection, "count").mockResolvedValue(7);
+    expect(
+      (
+        await client.callTool({
+          name: "subscriber_count",
+          arguments: { groupId: "101" },
+        })
+      ).structuredContent,
+    ).toEqual({
+      ok: true,
+      groupId: "101",
+      subscriberCount: 7,
+      parish: "second-parish",
+    });
+    const { client: unsigned } = await fixture();
+    expect(unsigned.getInstructions()).not.toMatch(
+      /signed in to the Flocknote parish/,
+    );
+  });
 
   it("holds connect until fictional sign-in completes, then allows the original Everyone count without a user-done message", async () => {
     let finishLogin = (_value: unknown) => {};

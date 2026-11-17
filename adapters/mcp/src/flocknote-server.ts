@@ -98,6 +98,7 @@ const SIGN_IN =
   "the user signs in on a Flockbot sign-in page that opens in their own browser on this computer and sends the password only to Flocknote.";
 const INSTRUCTIONS =
   "Use these tools for the user's Flocknote parish requests. Trust the saved session and call the requested tool directly; no preliminary status or authentication check is needed. " +
+  "Name the parish only from Flockbot: successful results carry the signed-in parish subdomain in parish. Never name a parish from memory or other context. " +
   "Use the returned url for note links from note, find_notes, group_notes, create_email_draft and duplicate_email_draft; no separate link lookup is needed. Unavailable note reads and group-list rows with unestablished non-published identities return url:null; do not construct a link for those results. A link does not establish publication, delivery, public access or edit permission. " +
   "Enable verboseDiagnostics only when the user explicitly requests verbose diagnostic capture for this call. It saves bounded credential-redacted request/response data locally, including personal data, for this operation only. Never automatically enable it or replay a failed write for diagnostics. " +
   "Member IDs are internal: identify people to the user by name and distinguishing contact details, not numeric IDs. " +
@@ -275,6 +276,8 @@ export function createFlocknoteServer(
     signInWaitMs?: number;
     signInPollMs?: number;
     failureLog?: Pick<FailureLog, "save">;
+    /** The parish signed in when the server starts, named in its instructions. */
+    parish?: string;
   } = {},
 ) {
   // Leave headroom below Codex's documented default 60-second tool timeout.
@@ -291,7 +294,9 @@ export function createFlocknoteServer(
   const server = new McpServer(
     { name: "flockbot", version: MCP_VERSION },
     {
-      instructions: INSTRUCTIONS,
+      instructions: options.parish
+        ? `This computer is signed in to the Flocknote parish ${options.parish} (${options.parish}.flocknote.com). ${INSTRUCTIONS}`
+        : INSTRUCTIONS,
     },
   );
   const respond = (body: Record<string, unknown>, isError = false) =>
@@ -338,7 +343,16 @@ export function createFlocknoteServer(
       operation,
       async () => {
         try {
-          const body = await work();
+          let body = await work();
+          // Name the parish each result came from, so the assistant need not
+          // guess. status and connect already report it themselves.
+          if (operation !== "status" && operation !== "connect") {
+            const parish = await connection
+              .status()
+              .then((status) => status.parish)
+              .catch(() => undefined);
+            if (parish) body = { ...body, parish };
+          }
           if (!verbose) return respond(body);
           const record = verboseDiagnostic("success");
           const saved = record ? await save(record) : false;
@@ -952,8 +966,14 @@ export function createFlocknoteServer(
 export async function serveFlocknote(
   connection: FlocknoteConnection,
 ): Promise<void> {
+  // Local saved state only: no Keychain read and no Flocknote request.
+  const parish = await connection
+    .status()
+    .then((status) => (status.state === "ready" ? status.parish : undefined))
+    .catch(() => undefined);
   const server = createFlocknoteServer(connection, {
     failureLog: new FailureLog(),
+    ...(parish ? { parish } : {}),
   });
   const close = async () => {
     await connection.close();
