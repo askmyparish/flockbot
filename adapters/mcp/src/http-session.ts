@@ -47,6 +47,8 @@ export interface HttpSessionDependencies {
   /** Hands a local URL to the user's default browser. */
   readonly open?: (url: string) => Promise<void>;
   readonly serve?: typeof serveSignInPage;
+  /** Where the session is kept; the profile folder's file by default. */
+  readonly storage?: (profile: string) => SessionBlob;
 }
 
 interface Saved {
@@ -54,23 +56,50 @@ interface Saved {
   readonly state: SessionState | null;
 }
 
-/**
- * Owner-only file holding one parish connection's session cookies.
- * The password never reaches it. Revisions reject a stale writer, so two
- * local assistants sharing the file cannot overwrite a newer cookie.
- */
-class SessionFile implements SessionStore {
-  readonly #path: string;
+/** Where one connection's saved session text lives. */
+export interface SessionBlob {
+  get(): Promise<string | null>;
+  set(text: string): Promise<void>;
+}
 
-  constructor(directory: string) {
-    this.#path = join(directory, "session.json");
+/** Owner-only file in the connection's profile folder. */
+export function sessionFile(directory: string): SessionBlob {
+  const path = join(directory, "session.json");
+  return {
+    async get() {
+      if (!existsSync(path)) return null;
+      if (!lstatSync(path).isFile()) throw new Error();
+      return readFileSync(path, "utf8");
+    },
+    async set(text) {
+      const temporary = `${path}.${randomUUID()}.tmp`;
+      try {
+        writeFileSync(temporary, text, { mode: 0o600, flag: "wx" });
+        renameSync(temporary, path);
+      } finally {
+        rmSync(temporary, { force: true });
+      }
+    },
+  };
+}
+
+/**
+ * One parish connection's session cookies. The password never reaches it.
+ * Revisions reject a stale writer, so two local assistants sharing the store
+ * cannot overwrite a newer cookie.
+ */
+class SavedSession implements SessionStore {
+  readonly #blob: SessionBlob;
+
+  constructor(blob: SessionBlob) {
+    this.#blob = blob;
   }
 
-  read(): Saved {
+  async read(): Promise<Saved> {
     try {
-      if (!existsSync(this.#path)) return { revision: 0, state: null };
-      if (!lstatSync(this.#path).isFile()) throw new Error();
-      const value = JSON.parse(readFileSync(this.#path, "utf8")) as {
+      const text = await this.#blob.get();
+      if (text === null) return { revision: 0, state: null };
+      const value = JSON.parse(text) as {
         version?: unknown;
         revision?: unknown;
         state?: unknown;
@@ -92,34 +121,29 @@ class SessionFile implements SessionStore {
     }
   }
 
-  write(state: SessionState | null, expectedRevision: string): void {
-    const current = this.read();
+  async write(
+    state: SessionState | null,
+    expectedRevision: string,
+  ): Promise<void> {
+    const current = await this.read();
     if (String(current.revision) !== expectedRevision)
       throw new FlockbotError("stale_session_state");
-    const temporary = `${this.#path}.${randomUUID()}.tmp`;
-    try {
-      writeFileSync(
-        temporary,
-        `${JSON.stringify({ version: 1, revision: current.revision + 1, state })}\n`,
-        { mode: 0o600, flag: "wx" },
-      );
-      renameSync(temporary, this.#path);
-    } finally {
-      rmSync(temporary, { force: true });
-    }
+    await this.#blob.set(
+      `${JSON.stringify({ version: 1, revision: current.revision + 1, state })}\n`,
+    );
   }
 
   async load(): Promise<SessionState | null> {
-    return this.read().state;
+    return (await this.read()).state;
   }
   async revision(): Promise<string> {
-    return String(this.read().revision);
+    return String((await this.read()).revision);
   }
   async save(state: SessionState, expectedRevision: string): Promise<void> {
-    this.write(state, expectedRevision);
+    await this.write(state, expectedRevision);
   }
   async clear(expectedRevision: string): Promise<void> {
-    this.write(null, expectedRevision);
+    await this.write(null, expectedRevision);
   }
 }
 
@@ -197,7 +221,9 @@ export function httpSessionFactory(
     const parish = host.slice(0, -".flocknote.com".length);
     if (new Network(parish).origin !== options.origin)
       throw new FlockbotError("invalid_configuration");
-    const file = new SessionFile(options.profile);
+    const file = new SavedSession(
+      (dependencies.storage ?? sessionFile)(options.profile),
+    );
     const coordinator = new SerialCoordinator();
     const transport: Transport = async (request) => {
       const response = await send(request.url, {
@@ -248,7 +274,7 @@ export function httpSessionFactory(
       photo: Parameters<FlocknoteSession["request"]>[3],
     ): Promise<Exchange> => {
       const url = `${options.origin}/${path}`;
-      const saved = file.read();
+      const saved = await file.read();
       const jar = new CookieJar();
       for (const value of saved.state?.cookies ?? []) {
         const cookie = sessionCookie(value, host);
@@ -314,7 +340,7 @@ export function httpSessionFactory(
           JSON.stringify(cookies) !== JSON.stringify(saved.state?.cookies ?? [])
         ) {
           try {
-            file.write(
+            await file.write(
               { version: 1, origin: options.origin, cookies },
               String(saved.revision),
             );
