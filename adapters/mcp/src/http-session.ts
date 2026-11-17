@@ -37,7 +37,7 @@ import {
 import { MCP_VERSION } from "./version.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
-const REQUEST_MS = 15_000;
+export const REQUEST_MS = 15_000;
 const SESSION_COOKIE = /^(?:Flocknote|Flocknote-Login-\d+)$/;
 /** Names this connector, its version and where to reach its maintainers. */
 export const USER_AGENT = `AskMyParish-Flockbot/${MCP_VERSION} (+https://github.com/askmyparish/flockbot)`;
@@ -49,6 +49,8 @@ export interface HttpSessionDependencies {
   readonly serve?: typeof serveSignInPage;
   /** Where the session is kept; the profile folder's file by default. */
   readonly storage?: (profile: string) => SessionBlob;
+  /** Shows another sign-in surface, such as the Mac app, instead of the page. */
+  readonly openSignIn?: (parish: string) => Promise<void>;
 }
 
 interface Saved {
@@ -517,6 +519,10 @@ export function httpSessionFactory(
       async signIn() {
         await closePage();
         try {
+          if (dependencies.openSignIn) {
+            await dependencies.openSignIn(parish);
+            return;
+          }
           page = await serve({ parish, signIn: passwordSignIn });
           await open(page.url);
         } catch {
