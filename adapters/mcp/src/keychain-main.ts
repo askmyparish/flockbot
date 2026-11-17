@@ -231,9 +231,10 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "forget") {
-    await connection.forget();
-    // The connection removes only its profile folder; the cookie lives here.
+    // Delete the cookie first: if that fails, the connection still reads as
+    // signed in rather than hiding a credential that is still stored.
     await Bun.secrets.delete({ service: SERVICE, name: "session" });
+    await connection.forget();
     process.stdout.write(
       "The saved Flocknote sign-in on this computer was forgotten. Flocknote's server-side session was not revoked.\n",
     );
