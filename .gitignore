@@ -17,3 +17,6 @@ node_modules/
 
 # Generated orb portal metadata
 /.amp/portals/
+
+/adapters/macos/build/
+/adapters/macos/.build/
