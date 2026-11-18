@@ -4,6 +4,10 @@
 # Application certificate.
 set -euo pipefail
 
+# Where installed copies look for updates, and the public half of the key that
+# signs them (from Sparkle's generate_keys). Without the key file the app has
+# no updater.
+feed="https://github.com/askmyparish/flockbot/releases/download/mac-appcast/appcast.xml"
 identity="${FLOCKBOT_SIGN_IDENTITY:--}"
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
@@ -12,7 +16,7 @@ app="$package/build/Flockbot.app"
 version="$(node -p "require('$root/adapters/mcp/package.json').version")"
 
 rm -rf "$app"
-mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
 
 # Bun leaves temporary files in its working directory; keep them out of the repo.
 scratch="$(mktemp -d)"
@@ -34,6 +38,16 @@ iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
 
 swift build --quiet -c release --package-path "$package"
 cp "$package/.build/release/Flockbot" "$app/Contents/MacOS/Flockbot"
+cp -R "$package/.build/release/Sparkle.framework" "$app/Contents/Frameworks/"
+cp "$package/.build/artifacts/sparkle/Sparkle/LICENSE" "$app/Contents/Resources/Sparkle-LICENSE"
+
+updates=""
+if [[ -f "$package/sparkle-public-key" ]]; then
+  updates="<key>SUFeedURL</key><string>$feed</string>
+  <key>SUPublicEDKey</key><string>$(tr -d '[:space:]' < "$package/sparkle-public-key")</string>
+  <key>SUEnableAutomaticChecks</key><true/>
+  <key>SUAutomaticallyUpdate</key><true/>"
+fi
 
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -51,14 +65,30 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSHumanReadableCopyright</key><string>Independent; not affiliated with Flocknote.</string>
+  $updates
 </dict>
 </plist>
 PLIST
 
-# Inner code first, then the bundle that seals it. Both use the hardened
-# runtime that notarization requires, so the connector's JIT entitlement is
-# exercised in every build.
+# Inner code first, then the bundle that seals it. Sparkle's helpers and the
+# connector always use the hardened runtime that notarization requires, so the
+# connector's JIT entitlement is exercised in every build; only the outer app
+# of an ad hoc build goes without it (see below). Sparkle's helpers are
+# re-signed in the order its documentation gives.
 sign() { codesign --force --sign "$identity" --options runtime "$@"; }
+sparkle="$app/Contents/Frameworks/Sparkle.framework/Versions/B"
+sign "$sparkle/XPCServices/Installer.xpc"
+sign --preserve-metadata=entitlements "$sparkle/XPCServices/Downloader.xpc"
+sign "$sparkle/Autoupdate"
+sign "$sparkle/Updater.app"
+sign "$app/Contents/Frameworks/Sparkle.framework"
 sign --entitlements "$package/flockbot-mcp.entitlements" "$app/Contents/MacOS/flockbot-mcp"
-sign "$app"
+if [[ "$identity" == "-" ]]; then
+  # Library validation only loads frameworks from the app's own Team ID, and
+  # ad hoc signatures have none, so an ad hoc app can't load Sparkle under the
+  # hardened runtime. The connector above still runs under it.
+  codesign --force --sign - "$app"
+else
+  sign "$app"
+fi
 echo "$app"

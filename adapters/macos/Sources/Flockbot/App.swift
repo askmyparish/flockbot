@@ -1,9 +1,19 @@
 import AppKit
+import Sparkle
 import SwiftUI
 
 /// Flockbot is a setup window, not a background app: closing it quits.
 /// Assistants launch the bundled connector themselves when they need it.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+  /// Sparkle checks the feed named in Info.plist and installs signed updates in
+  /// place, so assistants' entries keep pointing at the same connector. Builds
+  /// without an update signing key have no feed and run without an updater.
+  let updater: SPUStandardUpdaterController? =
+    Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") == nil
+    ? nil
+    : SPUStandardUpdaterController(
+      startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
 
@@ -25,12 +35,42 @@ struct FlockbotApp: App {
     .windowResizability(.contentSize)
     .commands {
       CommandGroup(replacing: .newItem) {}
+      if let updater = delegate.updater {
+        CommandGroup(after: .appInfo) {
+          CheckForUpdatesButton(updater: updater.updater)
+        }
+      }
       CommandGroup(replacing: .help) {
         Button("Flockbot Support") {
           NSWorkspace.shared.open(URL(string: "https://github.com/askmyparish/flockbot/issues")!)
         }
       }
     }
+  }
+}
+
+/// A SwiftUI menu item skips Sparkle's AppKit menu validation, so it follows
+/// `canCheckForUpdates` itself and stays disabled while a check is running.
+final class UpdateAvailability: ObservableObject {
+  @Published var canCheck = false
+
+  init(_ updater: SPUUpdater) {
+    updater.publisher(for: \.canCheckForUpdates).assign(to: &$canCheck)
+  }
+}
+
+struct CheckForUpdatesButton: View {
+  @ObservedObject private var availability: UpdateAvailability
+  private let updater: SPUUpdater
+
+  init(updater: SPUUpdater) {
+    self.updater = updater
+    availability = UpdateAvailability(updater)
+  }
+
+  var body: some View {
+    Button("Check for Updates…", action: updater.checkForUpdates)
+      .disabled(!availability.canCheck)
   }
 }
 
