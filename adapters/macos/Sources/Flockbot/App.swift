@@ -161,13 +161,17 @@ final class AppModel: ObservableObject {
       }
       let connected = connected
       let results = await Task.detached {
-        connected.map { assistant in (assistant, Result { try Configs.disconnect(assistant) }) }
+        // Each change keeps the moment it was written, so an assistant that
+        // restarts while a later one is still being changed isn't flagged.
+        connected.map { assistant in
+          (assistant, Result { _ = try Configs.disconnect(assistant); return Date() })
+        }
       }.value
       for (assistant, result) in results {
         switch result {
-        case .success:
+        case .success(let date):
           errors[assistant] = nil
-          changedAt[assistant] = Date()
+          changedAt[assistant] = date
         case .failure(let error):
           errors[assistant] = error.localizedDescription
         }
