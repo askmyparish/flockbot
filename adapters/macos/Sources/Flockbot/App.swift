@@ -82,6 +82,8 @@ final class AppModel: ObservableObject {
   @Published var connected: Set<Assistant> = []
   @Published var working: Assistant?
   @Published var signingOut = false
+  /// Set while launch repoints entries left by a moved copy of the app.
+  @Published var repairing = true
   @Published var signOutError: String?
   @Published var errors: [Assistant: String] = [:]
   /// When this window last changed each assistant's configuration.
@@ -97,7 +99,20 @@ final class AppModel: ObservableObject {
     ) { [weak self] _ in
       MainActor.assumeIsolated { self?.forgetFinishedChanges() }
     }
-    Task { await refresh() }
+    Task {
+      // A moved or renamed app leaves assistants pointing at the old copy.
+      // Until this finishes, busy keeps every other change waiting.
+      let results = await Task.detached { Configs.repointMoved() }.value
+      for (assistant, result) in results {
+        switch result {
+        case .success(let date): changedAt[assistant] = date
+        case .failure(let error): errors[assistant] = error.localizedDescription
+        }
+      }
+      forgetFinishedChanges()
+      await refresh()
+      repairing = false
+    }
   }
 
   /// The assistant app still running with the configuration from before
@@ -112,7 +127,7 @@ final class AppModel: ObservableObject {
 
   var signedIn: Bool { status?.state == "ready" }
   /// One change at a time: sign-out and connecting must not interleave.
-  var busy: Bool { working != nil || signingOut }
+  var busy: Bool { working != nil || signingOut || repairing }
 
   func refresh() async {
     status = try? await Helper.status()

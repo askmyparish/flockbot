@@ -58,6 +58,7 @@ enum Assistant: String, CaseIterable, Identifiable {
 enum ConfigError: LocalizedError {
   case unreadable(String)
   case claudeNotFound
+  case claudeCodeEntryLost(String)
   case commandFailed(String)
 
   var errorDescription: String? {
@@ -66,6 +67,8 @@ enum ConfigError: LocalizedError {
       "Flockbot couldn't read \(path), so it left the file unchanged."
     case .claudeNotFound:
       "Flockbot couldn't find the claude command. Install Claude Code first."
+    case .claudeCodeEntryLost(let backup):
+      "Claude Code lost its Flockbot connection during an update. Click Connect to add it again. Its previous settings are saved in \(backup)."
     case .commandFailed(let output):
       "The claude command failed: \(output.trimmingCharacters(in: .whitespacesAndNewlines))"
     }
@@ -93,6 +96,10 @@ enum Configs {
 
   static var claudeCodeURL: URL { home.appendingPathComponent(".claude.json") }
 
+  static var claudeCodeBackupURL: URL {
+    home.appendingPathComponent("Library/Application Support/flockbot/claude-code-entry.json")
+  }
+
   static var codexURL: URL {
     if let path = ProcessInfo.processInfo.environment["CODEX_HOME"], !path.isEmpty {
       return URL(fileURLWithPath: path, isDirectory: true).appendingPathComponent("config.toml")
@@ -100,11 +107,108 @@ enum Configs {
     return home.appendingPathComponent(".codex/config.toml")
   }
 
-  static func isConnected(_ assistant: Assistant) -> Bool {
+  /// The command the assistant's `flockbot` entry runs, if it has one.
+  static func registeredCommand(_ assistant: Assistant) -> String? {
     switch assistant {
-    case .claudeDesktop: (try? jsonCommand(at: claudeDesktopURL)) == helperPath
-    case .claudeCode: (try? jsonCommand(at: claudeCodeURL)) == helperPath
-    case .codex: codexConnected()
+    case .claudeDesktop: try? jsonCommand(at: claudeDesktopURL)
+    case .claudeCode: try? jsonCommand(at: claudeCodeURL)
+    case .codex: codexCommand()
+    }
+  }
+
+  static func isConnected(_ assistant: Assistant) -> Bool {
+    assistant == .codex ? codexConnected() : registeredCommand(assistant) == helperPath
+  }
+
+  /// Status needs only the exact line this app writes, so it also recognizes
+  /// tables the guarded reader declines (see `codexCommandEntry`).
+  static func codexConnected() -> Bool {
+    if codexCommand() == helperPath { return true }
+    guard let text = try? String(contentsOf: codexURL, encoding: .utf8) else { return false }
+    let lines = text.components(separatedBy: "\n")
+    guard let section = codexSection(in: lines) else { return false }
+    return lines[section].contains { $0.trimmingCharacters(in: .whitespaces) == codexCommandLine() }
+  }
+
+  /// Whether this copy sits somewhere it will stay. A downloaded app can run
+  /// from a temporary translocated path, and a disk image goes away when it's
+  /// ejected, so only a copy in an Applications folder takes over entries.
+  static var isInstalledDurably: Bool {
+    ["/Applications/", "\(home.path)/Applications/"].contains { helperPath.hasPrefix($0) }
+  }
+
+  /// Points entries left behind by a moved or renamed Flockbot.app at this
+  /// copy's connector. Entries that run anything other than a Flockbot
+  /// connector belong to someone else and stay. Each result carries when its
+  /// change was written, or why it failed.
+  static func repointMoved() -> [(Assistant, Result<Date, Error>)] {
+    guard isInstalledDurably else { return [] }
+    return Assistant.allCases.compactMap { assistant in
+      guard let command = registeredCommand(assistant), command != helperPath,
+        URL(fileURLWithPath: command).lastPathComponent == "flockbot-mcp"
+      else { return nil }
+      return (assistant, Result { try repoint(assistant); return Date() })
+    }
+  }
+
+  /// Changes only the entry's command, keeping its arguments, environment and
+  /// any other settings, such as a Codex entry someone disabled.
+  static func repoint(_ assistant: Assistant) throws {
+    switch assistant {
+    case .claudeDesktop:
+      let url = claudeDesktopURL.resolvingSymlinksInPath()
+      guard let data = try? Data(contentsOf: url),
+        var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+      else { throw ConfigError.unreadable(url.path) }
+      var servers = try claudeDesktopServers(in: root, at: url)
+      guard var entry = servers[server] as? [String: Any] else {
+        throw ConfigError.unreadable(url.path)
+      }
+      entry["command"] = helperPath
+      servers[server] = entry
+      root["mcpServers"] = servers
+      try writeJSON(root, to: url)
+    case .claudeCode:
+      guard let claude = claudeCLI() else { throw ConfigError.claudeNotFound }
+      guard let data = try? Data(contentsOf: claudeCodeURL),
+        let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let original = (root["mcpServers"] as? [String: Any])?[server] as? [String: Any]
+      else { throw ConfigError.unreadable(claudeCodeURL.path) }
+      var entry = original
+      entry["command"] = helperPath
+      let replacement = try jsonText(entry)
+      let restore = try jsonText(original)
+      // Claude Code can only replace an entry by removing it first, so keep a
+      // copy until the new one is in, in case putting the old one back fails.
+      try writePrivate(Data(restore.utf8), to: claudeCodeBackupURL)
+      do {
+        try run(claude, ["mcp", "remove", "--scope", "user", server])
+      } catch {
+        try? FileManager.default.removeItem(at: claudeCodeBackupURL)
+        throw error
+      }
+      do {
+        try run(claude, ["mcp", "add-json", "--scope", "user", server, replacement])
+      } catch {
+        // Put the old entry back rather than leave Claude Code without one.
+        do {
+          try run(claude, ["mcp", "add-json", "--scope", "user", server, restore])
+        } catch {
+          throw ConfigError.claudeCodeEntryLost(claudeCodeBackupURL.path)
+        }
+        try? FileManager.default.removeItem(at: claudeCodeBackupURL)
+        throw error
+      }
+      try? FileManager.default.removeItem(at: claudeCodeBackupURL)
+    case .codex:
+      let url = codexURL.resolvingSymlinksInPath()
+      guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+        throw ConfigError.unreadable(url.path)
+      }
+      var lines = text.components(separatedBy: "\n")
+      guard let entry = codexCommandEntry(in: lines) else { throw ConfigError.unreadable(url.path) }
+      lines[entry.line].replaceSubrange(entry.value, with: tomlString(helperPath))
+      try writePrivate(Data(lines.joined(separator: "\n").utf8), to: url)
     }
   }
 
@@ -120,10 +224,7 @@ enum Configs {
       var servers = try claudeDesktopServers(in: root, at: url)
       guard servers.removeValue(forKey: server) != nil else { return "" }
       root["mcpServers"] = servers
-      var output = try JSONSerialization.data(
-        withJSONObject: root, options: [.prettyPrinted, .withoutEscapingSlashes])
-      output.append(Data("\n".utf8))
-      try writePrivate(output, to: url)
+      try writeJSON(root, to: url)
       return "Reopen Claude to finish"
     case .claudeCode:
       guard let claude = claudeCLI() else { throw ConfigError.claudeNotFound }
@@ -171,10 +272,7 @@ enum Configs {
     var servers = try claudeDesktopServers(in: root, at: url)
     servers[server] = ["command": helperPath, "args": [String]()]
     root["mcpServers"] = servers
-    var data = try JSONSerialization.data(
-      withJSONObject: root, options: [.prettyPrinted, .withoutEscapingSlashes])
-    data.append(Data("\n".utf8))
-    try writePrivate(data, to: url)
+    try writeJSON(root, to: url)
   }
 
   /// The file's server list. Anything but a JSON object there is a file this
@@ -270,11 +368,90 @@ enum Configs {
     try writePrivate(Data(result.utf8), to: url)
   }
 
-  static func codexConnected() -> Bool {
-    guard let text = try? String(contentsOf: codexURL, encoding: .utf8) else { return false }
-    let lines = text.components(separatedBy: "\n")
-    guard let range = codexSection(in: lines) else { return false }
-    return lines[range].contains { $0.trimmingCharacters(in: .whitespaces) == codexCommandLine() }
+  static func codexCommand() -> String? {
+    guard let text = try? String(contentsOf: codexURL, encoding: .utf8) else { return nil }
+    return codexCommandEntry(in: text.components(separatedBy: "\n"))?.command
+  }
+
+  /// The `command` key of the `[mcp_servers.flockbot]` table itself, not of a
+  /// subtable: its line, the range of its string value and the decoded value.
+  static func codexCommandEntry(in lines: [String]) -> (
+    line: Int, value: Range<String.Index>, command: String
+  )? {
+    guard let section = codexSection(in: lines) else { return nil }
+    let table = section.dropFirst().prefix {
+      !lines[$0].trimmingCharacters(in: .whitespaces).hasPrefix("[")
+    }
+    // A line inside a multi-line string can look like a key. Rather than track
+    // that context, a table with one is never read, so it's never rewritten.
+    if table.contains(where: { lines[$0].contains("\"\"\"") || lines[$0].contains("'''") }) {
+      return nil
+    }
+    for index in table {
+      let line = lines[index]
+      guard let equals = line.firstIndex(of: "="),
+        line[..<equals].trimmingCharacters(in: .whitespaces) == "command",
+        let (value, command) = tomlString(in: line, after: equals)
+      else { continue }
+      return (index, value, command)
+    }
+    return nil
+  }
+
+  /// Reads the single-line basic ("…") or literal ('…') TOML string after `=`,
+  /// followed by nothing but whitespace or a comment. Anything else, including
+  /// multi-line strings and unknown escapes, returns nil so the entry is left alone.
+  static func tomlString(in line: String, after equals: String.Index) -> (
+    Range<String.Index>, String
+  )? {
+    var index = line.index(after: equals)
+    while index < line.endIndex, line[index] == " " || line[index] == "\t" {
+      index = line.index(after: index)
+    }
+    guard index < line.endIndex, line[index] == "\"" || line[index] == "'" else { return nil }
+    let quote = line[index]
+    let open = index
+    if line[line.index(after: open)...].hasPrefix(String(repeating: quote, count: 2)) {
+      return nil
+    }
+    var value = ""
+    index = line.index(after: open)
+    while true {
+      guard index < line.endIndex else { return nil }
+      let character = line[index]
+      if character == quote { break }
+      if quote == "\"" && character == "\\" {
+        index = line.index(after: index)
+        guard index < line.endIndex else { return nil }
+        switch line[index] {
+        case "\"": value.append("\"")
+        case "\\": value.append("\\")
+        case "b": value.append("\u{08}")
+        case "t": value.append("\t")
+        case "n": value.append("\n")
+        case "f": value.append("\u{0C}")
+        case "r": value.append("\r")
+        case "u", "U":
+          let digits = line.index(after: index)
+          guard
+            let end = line.index(digits, offsetBy: line[index] == "u" ? 4 : 8, limitedBy: line.endIndex),
+            line[digits..<end].allSatisfy(\.isHexDigit),
+            let code = UInt32(line[digits..<end], radix: 16),
+            let scalar = Unicode.Scalar(code)
+          else { return nil }
+          value.unicodeScalars.append(scalar)
+          index = line.index(before: end)
+        default: return nil
+        }
+      } else {
+        value.append(character)
+      }
+      index = line.index(after: index)
+    }
+    let close = line.index(after: index)
+    let rest = line[close...].trimmingCharacters(in: .whitespacesAndNewlines)
+    guard rest.isEmpty || rest.hasPrefix("#") else { return nil }
+    return (open..<close, value)
   }
 
   static func codexSection(in lines: [String]) -> Range<Int>? {
@@ -299,6 +476,19 @@ enum Configs {
   }
 
   // MARK: Files
+
+  static func jsonText(_ value: [String: Any]) throws -> String {
+    String(
+      decoding: try JSONSerialization.data(withJSONObject: value, options: .withoutEscapingSlashes),
+      as: UTF8.self)
+  }
+
+  static func writeJSON(_ root: [String: Any], to url: URL) throws {
+    var data = try JSONSerialization.data(
+      withJSONObject: root, options: [.prettyPrinted, .withoutEscapingSlashes])
+    data.append(Data("\n".utf8))
+    try writePrivate(data, to: url)
+  }
 
   /// Atomic owner-only write. Callers pass the resolved path so a symlinked
   /// dotfile is updated in place rather than replaced.
