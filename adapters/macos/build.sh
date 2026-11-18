@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Builds Flockbot.app: the Swift setup window plus the Bun-compiled connector
-# it bundles. Signs ad hoc until a Developer ID is available.
+# it bundles. Signs ad hoc unless FLOCKBOT_SIGN_IDENTITY names a Developer ID
+# Application certificate.
 set -euo pipefail
+
+identity="${FLOCKBOT_SIGN_IDENTITY:--}"
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 package="$root/adapters/macos"
@@ -52,7 +55,10 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Inner code first, then the bundle that seals it.
-codesign --force --sign - "$app/Contents/MacOS/flockbot-mcp"
-codesign --force --sign - "$app"
+# Inner code first, then the bundle that seals it. Both use the hardened
+# runtime that notarization requires, so the connector's JIT entitlement is
+# exercised in every build.
+sign() { codesign --force --sign "$identity" --options runtime "$@"; }
+sign --entitlements "$package/flockbot-mcp.entitlements" "$app/Contents/MacOS/flockbot-mcp"
+sign "$app"
 echo "$app"
