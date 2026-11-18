@@ -34,3 +34,29 @@ jobs:
       - run: npm run build:mcp
       - name: Start the built server over stdio
         run: node scripts/mcp/check-package.mjs
+
+  app:
+    name: Mac app
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - run: npm ci --ignore-scripts
+      - name: Assistant configuration tests
+        run: swift test --package-path adapters/macos
+      - name: Build Flockbot.app
+        run: adapters/macos/build.sh
+      - name: Verify signatures
+        run: codesign --verify --deep --strict adapters/macos/build/Flockbot.app
+      - name: Run the bundled connector under the hardened runtime
+        run: adapters/macos/build/Flockbot.app/Contents/MacOS/flockbot-mcp status
