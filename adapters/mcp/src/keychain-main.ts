@@ -1,7 +1,7 @@
-import { execFile } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { execFile, spawn } from "node:child_process";
+import { existsSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   claudeDesktopRunning,
@@ -55,8 +55,9 @@ function keychain(name: string): SessionBlob {
 
 const profile = join(connectionProfileDirectory(), "keychain-v1");
 
-// Inside Flockbot.app, sign-in happens in the app's own window: connect opens
-// the app, which signs in through this same binary's sign-in command.
+// Inside Flockbot.app, or beside Flockbot.exe on Windows, sign-in happens in
+// the app's own window: connect opens the app, which signs in through this
+// same binary's sign-in command.
 const appBundle = /^(.+\.app)\/Contents\/MacOS\/[^/]+$/.exec(
   process.execPath,
 )?.[1];
@@ -69,6 +70,29 @@ function openApp(bundle: string): Promise<void> {
   });
 }
 
+// On Windows the setup app is installed beside the connector. A second copy
+// brings the open window forward instead of opening another.
+const windowsApp =
+  process.platform === "win32"
+    ? join(dirname(process.execPath), "Flockbot.exe")
+    : undefined;
+
+function launchApp(path: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(path, [], { detached: true, stdio: "ignore" });
+    child.once("error", reject);
+    child.once("spawn", () => {
+      child.unref();
+      resolve();
+    });
+  });
+}
+
+const openSignIn = appBundle
+  ? () => openApp(appBundle)
+  : windowsApp && existsSync(windowsApp)
+    ? () => launchApp(windowsApp)
+    : undefined;
 const session = keychain("session");
 
 /** Reads one bounded JSON object from stdin; the Mac app writes it there. */
@@ -245,7 +269,7 @@ async function main(): Promise<void> {
     profile,
     factory: httpSessionFactory({
       storage: () => session,
-      ...(appBundle ? { openSignIn: () => openApp(appBundle) } : {}),
+      ...(openSignIn ? { openSignIn } : {}),
       // Spike test hook: hand the page address to a local test script
       // through an owner-only file instead of opening a browser.
       ...(process.env.FLOCKBOT_SPIKE_SIGN_IN_URL_FILE
