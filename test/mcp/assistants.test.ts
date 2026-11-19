@@ -42,7 +42,12 @@ let home: string;
 let setup: Setup;
 beforeEach(() => {
   home = realpathSync(mkdtempSync(join(tmpdir(), "flockbot-assistants-")));
-  setup = { command, home, environment: {} };
+  setup = {
+    command,
+    home,
+    environment: {},
+    platform: "darwin",
+  };
 });
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
@@ -605,5 +610,110 @@ describe("the connector's assistant commands", () => {
         /^Usage: flockbot-mcp (connect|disconnect) </,
       );
     }
+  });
+});
+
+describe("on Windows", () => {
+  const exe =
+    "C:\\Users\\Pat\\AppData\\Local\\Programs\\Flockbot\\flockbot-mcp.exe";
+  // A Windows profile laid out inside the scratch home.
+  const windows = (environment: NodeJS.ProcessEnv = {}): Setup => ({
+    command: exe,
+    home,
+    environment,
+    platform: "win32",
+  });
+  const storeFolder = () =>
+    join(home, "AppData/Local/Claude-Data/claude_pzs8sxrjxfjjc");
+  const storeConfig = () => join(storeFolder(), "claude_desktop_config.json");
+
+  it("writes the Store install's Claude Desktop settings", () => {
+    writeJSON(storeConfig(), { preferences: { theme: "dark" } });
+    // An empty sibling sorts first but holds no settings.
+    mkdirSync(join(home, "AppData/Local/Claude-Data/claude_aaaa"), {
+      recursive: true,
+    });
+
+    expect(
+      runAssistantCommand(["connect", "claude-desktop"], windows()).stdout,
+    ).toBe('{"changed":true}\n');
+
+    expect(readJSON(storeConfig())).toEqual({
+      preferences: { theme: "dark" },
+      mcpServers: { flockbot: { command: exe, args: [] } },
+    });
+    expect(existsSync(join(home, "AppData/Roaming/Claude"))).toBe(false);
+    expect(assistantStates(windows())["claude-desktop"].connected).toBe(true);
+  });
+
+  it("uses %APPDATA%\\Claude for other Claude Desktop installs", () => {
+    const roaming = join(home, "Roaming elsewhere");
+
+    connect(windows({ APPDATA: roaming }), "claude-desktop");
+
+    expect(
+      readJSON(join(roaming, "Claude/claude_desktop_config.json")),
+    ).toEqual({ mcpServers: { flockbot: { command: exe, args: [] } } });
+  });
+
+  it("treats an entry that differs only in case as connected", () => {
+    writeJSON(storeConfig(), {
+      mcpServers: { flockbot: { command: exe.toUpperCase() } },
+    });
+
+    expect(assistantStates(windows())["claude-desktop"].connected).toBe(true);
+    expect(repointMoved(windows())).toEqual([]);
+  });
+
+  it("takes over a moved connector's .exe and nothing else", () => {
+    const moved = "C:\\Users\\Pat\\Downloads\\Flockbot\\flockbot-mcp.exe";
+    writeJSON(storeConfig(), { mcpServers: { flockbot: { command: moved } } });
+    // Codex writes Windows paths as literal strings.
+    write(
+      codex(),
+      "[mcp_servers.flockbot]\ncommand = 'C:\\tools\\other-server.exe'\n",
+    );
+
+    expect(repointMoved(windows())).toEqual([
+      { assistant: "claude-desktop", changedAt: expect.any(Number) },
+    ]);
+    expect(registeredCommand(windows(), "claude-desktop")).toBe(exe);
+    expect(registeredCommand(windows(), "codex")).toBe(
+      "C:\\tools\\other-server.exe",
+    );
+  });
+
+  it("repoints a literal Codex path and reads the escaped one back", () => {
+    write(
+      codex(),
+      "[mcp_servers.flockbot]\ncommand = 'D:\\Old\\flockbot-mcp.exe'\n",
+    );
+
+    repoint(windows(), "codex");
+
+    expect(read(codex())).toBe(
+      '[mcp_servers.flockbot]\ncommand = "C:\\\\Users\\\\Pat\\\\AppData\\\\Local\\\\Programs\\\\Flockbot\\\\flockbot-mcp.exe"\n',
+    );
+    expect(registeredCommand(windows(), "codex")).toBe(exe);
+    expect(assistantStates(windows()).codex.connected).toBe(true);
+  });
+
+  it("finds claude.exe and npm's codex.cmd, not the Mac locations", () => {
+    installFakeClaude();
+    expect(assistantStates(windows())["claude-code"].commandLine).toBe(false);
+
+    // The same stand-in, under the name the Windows installer uses.
+    const claudeExe = join(home, ".local/bin/claude.exe");
+    write(claudeExe, read(join(home, ".local/bin/claude")));
+    const codexCmd = join(home, "AppData/Roaming/npm/codex.cmd");
+    write(codexCmd, "@echo off");
+    for (const path of [claudeExe, codexCmd]) chmodSync(path, 0o755);
+
+    const states = assistantStates(windows());
+    expect(states["claude-code"].commandLine).toBe(true);
+    expect(states.codex.commandLine).toBe(true);
+
+    connect(windows(), "claude-code");
+    expect(read(join(home, "claude-calls.log"))).toContain(exe);
   });
 });

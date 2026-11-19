@@ -3,7 +3,7 @@ import { writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { runAssistantCommand } from "./assistants.js";
+import { runAssistantCommand, type Setup } from "./assistants.js";
 import { ParishConnection } from "./connection.js";
 import { FailureLog } from "./failure-log.js";
 import { serveFlocknote } from "./flocknote-server.js";
@@ -63,6 +63,7 @@ function openApp(bundle: string): Promise<void> {
     );
   });
 }
+
 const session = keychain("session");
 
 /** Reads one bounded JSON object from stdin; the Mac app writes it there. */
@@ -160,6 +161,14 @@ async function signIn(): Promise<void> {
   }
 }
 
+/** This connector's assistant entries, in this person's settings. */
+const assistantSetup: Setup = {
+  command: process.execPath,
+  home: homedir(),
+  environment: process.env,
+  platform: process.platform,
+};
+
 async function main(): Promise<void> {
   const command = process.argv[2];
   if (
@@ -168,11 +177,7 @@ async function main(): Promise<void> {
     command === "disconnect" ||
     command === "repoint"
   ) {
-    const result = runAssistantCommand(process.argv.slice(2), {
-      command: process.execPath,
-      home: homedir(),
-      environment: process.env,
-    });
+    const result = runAssistantCommand(process.argv.slice(2), assistantSetup);
     process.stdout.write(result.stdout);
     process.stderr.write(result.stderr);
     process.exitCode = result.exitCode;

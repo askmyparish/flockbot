@@ -5,9 +5,11 @@ import {
   chmodSync,
   closeSync,
   constants,
+  existsSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
   readlinkSync,
   realpathSync,
   renameSync,
@@ -15,7 +17,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 // Adds one `flockbot` server entry to each assistant's own configuration,
 // leaving every other setting in those files alone. The setup apps call these
@@ -35,6 +37,8 @@ export interface Setup {
   readonly command: string;
   readonly home: string;
   readonly environment: NodeJS.ProcessEnv;
+  /** Whose file layout to use. Paths are still built for the running OS. */
+  readonly platform: NodeJS.Platform;
 }
 
 /** A failure whose message can be shown to the person as it is. */
@@ -96,17 +100,79 @@ const server = "flockbot";
 type Json = Record<string, unknown>;
 
 function paths(setup: Setup) {
-  const support = join(setup.home, "Library", "Application Support");
   const codexHome = setup.environment.CODEX_HOME;
-  return {
-    claudeDesktop: join(support, "Claude", "claude_desktop_config.json"),
+  const shared = {
     claudeCode: join(setup.home, ".claude.json"),
-    claudeCodeBackup: join(support, "flockbot", "claude-code-entry.json"),
     codex: join(
       codexHome ? codexHome : join(setup.home, ".codex"),
       "config.toml",
     ),
   };
+  if (setup.platform === "win32") {
+    const { local, roaming } = windowsAppData(setup);
+    return {
+      ...shared,
+      claudeDesktop: join(
+        storeClaudeFolder(local) ?? join(roaming, "Claude"),
+        "claude_desktop_config.json",
+      ),
+      // Not %LOCALAPPDATA%\Flockbot: the installer replaces that folder.
+      claudeCodeBackup: join(local, "Flockbot MCP", "claude-code-entry.json"),
+    };
+  }
+  const support = join(setup.home, "Library", "Application Support");
+  return {
+    ...shared,
+    claudeDesktop: join(support, "Claude", "claude_desktop_config.json"),
+    claudeCodeBackup: join(support, "flockbot", "claude-code-entry.json"),
+  };
+}
+
+function windowsAppData(setup: Setup): { local: string; roaming: string } {
+  const { LOCALAPPDATA, APPDATA } = setup.environment;
+  return {
+    local: LOCALAPPDATA || join(setup.home, "AppData", "Local"),
+    roaming: APPDATA || join(setup.home, "AppData", "Roaming"),
+  };
+}
+
+/**
+ * Claude Desktop from the Microsoft Store keeps its settings in
+ * %LOCALAPPDATA%\Claude-Data\claude_<publisher id>, named after its package,
+ * rather than in %APPDATA%\Claude like other installs. A folder that already
+ * holds settings wins over an empty one.
+ */
+function storeClaudeFolder(local: string): string | undefined {
+  const parent = join(local, "Claude-Data");
+  let folders: string[];
+  try {
+    folders = readdirSync(parent, { withFileTypes: true })
+      .filter(
+        (entry) => entry.isDirectory() && /^claude_\w+$/i.test(entry.name),
+      )
+      .map((entry) => join(parent, entry.name))
+      .sort();
+  } catch {
+    return undefined;
+  }
+  return (
+    folders.find((folder) =>
+      existsSync(join(folder, "claude_desktop_config.json")),
+    ) ?? folders[0]
+  );
+}
+
+/** Windows paths ignore case; so does the default Mac file system. */
+function samePath(setup: Setup, a: string | undefined): boolean {
+  if (a === undefined) return false;
+  return setup.platform === "win32"
+    ? a.toLowerCase() === setup.command.toLowerCase()
+    : a === setup.command;
+}
+
+/** Whether a command is a Flockbot connector, wherever it was installed. */
+function isConnector(command: string): boolean {
+  return /^flockbot-mcp(\.exe)?$/i.test(command.split(/[\\/]/).pop() ?? "");
 }
 
 export function assistantStates(
@@ -114,11 +180,11 @@ export function assistantStates(
 ): Record<Assistant, AssistantState> {
   return {
     "claude-desktop": {
-      connected: registeredCommand(setup, "claude-desktop") === setup.command,
+      connected: samePath(setup, registeredCommand(setup, "claude-desktop")),
       commandLine: false,
     },
     "claude-code": {
-      connected: registeredCommand(setup, "claude-code") === setup.command,
+      connected: samePath(setup, registeredCommand(setup, "claude-code")),
       commandLine: claudeCLI(setup) !== undefined,
     },
     codex: {
@@ -240,8 +306,8 @@ export function repointMoved(setup: Setup): RepointResult[] {
     const command = registeredCommand(setup, assistant);
     if (
       command === undefined ||
-      command === setup.command ||
-      basename(command) !== "flockbot-mcp"
+      samePath(setup, command) ||
+      !isConnector(command)
     )
       return [];
     try {
@@ -343,6 +409,10 @@ export function repoint(setup: Setup, assistant: Assistant): void {
 // MARK: Command-line tools
 
 function claudeCLI(setup: Setup): string | undefined {
+  // An npm-installed claude.cmd needs a shell to run, and passing the entry's
+  // JSON through one isn't safe, so Windows looks only for the native install.
+  if (setup.platform === "win32")
+    return firstExecutable([join(setup.home, ".local", "bin", "claude.exe")]);
   return firstExecutable([
     join(setup.home, ".local", "bin", "claude"),
     "/opt/homebrew/bin/claude",
@@ -352,6 +422,11 @@ function claudeCLI(setup: Setup): string | undefined {
 }
 
 function codexCLI(setup: Setup): string | undefined {
+  // Only reported, never run, so npm's codex.cmd is fine to count.
+  if (setup.platform === "win32")
+    return firstExecutable([
+      join(windowsAppData(setup).roaming, "npm", "codex.cmd"),
+    ]);
   return firstExecutable([
     join(setup.home, ".local", "bin", "codex"),
     "/opt/homebrew/bin/codex",
@@ -395,17 +470,23 @@ function run(
   failure: string,
 ): void {
   const result = spawnSync(path, args, {
-    // Apps opened from the Finder get a minimal PATH.
-    env: {
-      ...setup.environment,
-      PATH: [
-        join(setup.home, ".local", "bin"),
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        "/usr/bin",
-        "/bin",
-      ].join(":"),
-    },
+    // Apps opened from the Finder get a minimal PATH. Windows apps get the
+    // whole one, and copying it could leave both Path and PATH set.
+    env:
+      setup.platform === "win32"
+        ? setup.environment
+        : {
+            ...setup.environment,
+            PATH: [
+              join(setup.home, ".local", "bin"),
+              "/opt/homebrew/bin",
+              "/usr/local/bin",
+              "/usr/bin",
+              "/bin",
+            ].join(":"),
+          },
+    // A setup window has no console for the tool to borrow; don't open one.
+    windowsHide: true,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     timeout: 60_000,
@@ -434,7 +515,7 @@ function codexCommand(setup: Setup): string | undefined {
  * recognizes tables the guarded reader declines (see `codexCommandEntry`).
  */
 function codexConnected(setup: Setup): boolean {
-  if (codexCommand(setup) === setup.command) return true;
+  if (samePath(setup, codexCommand(setup))) return true;
   const text = readForStatus(paths(setup).codex);
   if (text === undefined) return false;
   const lines = text.split("\n");
