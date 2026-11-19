@@ -19,6 +19,7 @@ import {
   claudeDesktopListed,
   connect,
   disconnect,
+  disconnectForUninstall,
   registeredCommand,
   repoint,
   repointMoved,
@@ -293,6 +294,31 @@ describe("Claude Desktop settings", () => {
       ),
     );
     expect(existsSync(claudeDesktop())).toBe(false);
+  });
+
+  it("removes every entry for an uninstall, even with Claude open", () => {
+    writeJSON(claudeDesktop(), {
+      theme: "dark",
+      mcpServers: { flockbot: { command, args: [] }, other: otherServer },
+    });
+    write(codex(), `[mcp_servers.flockbot]\ncommand = "${command}"\n`);
+    const claudeCalls = installFakeClaude();
+    setup = { ...setup, claudeDesktopOpen: () => true };
+
+    expect(disconnectForUninstall(setup)).toEqual([
+      // The file edits come before Claude Code's CLI, which can be slow.
+      { assistant: "claude-desktop" },
+      { assistant: "codex" },
+      { assistant: "claude-code" },
+    ]);
+    expect(claudeCalls()).toEqual([
+      ["mcp", "remove", "--scope", "user", "flockbot"],
+    ]);
+    expect(readJSON(claudeDesktop())).toEqual({
+      theme: "dark",
+      mcpServers: { other: otherServer },
+    });
+    expect(registeredCommand(setup, "codex")).toBeUndefined();
   });
 });
 

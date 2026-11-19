@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   claudeDesktopRunning,
+  disconnectForUninstall,
   runAssistantCommand,
   type Setup,
 } from "./assistants.js";
@@ -174,6 +175,14 @@ const assistantSetup: Setup = {
   claudeDesktopOpen: () => claudeDesktopRunning(process.platform, process.env),
 };
 
+/** Deletes the saved cookie, then the connection that names it. */
+async function forgetSignIn(connection: ParishConnection): Promise<void> {
+  // Delete the cookie first: if that fails, the connection still reads as
+  // signed in rather than hiding a credential that is still stored.
+  await Bun.secrets.delete({ service: SERVICE, name: "session" });
+  await connection.forget();
+}
+
 async function main(): Promise<void> {
   const command = process.argv[2];
   if (
@@ -258,11 +267,21 @@ async function main(): Promise<void> {
     reply({ state: status.state, parish: status.parish ?? null });
     return;
   }
+  if (command === "uninstall") {
+    // For the Windows uninstaller, which allows little time: the saved
+    // sign-in goes first, then every assistant entry. Replies with each
+    // step's outcome for the uninstaller's log.
+    let signIn = "forgotten";
+    try {
+      await forgetSignIn(connection);
+    } catch {
+      signIn = "failed";
+    }
+    reply({ signIn, assistants: disconnectForUninstall(assistantSetup) });
+    return;
+  }
   if (command === "forget") {
-    // Delete the cookie first: if that fails, the connection still reads as
-    // signed in rather than hiding a credential that is still stored.
-    await Bun.secrets.delete({ service: SERVICE, name: "session" });
-    await connection.forget();
+    await forgetSignIn(connection);
     process.stdout.write(
       "The saved Flocknote sign-in on this computer was forgotten. Flocknote's server-side session was not revoked.\n",
     );

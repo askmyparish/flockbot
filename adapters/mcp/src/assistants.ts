@@ -834,6 +834,28 @@ function writeClaudeDesktop(
   writeJSON(path, root);
 }
 
+/**
+ * Removes every assistant's entry as Flockbot is uninstalled, so none is left
+ * starting a connector that's gone. Nobody is there to quit Claude, so its
+ * file changes even while it's open; Claude may write the entry back.
+ */
+export function disconnectForUninstall(
+  setup: Setup,
+): { readonly assistant: Assistant; readonly error?: string }[] {
+  const anyway: Setup = { ...setup, claudeDesktopOpen: () => false };
+  // The file edits first: Claude Code's CLI can be slow, and the uninstaller
+  // stops this command when its time is up.
+  const order: Assistant[] = ["claude-desktop", "codex", "claude-code"];
+  return order.map((assistant) => {
+    try {
+      disconnect(anyway, assistant);
+      return { assistant };
+    } catch (error) {
+      return { assistant, error: setupMessage(error) };
+    }
+  });
+}
+
 /** Stands in for a running claude whose path couldn't be read. */
 const unreadablePath = "?";
 
