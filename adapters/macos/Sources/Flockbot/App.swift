@@ -93,6 +93,8 @@ final class AppModel: ObservableObject {
   @Published var errors: [Assistant: String] = [:]
   /// When this window last changed each assistant's configuration.
   @Published var changedAt: [Assistant: Date] = [:]
+  /// An assistant whose change waits for the person to agree to quit its app.
+  @Published var confirmingQuit: Assistant?
   /// Set after a sign-in in this window, to point the person back to their chat.
   @Published var justSignedIn = false
   private var terminationObserver: NSObjectProtocol?
@@ -190,6 +192,7 @@ final class AppModel: ObservableObject {
       // restarts while a later one is still being changed isn't flagged.
       for assistant in connected {
         do {
+          try await quitAppsBlockingChange(assistant)
           try await Helper.change(assistant, connect: false)
           errors[assistant] = nil
           changedAt[assistant] = Date()
@@ -202,13 +205,26 @@ final class AppModel: ObservableObject {
     }
   }
 
+  /// Asks first when the change means quitting the assistant's app.
   func toggle(_ assistant: Assistant) {
+    guard !busy else { return }
+    if assistant.appsBlockingChange.isEmpty {
+      change(assistant)
+    } else {
+      confirmingQuit = assistant
+    }
+  }
+
+  /// Quits the app that would undo the change, if it's open, then changes
+  /// the assistant's settings.
+  func change(_ assistant: Assistant) {
     guard !busy else { return }
     let connecting = !connected.contains(assistant)
     working = assistant
     errors[assistant] = nil
     Task {
       do {
+        try await quitAppsBlockingChange(assistant)
         try await Helper.change(assistant, connect: connecting)
         changedAt[assistant] = Date()
         forgetFinishedChanges()
@@ -217,6 +233,14 @@ final class AppModel: ObservableObject {
       }
       await refresh()
       working = nil
+    }
+  }
+
+  private func quitAppsBlockingChange(_ assistant: Assistant) async throws {
+    let apps = assistant.appsBlockingChange
+    guard !apps.isEmpty else { return }
+    guard await Assistant.quit(apps) else {
+      throw HelperError.message("Claude didn't quit, so Flockbot left its settings alone. Try again.")
     }
   }
 }
@@ -259,6 +283,21 @@ struct ContentView: View {
         }
       }
       .formStyle(.grouped)
+      .confirmationDialog(
+        "Quit Claude?",
+        isPresented: Binding(
+          get: { model.confirmingQuit != nil }, set: { if !$0 { model.confirmingQuit = nil } }),
+        titleVisibility: .visible, presenting: model.confirmingQuit
+      ) { assistant in
+        let connecting = !model.connected.contains(assistant)
+        Button(connecting ? "Quit Claude and Connect" : "Quit Claude and Disconnect") {
+          model.change(assistant)
+        }
+      } message: { assistant in
+        Text(
+          "Claude has to be closed while Flockbot changes its settings. Any chat or Code session running in Claude will stop."
+            + (model.connected.contains(assistant) ? "" : " Open Claude again to use Flockbot."))
+      }
       // Let the window background show through so header, form and footer share one surface.
       .scrollContentBackground(.hidden)
       .scrollDisabled(true)
@@ -276,7 +315,11 @@ struct ContentView: View {
       Button("Sign Out", role: .destructive) { model.signOut() }
     } message: {
       if !model.connected.isEmpty {
-        Text("Flockbot will also disconnect from your assistants.")
+        Text(
+          model.connected.contains(.claudeDesktop)
+            && !Assistant.claudeDesktop.appsBlockingChange.isEmpty
+            ? "Flockbot will also disconnect from your assistants, which quits Claude."
+            : "Flockbot will also disconnect from your assistants.")
       }
     }
   }

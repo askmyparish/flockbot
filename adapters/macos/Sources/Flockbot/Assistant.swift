@@ -51,6 +51,32 @@ enum Assistant: String, CaseIterable, Identifiable {
       .first { ($0.launchDate ?? .distantPast) < date }
   }
 
+  /// Running apps that would undo a change to this assistant's settings.
+  /// Only Claude Desktop saves its in-memory copy over the file while open,
+  /// so the connector changes its file only while it's closed.
+  var appsBlockingChange: [NSRunningApplication] {
+    guard self == .claudeDesktop else { return [] }
+    return bundleIdentifiers.flatMap {
+      NSRunningApplication.runningApplications(withBundleIdentifier: $0)
+    }
+  }
+
+  /// Asks the apps to quit and waits for them, returning whether they did.
+  /// An app can decline, as Claude does when the person cancels its own
+  /// warning about running sessions.
+  @MainActor
+  static func quit(_ apps: [NSRunningApplication], within timeout: Duration = .seconds(30)) async
+    -> Bool
+  {
+    apps.forEach { $0.terminate() }
+    let deadline = ContinuousClock.now + timeout
+    while apps.contains(where: { !$0.isTerminated }) {
+      guard ContinuousClock.now < deadline else { return false }
+      try? await Task.sleep(for: .milliseconds(200))
+    }
+    return true
+  }
+
   /// The installed app's own icon; command-line tools borrow their maker's app.
   var icon: NSImage? {
     appURL.map { NSWorkspace.shared.icon(forFile: $0.path) }
