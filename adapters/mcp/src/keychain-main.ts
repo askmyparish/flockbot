@@ -1,7 +1,9 @@
 import { execFile } from "node:child_process";
 import { writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { runAssistantCommand } from "./assistants.js";
 import { ParishConnection } from "./connection.js";
 import { FailureLog } from "./failure-log.js";
 import { serveFlocknote } from "./flocknote-server.js";
@@ -160,6 +162,22 @@ async function signIn(): Promise<void> {
 
 async function main(): Promise<void> {
   const command = process.argv[2];
+  if (
+    command === "assistants" ||
+    command === "connect" ||
+    command === "disconnect" ||
+    command === "repoint"
+  ) {
+    const result = runAssistantCommand(process.argv.slice(2), {
+      command: process.execPath,
+      home: homedir(),
+      environment: process.env,
+    });
+    process.stdout.write(result.stdout);
+    process.stderr.write(result.stderr);
+    process.exitCode = result.exitCode;
+    return;
+  }
   if (command === "sign-in") {
     await signIn();
     return;
