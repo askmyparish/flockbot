@@ -86,8 +86,8 @@ final class AppModel: ObservableObject {
   @Published var repairing = true
   @Published var signOutError: String?
   /// Assistants keep the connector's full path, so only a copy in an
-  /// Applications folder connects them (see `Configs.isInstalledDurably`).
-  let installedDurably = Configs.isInstalledDurably
+  /// Applications folder connects them (see `Install.isInstalledDurably`).
+  let installedDurably = Install.isInstalledDurably
   @Published var moving = false
   @Published var moveError: String?
   @Published var errors: [Assistant: String] = [:]
@@ -107,14 +107,16 @@ final class AppModel: ObservableObject {
     Task {
       // A moved or renamed app leaves assistants pointing at the old copy.
       // Until this finishes, busy keeps every other change waiting.
-      let results = await Task.detached { Configs.repointMoved() }.value
-      for (assistant, result) in results {
-        switch result {
-        case .success(let date): changedAt[assistant] = date
-        case .failure(let error): errors[assistant] = error.localizedDescription
+      // Only a copy that will stay takes over the entries.
+      if installedDurably {
+        for (assistant, result) in (try? await Helper.repoint()) ?? [] {
+          switch result {
+          case .success(let date): changedAt[assistant] = date
+          case .failure(let error): errors[assistant] = error.localizedDescription
+          }
         }
+        forgetFinishedChanges()
       }
-      forgetFinishedChanges()
       await refresh()
       repairing = false
     }
@@ -143,7 +145,7 @@ final class AppModel: ObservableObject {
     moveError = nil
     Task {
       do {
-        let copy = try await Task.detached { try Configs.moveToApplications() }.value
+        let copy = try await Task.detached { try Install.moveToApplications() }.value
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.createsNewApplicationInstance = true
         try await NSWorkspace.shared.openApplication(at: copy, configuration: configuration)
@@ -160,14 +162,12 @@ final class AppModel: ObservableObject {
     status = try? await Helper.status()
     checked = true
     if !signedIn { justSignedIn = false }
-    let (installed, connected) = await Task.detached {
-      (
-        Set(Assistant.allCases.filter(\.isInstalled)),
-        Set(Assistant.allCases.filter { Configs.isConnected($0) })
-      )
-    }.value
-    self.installed = installed
-    self.connected = connected
+    // A connector that can't answer leaves the rows as they were rather than
+    // showing every assistant as disconnected.
+    guard let states = try? await Helper.assistants() else { return }
+    installed = Set(
+      Assistant.allCases.filter { $0.isInstalled(commandLine: states[$0]?.commandLine ?? false) })
+    connected = Set(Assistant.allCases.filter { states[$0]?.connected ?? false })
   }
 
   /// Signing out also disconnects every assistant, so nothing keeps
@@ -186,20 +186,14 @@ final class AppModel: ObservableObject {
         await refresh()
         return
       }
-      let connected = connected
-      let results = await Task.detached {
-        // Each change keeps the moment it was written, so an assistant that
-        // restarts while a later one is still being changed isn't flagged.
-        connected.map { assistant in
-          (assistant, Result { _ = try Configs.disconnect(assistant); return Date() })
-        }
-      }.value
-      for (assistant, result) in results {
-        switch result {
-        case .success(let date):
+      // Each change keeps the moment it was written, so an assistant that
+      // restarts while a later one is still being changed isn't flagged.
+      for assistant in connected {
+        do {
+          try await Helper.change(assistant, connect: false)
           errors[assistant] = nil
-          changedAt[assistant] = date
-        case .failure(let error):
+          changedAt[assistant] = Date()
+        } catch {
           errors[assistant] = error.localizedDescription
         }
       }
@@ -214,16 +208,11 @@ final class AppModel: ObservableObject {
     working = assistant
     errors[assistant] = nil
     Task {
-      let outcome = await Task.detached {
-        Result {
-          try connecting ? Configs.connect(assistant) : Configs.disconnect(assistant)
-        }
-      }.value
-      switch outcome {
-      case .success:
+      do {
+        try await Helper.change(assistant, connect: connecting)
         changedAt[assistant] = Date()
         forgetFinishedChanges()
-      case .failure(let error):
+      } catch {
         errors[assistant] = error.localizedDescription
       }
       await refresh()
