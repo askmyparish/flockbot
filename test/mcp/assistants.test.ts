@@ -16,6 +16,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   assistantStates,
+  claudeDesktopListed,
   connect,
   disconnect,
   registeredCommand,
@@ -47,6 +48,7 @@ beforeEach(() => {
     home,
     environment: {},
     platform: "darwin",
+    claudeDesktopOpen: () => false,
   };
 });
 afterEach(() => rmSync(home, { recursive: true, force: true }));
@@ -247,6 +249,100 @@ describe("Claude Desktop settings", () => {
     expect(readJSON(claudeDesktop())).toEqual({
       mcpServers: { flockbot: { command, args: ["--x"], env: { A: "1" } } },
     });
+  });
+
+  it("leaves its file alone while Claude is open, and says to quit it", () => {
+    writeJSON(claudeDesktop(), {
+      theme: "dark",
+      mcpServers: { flockbot: { command: moved, args: [] } },
+    });
+    write(codex(), `[mcp_servers.flockbot]\ncommand = "${moved}"\n`);
+    const original = read(claudeDesktop());
+    setup = { ...setup, claudeDesktopOpen: () => true };
+
+    expect(() => connect(setup, "claude-desktop")).toThrow(
+      new SetupError(
+        "Claude is open and would undo this change. Quit Claude (Claude > Quit Claude), then click Connect again.",
+      ),
+    );
+    expect(() => disconnect(setup, "claude-desktop")).toThrow(
+      /then click Disconnect again\.$/,
+    );
+    // A moved app's takeover reports Claude and still updates the others.
+    expect(repointMoved(setup)).toEqual([
+      {
+        assistant: "claude-desktop",
+        error: expect.stringMatching(/then click Connect again\.$/),
+      },
+      { assistant: "codex", changedAt: expect.any(Number) },
+    ]);
+    expect(read(claudeDesktop())).toBe(original);
+    expect(registeredCommand(setup, "codex")).toBe(command);
+
+    // With no entry to remove, there's no change for Claude to undo.
+    writeJSON(claudeDesktop(), { theme: "dark" });
+    expect(() => disconnect(setup, "claude-desktop")).not.toThrow();
+  });
+
+  it("leaves its file alone when it can't tell whether Claude is open", () => {
+    setup = { ...setup, claudeDesktopOpen: () => undefined };
+
+    expect(() => connect(setup, "claude-desktop")).toThrow(
+      new SetupError(
+        "Flockbot couldn't check whether Claude is open, so it left Claude's settings unchanged. Click Connect to try again.",
+      ),
+    );
+    expect(existsSync(claudeDesktop())).toBe(false);
+  });
+});
+
+describe("finding Claude Desktop among running processes", () => {
+  it("on Windows, counts the Store and standalone apps but not Claude Code", () => {
+    const listed = (path: string) =>
+      claudeDesktopListed("win32", `${path}\r\n`);
+    expect(
+      listed(
+        "C:\\Program Files\\WindowsApps\\Claude_5.11492.5.0_arm64__pzs8sxrjxfjjc\\app\\Claude.exe",
+      ),
+    ).toBe(true);
+    expect(
+      listed(
+        "C:\\Users\\Pat\\AppData\\Local\\AnthropicClaude\\app-1.2.3\\claude.exe",
+      ),
+    ).toBe(true);
+    expect(
+      listed(
+        "C:\\Users\\Pat\\AppData\\Local\\Claude-Data\\claude_pzs8sxrjxfjjc\\claude-code\\2.1.325\\bb79f03fa3c4\\claude.exe",
+      ),
+    ).toBe(false);
+    expect(listed("C:\\Users\\Pat\\.local\\bin\\claude.exe")).toBe(false);
+    expect(claudeDesktopListed("win32", "")).toBe(false);
+    // A claude whose path Windows won't give could be Claude Desktop.
+    expect(claudeDesktopListed("win32", "?\r\n")).toBeUndefined();
+    expect(
+      claudeDesktopListed(
+        "win32",
+        "?\r\nC:\\Program Files\\WindowsApps\\Claude_5.1_arm64__pzs8sxrjxfjjc\\app\\Claude.exe\r\n",
+      ),
+    ).toBe(true);
+  });
+
+  it("on a Mac, counts Claude.app's main executable only", () => {
+    expect(
+      claudeDesktopListed(
+        "darwin",
+        "/sbin/launchd\n/Users/pat/Applications/Claude.app/Contents/MacOS/Claude\n",
+      ),
+    ).toBe(true);
+    expect(
+      claudeDesktopListed(
+        "darwin",
+        [
+          "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
+          "/Users/pat/.local/bin/claude",
+        ].join("\n"),
+      ),
+    ).toBe(false);
   });
 });
 
@@ -622,6 +718,7 @@ describe("on Windows", () => {
     home,
     environment,
     platform: "win32",
+    claudeDesktopOpen: () => false,
   });
   const storeFolder = () =>
     join(home, "AppData/Local/Claude-Data/claude_pzs8sxrjxfjjc");
@@ -715,5 +812,17 @@ describe("on Windows", () => {
 
     connect(windows(), "claude-code");
     expect(read(join(home, "claude-calls.log"))).toContain(exe);
+  });
+
+  it("points to the system tray when Claude is open", () => {
+    expect(
+      runAssistantCommand(["connect", "claude-desktop"], {
+        ...windows(),
+        claudeDesktopOpen: () => true,
+      }).stdout,
+    ).toBe(
+      `${JSON.stringify({ error: "Claude is open and would undo this change. Right-click Claude's icon under the ^ arrow next to the clock and choose Quit Claude, then click Connect again." })}\n`,
+    );
+    expect(existsSync(storeConfig())).toBe(false);
   });
 });

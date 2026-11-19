@@ -39,6 +39,11 @@ export interface Setup {
   readonly environment: NodeJS.ProcessEnv;
   /** Whose file layout to use. Paths are still built for the running OS. */
   readonly platform: NodeJS.Platform;
+  /**
+   * Whether Claude Desktop is open, or undefined when that can't be told;
+   * see `claudeDesktopRunning`.
+   */
+  readonly claudeDesktopOpen: () => boolean | undefined;
 }
 
 /** A failure whose message can be shown to the person as it is. */
@@ -220,7 +225,7 @@ export function connect(setup: Setup, assistant: Assistant): void {
         ...serversIn(root, path),
         [server]: { command: setup.command, args: [] },
       };
-      writeJSON(path, root);
+      writeClaudeDesktop(setup, path, root, "Connect");
       return;
     }
     case "claude-code": {
@@ -259,7 +264,7 @@ export function disconnect(setup: Setup, assistant: Assistant): void {
       root.mcpServers = Object.fromEntries(
         Object.entries(servers).filter(([name]) => name !== server),
       );
-      writeJSON(path, root);
+      writeClaudeDesktop(setup, path, root, "Disconnect");
       return;
     }
     case "claude-code":
@@ -337,7 +342,7 @@ export function repoint(setup: Setup, assistant: Assistant): void {
         ...servers,
         [server]: { ...entry, command: setup.command },
       };
-      writeJSON(path, root);
+      writeClaudeDesktop(setup, path, root, "Connect");
       return;
     }
     case "claude-code": {
@@ -801,6 +806,98 @@ function withoutTrailingBlankLines(text: string): string {
 
 function writeJSON(path: string, root: Json): void {
   writePrivate(path, `${JSON.stringify(root, null, 2)}\n`);
+}
+
+/**
+ * Claude Desktop keeps its settings file in memory and saves that copy over
+ * the file when its own preferences change, dropping an entry added while it
+ * was open. So its file changes only while it's known to be closed. `button`
+ * names the button that tries again.
+ */
+function writeClaudeDesktop(
+  setup: Setup,
+  path: string,
+  root: Json,
+  button: "Connect" | "Disconnect",
+): void {
+  const open = setup.claudeDesktopOpen();
+  if (open === undefined)
+    throw new SetupError(
+      `Flockbot couldn't check whether Claude is open, so it left Claude's settings unchanged. Click ${button} to try again.`,
+    );
+  if (open)
+    throw new SetupError(
+      setup.platform === "win32"
+        ? `Claude is open and would undo this change. Right-click Claude's icon under the ^ arrow next to the clock and choose Quit Claude, then click ${button} again.`
+        : `Claude is open and would undo this change. Quit Claude (Claude > Quit Claude), then click ${button} again.`,
+    );
+  writeJSON(path, root);
+}
+
+/** Stands in for a running claude whose path couldn't be read. */
+const unreadablePath = "?";
+
+/**
+ * Whether Claude Desktop's main app is running: true or false, or undefined
+ * when the process list can't be read. See `claudeDesktopListed`.
+ */
+export function claudeDesktopRunning(
+  platform: NodeJS.Platform,
+  environment: NodeJS.ProcessEnv,
+): boolean | undefined {
+  const list =
+    platform === "win32"
+      ? spawnSync(
+          join(
+            environment.SystemRoot || "C:\\Windows",
+            "System32",
+            "WindowsPowerShell",
+            "v1.0",
+            "powershell.exe",
+          ),
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            // Filtered by name rather than `Get-Process -Name claude`, which
+            // exits 1 when none is running. A process whose path Windows
+            // won't give prints a line of its own, so it can't pass as
+            // Claude being closed.
+            `Get-Process | Where-Object ProcessName -eq 'claude' | ForEach-Object { if ($_.Path) { $_.Path } else { '${unreadablePath}' } }`,
+          ],
+          { encoding: "utf8", windowsHide: true, timeout: 15_000 },
+        )
+      : spawnSync("/bin/ps", ["-axo", "comm="], {
+          encoding: "utf8",
+          timeout: 15_000,
+        });
+  if (
+    list.error !== undefined ||
+    list.status !== 0 ||
+    typeof list.stdout !== "string"
+  )
+    return undefined;
+  return claudeDesktopListed(platform, list.stdout);
+}
+
+/**
+ * Whether a process list, one path per line, shows Claude Desktop's main app
+ * running: true or false, or undefined when a claude process's path couldn't
+ * be read. Claude Code is also named claude, so it's told apart by where it's
+ * installed: on Windows, the Store package or the standalone installer's
+ * folder; on a Mac, the main executable of a Claude.app bundle anywhere.
+ */
+export function claudeDesktopListed(
+  platform: NodeJS.Platform,
+  processes: string,
+): boolean | undefined {
+  const desktop =
+    platform === "win32"
+      ? /\\(WindowsApps\\Claude_[^\\]+|AnthropicClaude)\\/i
+      : /\/Claude\.app\/Contents\/MacOS\/Claude$/;
+  const lines = processes.split(/\r?\n/).map((line) => line.trim());
+  if (lines.some((line) => desktop.test(line))) return true;
+  return lines.includes(unreadablePath) ? undefined : false;
 }
 
 /**

@@ -3,7 +3,11 @@ import { writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { runAssistantCommand, type Setup } from "./assistants.js";
+import {
+  claudeDesktopRunning,
+  runAssistantCommand,
+  type Setup,
+} from "./assistants.js";
 import { ParishConnection } from "./connection.js";
 import { FailureLog } from "./failure-log.js";
 import { serveFlocknote } from "./flocknote-server.js";
@@ -167,6 +171,7 @@ const assistantSetup: Setup = {
   home: homedir(),
   environment: process.env,
   platform: process.platform,
+  claudeDesktopOpen: () => claudeDesktopRunning(process.platform, process.env),
 };
 
 async function main(): Promise<void> {
