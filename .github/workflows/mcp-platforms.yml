@@ -1,4 +1,4 @@
-name: macOS MCP checks
+name: Platform MCP checks
 
 on:
   workflow_call:
@@ -75,3 +75,68 @@ jobs:
           mkdir -p "$(dirname "$desktop")" && printf 'not json' > "$desktop"
           run connect claude-desktop | jq -e '.error | test("left the file unchanged")'
           test "$(cat "$desktop")" = 'not json'
+
+  windows:
+    name: Windows app
+    runs-on: windows-2025
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+      - run: npm ci --ignore-scripts
+      # MSBuild reads environment variables as properties, so this fails the
+      # build on any C# warning without changing local builds.
+      - name: Build Flockbot.exe for x64 and arm64
+        env:
+          TreatWarningsAsErrors: true
+        run: |
+          adapters/windows/build.sh x64
+          adapters/windows/build.sh arm64
+      - name: Connect and disconnect assistants with the built connector
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $connector = (Resolve-Path adapters/windows/build/x64/flockbot-mcp.exe).Path
+          # A throwaway profile, so the runner's own settings stay untouched.
+          $profileDir = Join-Path $env:RUNNER_TEMP flockbot-profile
+          $env:USERPROFILE = $profileDir
+          $env:LOCALAPPDATA = "$profileDir\AppData\Local"
+          $env:APPDATA = "$profileDir\AppData\Roaming"
+          Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $env:LOCALAPPDATA, $env:APPDATA | Out-Null
+          function Connector { (& $connector @args | Out-String).Trim() }
+          function Check($condition, $what) { if (-not $condition) { throw "Failed: $what" } }
+
+          Check ((Connector status | ConvertFrom-Json).state) 'status reports a state'
+          Check ((Connector connect codex) -eq '{"changed":true}') 'connect codex'
+          Check ((Get-Content -Raw "$profileDir\.codex\config.toml") -match 'flockbot-mcp\.exe') 'Codex config names the connector'
+          Check ((Connector assistants | ConvertFrom-Json).codex.connected -eq $true) 'Codex reported connected'
+          Check (@((Connector repoint | ConvertFrom-Json).results).Count -eq 0) 'repoint has nothing to change'
+          Check ((Connector disconnect codex) -eq '{"changed":true}') 'disconnect codex'
+          Check ((Connector assistants | ConvertFrom-Json).codex.connected -eq $false) 'Codex reported disconnected'
+
+          # Also runs the check that refuses while Claude is open.
+          $desktop = "$env:APPDATA\Claude\claude_desktop_config.json"
+          New-Item -ItemType Directory -Force (Split-Path $desktop) | Out-Null
+          Set-Content -Path $desktop -Value 'not json' -NoNewline
+          Check ((Connector connect claude-desktop | ConvertFrom-Json).error -match 'left the file unchanged') 'unreadable Claude config refused'
+          Check ((Get-Content -Raw $desktop) -eq 'not json') 'Claude config left unchanged'
+          Remove-Item $desktop
+          Check ((Connector connect claude-desktop) -eq '{"changed":true}') 'connect claude-desktop'
+          Check ((Get-Content -Raw $desktop | ConvertFrom-Json).mcpServers.flockbot.command -eq $connector) 'Claude config names the connector'
+          Check ((Connector disconnect claude-desktop) -eq '{"changed":true}') 'disconnect claude-desktop'
