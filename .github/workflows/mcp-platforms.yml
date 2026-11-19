@@ -60,3 +60,18 @@ jobs:
         run: codesign --verify --deep --strict adapters/macos/build/Flockbot.app
       - name: Run the bundled connector under the hardened runtime
         run: adapters/macos/build/Flockbot.app/Contents/MacOS/flockbot-mcp status
+      - name: Connect and disconnect an assistant with the bundled connector
+        run: |
+          connector="$PWD/adapters/macos/build/Flockbot.app/Contents/MacOS/flockbot-mcp"
+          home="$(mktemp -d)"
+          run() { env -u CODEX_HOME HOME="$home" "$connector" "$@"; }
+          test "$(run connect codex)" = '{"changed":true}'
+          grep -qxF "command = \"$connector\"" "$home/.codex/config.toml"
+          run assistants | jq -e '.codex.connected == true and (.["claude-desktop"] | has("connected"))'
+          run repoint | jq -e '.results == []'
+          test "$(run disconnect codex)" = '{"changed":true}'
+          run assistants | jq -e '.codex.connected == false'
+          desktop="$home/Library/Application Support/Claude/claude_desktop_config.json"
+          mkdir -p "$(dirname "$desktop")" && printf 'not json' > "$desktop"
+          run connect claude-desktop | jq -e '.error | test("left the file unchanged")'
+          test "$(cat "$desktop")" = 'not json'
