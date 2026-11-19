@@ -313,10 +313,17 @@ struct ContentView: View {
       .scrollContentBackground(.hidden)
       .scrollDisabled(true)
       .fixedSize(horizontal: false, vertical: true)
-      Text("Flockbot is independent and not affiliated with Flocknote.")
-        .font(.footnote)
-        .foregroundStyle(.tertiary)
-        .padding(.bottom, 18)
+      VStack(spacing: 2) {
+        Text("Flockbot is independent and not affiliated with Flocknote.")
+        if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+          as? String
+        {
+          Text("Version \(version)")
+        }
+      }
+      .font(.footnote)
+      .foregroundStyle(.tertiary)
+      .padding(.bottom, 18)
     }
     .frame(width: 480)
     .confirmationDialog(
