@@ -14,6 +14,9 @@ root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 package="$root/adapters/macos"
 app="$package/build/Flockbot.app"
 version="$(node -p "require('$root/adapters/mcp/package.json').version")"
+# Sparkle decides which copy is newer by CFBundleVersion. The commit count only
+# grows on main, unlike the prerelease labels in the display version.
+build="$(git -C "$root" rev-list --count HEAD)"
 
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
@@ -60,7 +63,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>Flockbot</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
-  <key>CFBundleVersion</key><string>$version</string>
+  <key>CFBundleVersion</key><string>$build</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>NSHighResolutionCapable</key><true/>
