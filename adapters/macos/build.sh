@@ -78,7 +78,10 @@ PLIST
 # connector's JIT entitlement is exercised in every build; only the outer app
 # of an ad hoc build goes without it (see below). Sparkle's helpers are
 # re-signed in the order its documentation gives.
-sign() { codesign --force --sign "$identity" --options runtime "$@"; }
+# Notarization needs a secure timestamp, which ad hoc signatures can't carry.
+timestamp="--timestamp"
+[[ "$identity" == "-" ]] && timestamp="--timestamp=none"
+sign() { codesign --force --sign "$identity" --options runtime "$timestamp" "$@"; }
 sparkle="$app/Contents/Frameworks/Sparkle.framework/Versions/B"
 sign "$sparkle/XPCServices/Installer.xpc"
 sign --preserve-metadata=entitlements "$sparkle/XPCServices/Downloader.xpc"
