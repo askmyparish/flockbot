@@ -148,12 +148,24 @@ function write(fd: number, text: string, append = false): void {
 export class FailureLog {
   readonly #directory: string;
   readonly #now: () => number;
+  readonly #lockWaitMs: number;
 
-  constructor(options: { directory?: string; now?: () => number } = {}) {
+  constructor(
+    options: {
+      directory?: string;
+      now?: () => number;
+      /**
+       * How long to wait for another process's write before giving up.
+       * A diagnostic is never worth holding up a tool call, so it's short.
+       */
+      lockWaitMs?: number;
+    } = {},
+  ) {
     this.#directory = resolve(
       options.directory ?? join(connectionProfileDirectory(), "diagnostics-v2"),
     );
     this.#now = options.now ?? Date.now;
+    this.#lockWaitMs = options.lockWaitMs ?? 1000;
   }
 
   async save(value: unknown, signal?: AbortSignal): Promise<boolean> {
@@ -196,7 +208,10 @@ export class FailureLog {
     }
     return new ProcessLock(lockPath).runExclusive(
       "diagnostics",
-      AbortSignal.any([AbortSignal.timeout(1000), ...(signal ? [signal] : [])]),
+      AbortSignal.any([
+        AbortSignal.timeout(this.#lockWaitMs),
+        ...(signal ? [signal] : []),
+      ]),
       async () => {
         signal?.throwIfAborted();
         const current = file(join(this.#directory, names[0]));
