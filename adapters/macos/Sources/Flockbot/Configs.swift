@@ -130,11 +130,50 @@ enum Configs {
     return lines[section].contains { $0.trimmingCharacters(in: .whitespaces) == codexCommandLine() }
   }
 
+  /// The shared Applications folder, then the person's own for a standard
+  /// account that can't write to the shared one.
+  static var applicationFolders: [URL] {
+    [URL(fileURLWithPath: "/Applications"), home.appendingPathComponent("Applications")]
+  }
+
   /// Whether this copy sits somewhere it will stay. A downloaded app can run
   /// from a temporary translocated path, and a disk image goes away when it's
-  /// ejected, so only a copy in an Applications folder takes over entries.
+  /// ejected, so only a copy in an Applications folder connects assistants or
+  /// takes over their entries.
   static var isInstalledDurably: Bool {
-    ["/Applications/", "\(home.path)/Applications/"].contains { helperPath.hasPrefix($0) }
+    applicationFolders.contains { helperPath.hasPrefix($0.path + "/") }
+  }
+
+  /// Copies the app into the first Applications folder that takes it,
+  /// swapping out an older Flockbot there in one step, and returns the copy.
+  static func moveToApplications(
+    from source: URL = Bundle.main.bundleURL, into folders: [URL] = applicationFolders
+  ) throws -> URL {
+    let files = FileManager.default
+    var lastError: Error = CocoaError(.fileWriteNoPermission)
+    for folder in folders {
+      let destination = folder.appendingPathComponent("Flockbot.app")
+      // Copied beside the destination first, so a failed copy leaves an
+      // existing Flockbot as it was.
+      let staging = folder.appendingPathComponent(".Flockbot-\(UUID().uuidString).app")
+      do {
+        try files.createDirectory(at: folder, withIntermediateDirectories: true)
+        try files.copyItem(at: source, to: staging)
+        // A copy that keeps the download's quarantine flag would run from a
+        // translocated path again. Gatekeeper already approved this one.
+        _ = try? run("/usr/bin/xattr", ["-dr", "com.apple.quarantine", staging.path])
+        if files.fileExists(atPath: destination.path) {
+          _ = try files.replaceItemAt(destination, withItemAt: staging)
+        } else {
+          try files.moveItem(at: staging, to: destination)
+        }
+        return destination
+      } catch {
+        try? files.removeItem(at: staging)
+        lastError = error
+      }
+    }
+    throw lastError
   }
 
   /// Points entries left behind by a moved or renamed Flockbot.app at this

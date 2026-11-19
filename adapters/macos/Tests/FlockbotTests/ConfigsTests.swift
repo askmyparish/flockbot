@@ -332,7 +332,45 @@ final class ConfigsTests: XCTestCase {
     XCTAssertTrue(Configs.repointMoved().isEmpty, "a second launch has nothing to change")
   }
 
+  func testMoveToApplicationsReplacesAnOlderCopyAndClearsQuarantine() throws {
+    let source = try fakeApp(at: home.appendingPathComponent("Downloads/Flockbot.app"), version: "new")
+    try Configs.run("/usr/bin/xattr", ["-w", "com.apple.quarantine", "0081;0;Safari;", source.path])
+    let applications = home.appendingPathComponent("Applications")
+    _ = try fakeApp(at: applications.appendingPathComponent("Flockbot.app"), version: "old")
+
+    let copy = try Configs.moveToApplications(from: source, into: [applications])
+
+    XCTAssertEqual(copy.path, applications.appendingPathComponent("Flockbot.app").path)
+    XCTAssertEqual(try read(copy.appendingPathComponent("Contents/version")), "new")
+    XCTAssertEqual(
+      try FileManager.default.contentsOfDirectory(atPath: applications.path), ["Flockbot.app"],
+      "no staging copy is left behind")
+    XCTAssertThrowsError(
+      try Configs.run("/usr/bin/xattr", ["-p", "com.apple.quarantine", copy.path]),
+      "the copy must not be translocated again")
+  }
+
+  func testMoveToApplicationsFallsBackWhenTheSharedFolderIsReadOnly() throws {
+    let source = try fakeApp(at: home.appendingPathComponent("Downloads/Flockbot.app"), version: "new")
+    let shared = home.appendingPathComponent("Shared Applications")
+    let existing = try fakeApp(at: shared.appendingPathComponent("Flockbot.app"), version: "old")
+    try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: shared.path)
+    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shared.path) }
+    let personal = home.appendingPathComponent("Applications")
+
+    let copy = try Configs.moveToApplications(from: source, into: [shared, personal])
+
+    XCTAssertEqual(copy.path, personal.appendingPathComponent("Flockbot.app").path)
+    XCTAssertEqual(try read(existing.appendingPathComponent("Contents/version")), "old")
+    XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: shared.path), ["Flockbot.app"])
+  }
+
   // MARK: Helpers
+
+  func fakeApp(at url: URL, version: String) throws -> URL {
+    try write(version, to: url.appendingPathComponent("Contents/version"))
+    return url
+  }
 
   let originalClaudeCodeEntry: [String: Any] = [
     "type": "stdio", "command": "/old/Flockbot.app/Contents/MacOS/flockbot-mcp", "env": ["A": "1"],

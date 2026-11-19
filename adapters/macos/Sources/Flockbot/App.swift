@@ -85,6 +85,11 @@ final class AppModel: ObservableObject {
   /// Set while launch repoints entries left by a moved copy of the app.
   @Published var repairing = true
   @Published var signOutError: String?
+  /// Assistants keep the connector's full path, so only a copy in an
+  /// Applications folder connects them (see `Configs.isInstalledDurably`).
+  let installedDurably = Configs.isInstalledDurably
+  @Published var moving = false
+  @Published var moveError: String?
   @Published var errors: [Assistant: String] = [:]
   /// When this window last changed each assistant's configuration.
   @Published var changedAt: [Assistant: Date] = [:]
@@ -127,7 +132,29 @@ final class AppModel: ObservableObject {
 
   var signedIn: Bool { status?.state == "ready" }
   /// One change at a time: sign-out and connecting must not interleave.
-  var busy: Bool { working != nil || signingOut || repairing }
+  var busy: Bool { working != nil || signingOut || repairing || moving }
+
+  /// Copies the app into Applications, opens that copy and quits. The copy
+  /// here goes to the Trash when it can; a disk image or a translocated
+  /// download is read-only, so that one stays.
+  func moveToApplications() {
+    guard !busy else { return }
+    moving = true
+    moveError = nil
+    Task {
+      do {
+        let copy = try await Task.detached { try Configs.moveToApplications() }.value
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        try await NSWorkspace.shared.openApplication(at: copy, configuration: configuration)
+        try? FileManager.default.trashItem(at: Bundle.main.bundleURL, resultingItemURL: nil)
+        NSApp.terminate(nil)
+      } catch {
+        moveError = "Flockbot couldn't move to Applications. Drag it there in Finder instead."
+        moving = false
+      }
+    }
+  }
 
   func refresh() async {
     status = try? await Helper.status()
@@ -213,6 +240,9 @@ struct ContentView: View {
     VStack(spacing: 0) {
       header
       Form {
+        if !model.installedDurably {
+          Section { install }
+        }
         Section {
           flocknote
         } header: {
@@ -277,8 +307,33 @@ struct ContentView: View {
     .padding(.horizontal, 24)
   }
 
+  @ViewBuilder private var install: some View {
+    HStack(spacing: 12) {
+      Image(systemName: "arrow.down.app.fill")
+        .font(.title2)
+        .foregroundStyle(.blue)
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Move Flockbot to Applications")
+        Text("Your assistants can only connect to Flockbot there.")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      Spacer()
+      Button(model.moving ? "Moving…" : "Move") { model.moveToApplications() }
+        .disabled(model.busy)
+    }
+    if let error = model.moveError {
+      Label {
+        Text(error).foregroundStyle(.red)
+      } icon: {
+        Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
+      }
+    }
+  }
+
   private var assistantsFooter: String? {
-    if !model.signedIn { return nil }
+    if !model.signedIn || !model.installedDurably { return nil }
     if model.connected.isEmpty { return "Next, connect the assistants you use." }
     return "Once connected, Flockbot does not need to stay open."
   }
@@ -356,7 +411,8 @@ struct AssistantRow: View {
       Spacer()
       Button(connected ? "Disconnect" : "Connect") { model.toggle(assistant) }
         .disabled(
-          !installed || model.busy || (!connected && !model.signedIn))
+          !installed || model.busy
+            || (!connected && (!model.signedIn || !model.installedDurably)))
     }
     .opacity(installed ? 1 : 0.55)
   }
