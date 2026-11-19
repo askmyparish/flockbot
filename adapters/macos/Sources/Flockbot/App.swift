@@ -160,13 +160,24 @@ final class AppModel: ObservableObject {
     }
   }
 
+  /// Counts status checks, so only the latest one updates the window.
+  private var refreshes = 0
+
   func refresh() async {
-    status = try? await Helper.status()
+    // Checks overlap: coming forward starts one while a change's own is
+    // running. An older check finishing last would show what was true before
+    // the change, so its results are dropped.
+    refreshes += 1
+    let refresh = refreshes
+    let latestStatus = try? await Helper.status()
+    let states = try? await Helper.assistants()
+    guard refresh == refreshes else { return }
+    status = latestStatus
     checked = true
     if !signedIn { justSignedIn = false }
     // A connector that can't answer leaves the rows as they were rather than
     // showing every assistant as disconnected.
-    guard let states = try? await Helper.assistants() else { return }
+    guard let states else { return }
     installed = Set(
       Assistant.allCases.filter { $0.isInstalled(commandLine: states[$0]?.commandLine ?? false) })
     connected = Set(Assistant.allCases.filter { states[$0]?.connected ?? false })
