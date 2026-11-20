@@ -119,7 +119,12 @@ jobs:
           $env:APPDATA = "$profileDir\AppData\Roaming"
           Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $env:LOCALAPPDATA, $env:APPDATA | Out-Null
-          function Connector { (& $connector @args | Out-String).Trim() }
+          # Every command exits 0, a refused change included; it replies with an error.
+          function Connector {
+            $out = (& $connector @args | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0) { throw "Failed: connector $args exited $LASTEXITCODE" }
+            $out
+          }
           function Check($condition, $what) { if (-not $condition) { throw "Failed: $what" } }
 
           Check ((Connector status | ConvertFrom-Json).state) 'status reports a state'
