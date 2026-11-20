@@ -4,17 +4,33 @@ import SwiftUI
 
 /// Flockbot is a setup window, not a background app: closing it quits.
 /// Assistants launch the bundled connector themselves when they need it.
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, SPUUpdaterDelegate {
   /// Sparkle checks the feed named in Info.plist and installs signed updates in
   /// place, so assistants' entries keep pointing at the same connector. Builds
   /// without an update signing key have no feed and run without an updater.
-  let updater: SPUStandardUpdaterController? =
-    Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") == nil
-    ? nil
-    : SPUStandardUpdaterController(
-      startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+  private(set) var updater: SPUStandardUpdaterController?
+  /// A downloaded update's version. It installs when the window closes and
+  /// the app quits; running connectors keep the old copy until they restart.
+  @Published private(set) var updateReady: String?
+
+  override init() {
+    super.init()
+    if Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") != nil {
+      updater = SPUStandardUpdaterController(
+        startingUpdater: true, updaterDelegate: self, userDriverDelegate: nil)
+    }
+  }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+  func updater(
+    _ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem,
+    immediateInstallationBlock immediateInstallHandler: @escaping () -> Void
+  ) -> Bool {
+    updateReady = item.displayVersionString
+    // Sparkle installs it at quit, as it would without this delegate.
+    return false
+  }
 }
 
 struct FlockbotApp: App {
@@ -24,6 +40,7 @@ struct FlockbotApp: App {
   var body: some Scene {
     Window("Flockbot", id: "main") {
       ContentView(model: model)
+        .environmentObject(delegate)
         // The connector reopens the app when an assistant needs sign-in.
         .onReceive(
           NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
@@ -258,6 +275,7 @@ final class AppModel: ObservableObject {
 
 struct ContentView: View {
   @ObservedObject var model: AppModel
+  @EnvironmentObject private var app: AppDelegate
   @State private var confirmingSignOut = false
 
   var body: some View {
@@ -383,7 +401,11 @@ struct ContentView: View {
   }
 
   private var assistantsFooter: String? {
-    if !model.signedIn || !model.installedDurably { return nil }
+    if !model.installedDurably { return nil }
+    if let version = app.updateReady {
+      return "Flockbot \(version) will install when you close this window."
+    }
+    if !model.signedIn { return nil }
     if model.connected.isEmpty { return "Next, connect the assistants you use." }
     return "Once connected, Flockbot does not need to stay open."
   }
