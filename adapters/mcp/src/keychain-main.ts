@@ -22,6 +22,8 @@ import { ConnectionError } from "./session.js";
 import type { SignInResult } from "./sign-in-page.js";
 import { connectionProfileDirectory } from "./profile.js";
 import { SerialCoordinator } from "./serial-coordinator.js";
+import { UpdateCheck } from "./updates.js";
+import { MCP_VERSION } from "./version.js";
 
 // Spike: the local connector compiled with `bun build --compile`, keeping the
 // session in the login Keychain instead of a file. Bun.secrets is Bun-only.
@@ -45,6 +47,9 @@ const SERVICE = "com.askmyparish.flockbot";
 // Set with `bun build --define` so each build can be told apart.
 declare const BUILD_LABEL: string | undefined;
 const build = typeof BUILD_LABEL === "string" ? BUILD_LABEL : "unlabelled";
+// The update feed the setup app installs from, set by its build script.
+// Builds without one never check.
+declare const UPDATE_FEED: string | undefined;
 
 function keychain(name: string): SessionBlob {
   return {
@@ -94,6 +99,25 @@ const openSignIn = appBundle
     ? () => launchApp(windowsApp)
     : undefined;
 const session = keychain("session");
+
+/**
+ * Only an installed copy can update: Flockbot.app on a Mac, or on Windows a
+ * copy in Velopack's `current` folder, with Update.exe one level up.
+ */
+function updateCheck(): UpdateCheck | undefined {
+  if (typeof UPDATE_FEED !== "string" || UPDATE_FEED === "") return undefined;
+  const installed =
+    appBundle !== undefined ||
+    (windowsApp !== undefined &&
+      existsSync(join(dirname(process.execPath), "..", "Update.exe")));
+  if (!installed) return undefined;
+  return new UpdateCheck({
+    feed: UPDATE_FEED,
+    format: appBundle ? "appcast" : "velopack",
+    current: MCP_VERSION,
+    file: join(connectionProfileDirectory(), "update-check.json"),
+  });
+}
 
 /** Reads one bounded JSON object from stdin; the Mac app writes it there. */
 async function readInput(): Promise<Record<string, unknown>> {
@@ -311,7 +335,13 @@ async function main(): Promise<void> {
     );
     return;
   }
-  await serveFlocknote(connection);
+  const updates = updateCheck();
+  // In the background: a slow or offline feed never delays the assistant.
+  void updates?.refresh();
+  await serveFlocknote(
+    connection,
+    updates ? { updateAvailable: () => updates.available() } : {},
+  );
 }
 
 main().catch(() => {

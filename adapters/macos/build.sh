@@ -24,8 +24,12 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Framewor
 # Bun leaves temporary files in its working directory; keep them out of the repo.
 scratch="$(mktemp -d)"
 trap 'rm -rf -- "$scratch"' EXIT
+# The connector reads the same appcast, so it can tell assistants when an
+# update is waiting; only builds that can update get the address.
+connector_feed=""
+if [[ -f "$package/sparkle-public-key" ]]; then connector_feed="$feed"; fi
 (cd "$scratch" && bun build --compile --minify --target=bun-darwin-arm64 \
-  --define "BUILD_LABEL=\"$version\"" \
+  --define "BUILD_LABEL=\"$version\"" --define "UPDATE_FEED=\"$connector_feed\"" \
   "$root/adapters/mcp/src/keychain-main.ts" \
   --outfile "$app/Contents/MacOS/flockbot-mcp" > /dev/null)
 

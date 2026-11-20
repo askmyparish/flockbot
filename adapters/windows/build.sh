@@ -28,8 +28,12 @@ mkdir -p "$out"
 # Bun leaves temporary files in its working directory; keep them out of the repo.
 scratch="$(mktemp -d)"
 trap 'rm -rf -- "$scratch"' EXIT
+# The connector reads the same channel's feed the app installs from, so it can
+# tell assistants when an update is waiting. Flockbot.csproj owns the address.
+feed="$(dotnet msbuild "$package/Flockbot.csproj" --nologo -getProperty:UpdateFeed \
+  ${FLOCKBOT_UPDATE_FEED:+-p:UpdateFeed="$FLOCKBOT_UPDATE_FEED"} | tr -d '\r')releases.win-$arch.json"
 (cd "$scratch" && bun build --compile --minify --target="bun-windows-$arch" \
-  --define "BUILD_LABEL=\"$version\"" \
+  --define "BUILD_LABEL=\"$version\"" --define "UPDATE_FEED=\"$feed\"" \
   "$root/adapters/mcp/src/keychain-main.ts" \
   --outfile "$out/flockbot-mcp.exe" > /dev/null)
 
