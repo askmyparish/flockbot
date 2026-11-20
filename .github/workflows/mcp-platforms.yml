@@ -145,3 +145,5 @@ jobs:
           Check ((Connector connect claude-desktop) -eq '{"changed":true}') 'connect claude-desktop'
           Check ((Get-Content -Raw $desktop | ConvertFrom-Json).mcpServers.flockbot.command -eq $connector) 'Claude config names the connector'
           Check ((Connector disconnect claude-desktop) -eq '{"changed":true}') 'disconnect claude-desktop'
+          # Disconnect also replies changed when there was nothing to remove.
+          Check ($null -eq (Get-Content -Raw $desktop | ConvertFrom-Json).mcpServers.flockbot) 'Claude config entry removed'
