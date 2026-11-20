@@ -21,6 +21,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject, SPUU
     }
   }
 
+  func applicationDidFinishLaunching(_ notification: Notification) {
+    // The connector tells assistants when an update is out, and they send the
+    // person here to install it, so a launch doesn't wait for the daily check.
+    updater?.updater.checkForUpdatesInBackground()
+  }
+
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
   func updater(
