@@ -47,6 +47,7 @@ async function fixture(
     signInPollMs?: number;
     failureLog?: Pick<FailureLog, "save">;
     parish?: string;
+    updateAvailable?: () => string | undefined;
   } = {},
 ) {
   const profile = mkdtempSync(join(tmpdir(), "flockbot-server-test-"));
@@ -592,6 +593,42 @@ describe("Flocknote MCP contract", () => {
     expect(unsigned.getInstructions()).not.toMatch(
       /signed in to the Flocknote parish/,
     );
+  });
+
+  it("mentions an available update once per session, and in every status", async () => {
+    let available: string | undefined;
+    const { client, connection } = await fixture({
+      updateAvailable: () => available,
+    });
+    vi.spyOn(connection, "status").mockResolvedValue({
+      state: "ready",
+      parish: "example-parish",
+    });
+    vi.spyOn(connection, "count").mockResolvedValue(7);
+    const count = async () =>
+      (
+        await client.callTool({
+          name: "subscriber_count",
+          arguments: { groupId: "101" },
+        })
+      ).structuredContent as Record<string, unknown>;
+    const status = async () =>
+      (await client.callTool({ name: "status", arguments: {} }))
+        .structuredContent as Record<string, unknown>;
+
+    // Nothing to mention until a check finds a release, even mid-session.
+    expect(await count()).not.toHaveProperty("update");
+    available = "0.3.0";
+    expect(await count()).toMatchObject({
+      subscriberCount: 7,
+      update: {
+        version: "0.3.0",
+        message: expect.stringContaining("opening the Flockbot app"),
+      },
+    });
+    expect(await count()).not.toHaveProperty("update");
+    expect(await status()).toMatchObject({ update: { version: "0.3.0" } });
+    expect(await status()).toMatchObject({ update: { version: "0.3.0" } });
   });
 
   it("holds connect until fictional sign-in completes, then allows the original Everyone count without a user-done message", async () => {

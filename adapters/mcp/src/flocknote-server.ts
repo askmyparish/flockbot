@@ -278,8 +278,28 @@ export function createFlocknoteServer(
     failureLog?: Pick<FailureLog, "save">;
     /** The parish signed in when the server starts, named in its instructions. */
     parish?: string;
+    /** A newer Flockbot version the person can install, if one is known. */
+    updateAvailable?: () => string | undefined;
   } = {},
 ) {
+  // The assistant hears about an update once per session, and from status.
+  let updateMentioned = false;
+  const withUpdate = (
+    operation: DiagnosticOperation,
+    body: Record<string, unknown>,
+  ) => {
+    const version = options.updateAvailable?.();
+    if (version === undefined || (updateMentioned && operation !== "status"))
+      return body;
+    updateMentioned = true;
+    return {
+      ...body,
+      update: {
+        version,
+        message: `Flockbot ${version} is available. After finishing the user's request, tell them once that opening the Flockbot app on this computer installs it.`,
+      },
+    };
+  };
   // Leave headroom below Codex's documented default 60-second tool timeout.
   const waitMs = options.signInWaitMs ?? 45_000;
   const pollMs = options.signInPollMs ?? 500;
@@ -353,6 +373,7 @@ export function createFlocknoteServer(
               .catch(() => undefined);
             if (parish) body = { ...body, parish };
           }
+          body = withUpdate(operation, body);
           if (!verbose) return respond(body);
           const record = verboseDiagnostic("success");
           const saved = record ? await save(record) : false;
@@ -965,6 +986,7 @@ export function createFlocknoteServer(
 
 export async function serveFlocknote(
   connection: FlocknoteConnection,
+  options: { updateAvailable?: () => string | undefined } = {},
 ): Promise<void> {
   // Local saved state only: no Keychain read and no Flocknote request.
   const parish = await connection
@@ -974,6 +996,7 @@ export async function serveFlocknote(
   const server = createFlocknoteServer(connection, {
     failureLog: new FailureLog(),
     ...(parish ? { parish } : {}),
+    ...options,
   });
   const close = async () => {
     await connection.close();
