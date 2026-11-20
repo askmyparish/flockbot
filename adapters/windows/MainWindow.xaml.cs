@@ -182,7 +182,9 @@ public partial class MainWindow : Window
         }
 
         string? footer = !installedCopy ? "Install Flockbot with its installer to connect your assistants."
-            : Updates.Ready is { } version ? $"Flockbot {version} will install when you close this window."
+            // Installing stops connectors running from the old copy, so
+            // assistants that are open lose Flockbot until they're reopened.
+            : Updates.Ready is { } version ? $"Flockbot {version} will install when you close this window. Then reopen Claude and ChatGPT to keep using Flockbot."
             : !IsSignedIn ? null
             : connected.Count == 0 ? "Next, connect the assistants you use."
             : "Once connected, Flockbot does not need to stay open.";
