@@ -296,7 +296,8 @@ export function createFlocknoteServer(
       ...body,
       update: {
         version,
-        message: `Flockbot ${version} is available. After finishing the user's request, tell them once that opening the Flockbot app on this computer installs it.`,
+        // Opening the app downloads the update; closing its window installs it.
+        message: `Flockbot ${version} is available. After finishing the user's request, tell them once how to install it: open the Flockbot app on this computer, wait until its window says the update will install, then close the window and follow what it said.`,
       },
     };
   };

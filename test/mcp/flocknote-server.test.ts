@@ -623,7 +623,7 @@ describe("Flocknote MCP contract", () => {
       subscriberCount: 7,
       update: {
         version: "0.3.0",
-        message: expect.stringContaining("opening the Flockbot app"),
+        message: expect.stringContaining("open the Flockbot app"),
       },
     });
     expect(await count()).not.toHaveProperty("update");
