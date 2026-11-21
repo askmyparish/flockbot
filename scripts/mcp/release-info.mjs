@@ -7,7 +7,7 @@ import { releaseNotes, syncVersions } from "./release-version.mjs";
 const { values } = parseArgs({
   options: {
     tag: { type: "string" },
-    out: { type: "string", default: "adapters/mcp/artifacts/codex" },
+    out: { type: "string", default: "adapters/mcp/artifacts/claude-local" },
   },
 });
 const version = await syncVersions(process.cwd(), true);

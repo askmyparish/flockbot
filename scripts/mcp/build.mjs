@@ -1,5 +1,19 @@
 import { rm } from "node:fs/promises";
-import { bundleBrowser } from "./browser-build.mjs";
+import { build } from "esbuild";
 
-await rm("adapters/mcp/dist", { recursive: true, force: true });
-await bundleBrowser();
+const out = "adapters/mcp/dist";
+
+await rm(out, { recursive: true, force: true });
+await build({
+  entryPoints: ["adapters/mcp/src/local-main.ts"],
+  outfile: `${out}/server/index.mjs`,
+  bundle: true,
+  platform: "node",
+  target: "node22",
+  format: "esm",
+  logLevel: "warning",
+  legalComments: "eof",
+  banner: {
+    js: 'import { createRequire as __createRequire } from "node:module"; const require = __createRequire(import.meta.url);',
+  },
+});

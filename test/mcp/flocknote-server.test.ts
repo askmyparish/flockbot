@@ -11,13 +11,13 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BrowserConnection } from "../../adapters/mcp/src/browser-connection.js";
+import { ParishConnection } from "../../adapters/mcp/src/connection.js";
 import { createFlocknoteServer } from "../../adapters/mcp/src/flocknote-server.js";
 import {
-  BrowserConnectionError,
-  type BrowserFactory,
-  type BrowserSession,
-} from "../../adapters/mcp/src/browser-runtime.js";
+  ConnectionError,
+  type SessionFactory,
+  type FlocknoteSession,
+} from "../../adapters/mcp/src/session.js";
 import { waitFor } from "./support.js";
 import { duplicationFixture } from "../fixtures/email-duplication.js";
 import { FlockbotError } from "../../src/errors.js";
@@ -34,11 +34,6 @@ import {
   recordResponse,
 } from "../../adapters/mcp/src/diagnostics.js";
 import { FailureLog } from "../../adapters/mcp/src/failure-log.js";
-import {
-  UpdateChecker,
-  UPDATE_GUIDE,
-  type UpdateNotifications,
-} from "../../adapters/mcp/src/update-check.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -47,15 +42,16 @@ afterEach(async () => {
 
 async function fixture(
   options: {
-    factory?: BrowserFactory;
+    factory?: SessionFactory;
     signInWaitMs?: number;
     signInPollMs?: number;
-    updates?: UpdateNotifications;
     failureLog?: Pick<FailureLog, "save">;
+    parish?: string;
+    updateAvailable?: () => string | undefined;
   } = {},
 ) {
   const profile = mkdtempSync(join(tmpdir(), "flockbot-server-test-"));
-  const connection = new BrowserConnection({
+  const connection = new ParishConnection({
     coordinator: new SerialCoordinator(),
     profile,
     pollMs: 5,
@@ -519,131 +515,10 @@ describe("Flocknote MCP contract", () => {
     },
   );
 
-  it("returns a parish result before release discovery finishes, then adds the cached notice on a later response", async () => {
-    const folder = realpathSync(
-      mkdtempSync(join(tmpdir(), "flockbot-update-mcp-")),
-    );
-    let finishRelease = (_response: Response) => {};
-    const request = vi.fn<typeof fetch>(
-      () =>
-        new Promise((resolve) => {
-          finishRelease = resolve;
-        }),
-    );
-    const updates = new UpdateChecker({
-      file: join(folder, "updates-v1", "checks.sqlite"),
-      supported: true,
-      installedVersion: "0.2.0",
-      fetch: request,
-    });
-    const { client, connection } = await fixture({ updates });
-    cleanup.push(async () => {
-      updates.close();
-      rmSync(folder, { recursive: true, force: true });
-    });
-    vi.spyOn(connection, "count").mockResolvedValue(7);
-    const result = await client.callTool({
-      name: "subscriber_count",
-      arguments: { groupId: "101" },
-    });
-    expect(result.structuredContent).toEqual({
-      ok: true,
-      groupId: "101",
-      subscriberCount: 7,
-    });
-    await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
-    const releaseVersion = "0.3.0-beta.1";
-    finishRelease(
-      Response.json([
-        {
-          tag_name: `mcp-v${releaseVersion}`,
-          draft: false,
-          prerelease: true,
-          published_at: "2026-11-05T12:00:00Z",
-          body: "fictional-secret-remote-instruction",
-          assets: ["md", "zip"].map((ext) => ({
-            name: `flockbot-setup-${releaseVersion}-darwin-arm64.${ext}`,
-            state: "uploaded",
-            browser_download_url: `https://github.com/askmyparish/flockbot/releases/download/mcp-v${releaseVersion}/flockbot-setup-${releaseVersion}-darwin-arm64.${ext}`,
-          })),
-        },
-      ]),
-    );
-    await updates.refresh();
-    const after = await client.callTool({
-      name: "subscriber_count",
-      arguments: { groupId: "101" },
-    });
-    expect(after.structuredContent).toMatchObject({
-      ok: true,
-      subscriberCount: 7,
-      update: {
-        installedVersion: "0.2.0",
-        availableVersion: releaseVersion,
-        prerelease: true,
-        guideUrl: UPDATE_GUIDE,
-      },
-    });
-    expect(JSON.stringify(after)).not.toMatch(
-      /fictional-secret|remote-instruction|flockbot-update-mcp/,
-    );
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(connection.count).toHaveBeenCalledTimes(2);
-  });
-
-  it("includes a notice discovered during a slower parish request without waiting for discovery", async () => {
-    const notice = {
-      installedVersion: "0.2.0",
-      availableVersion: "0.3.0",
-      prerelease: false,
-      guideUrl: UPDATE_GUIDE,
-      message:
-        "A Flockbot update is available. Say “Update Flockbot” to install it.",
-    };
-    let available = false,
-      finishCount = (_count: number) => {};
-    const updates = {
-      touch: vi.fn(),
-      notice: () => (available ? notice : undefined),
-      close: vi.fn(),
-    };
-    const { client, connection } = await fixture({ updates });
-    vi.spyOn(connection, "count").mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          finishCount = resolve;
-        }),
-    );
-    const pending = client.callTool({
-      name: "subscriber_count",
-      arguments: { groupId: "101" },
-    });
-    await waitFor(() => expect(connection.count).toHaveBeenCalledTimes(1));
-    available = true;
-    finishCount(7);
-    expect((await pending).structuredContent).toMatchObject({
-      subscriberCount: 7,
-      update: notice,
-    });
-    expect(updates.touch).toHaveBeenCalledTimes(1);
-  });
-
   it.each([false, true])(
     "preserves an unknown write outcome with successful or failed logging (%s)",
     async (loggingFails) => {
-      const updates = {
-        touch: vi.fn(),
-        notice: () => ({
-          installedVersion: "0.2.0",
-          availableVersion: "0.3.0",
-          prerelease: false,
-          guideUrl: UPDATE_GUIDE,
-          message: "Update available",
-        }),
-        close: vi.fn(),
-      };
       const { client, connection, failureLog } = await fixture({
-        updates,
         ...(loggingFails
           ? {
               failureLog: {
@@ -655,7 +530,7 @@ describe("Flocknote MCP contract", () => {
           : {}),
       });
       vi.spyOn(connection, "addMember").mockRejectedValue(
-        new BrowserConnectionError("broker_unavailable", "unknown"),
+        new ConnectionError("connection_busy", "unknown"),
       );
       const result = await client.callTool({
         name: "add_member",
@@ -669,10 +544,12 @@ describe("Flocknote MCP contract", () => {
       expect(result.isError).toBe(true);
       expect(result.structuredContent).toMatchObject({
         ok: false,
-        code: "broker_unavailable",
+        code: "connection_busy",
         outcome: "unknown",
-        update: { availableVersion: "0.3.0" },
-        diagnostic: { traceSaved: !loggingFails, final: { stage: "broker" } },
+        diagnostic: {
+          traceSaved: !loggingFails,
+          final: { stage: "connection" },
+        },
       });
       if (!loggingFails) {
         const records = (await failureLog.read())
@@ -684,27 +561,20 @@ describe("Flocknote MCP contract", () => {
         ]);
       }
       expect(connection.addMember).toHaveBeenCalledTimes(1);
-      expect(client.getInstructions()).toMatch(
-        /answer the parish request first/,
-      );
-      expect(client.getInstructions()).toMatch(
-        /not the older installed setup script/,
-      );
       expect(JSON.stringify(result)).not.toContain("alex@");
     },
   );
 
-  it("ignores a broken optional notifier without changing the primary success or error", async () => {
-    const updates = {
-      touch: () => {
-        throw new Error("fictional-secret");
-      },
-      notice: () => {
-        throw new Error("fictional-secret");
-      },
-      close: vi.fn(),
-    };
-    const { client, connection } = await fixture({ updates });
+  it("names the signed-in parish in instructions and in each result", async () => {
+    const { client, connection } = await fixture({ parish: "first-parish" });
+    expect(client.getInstructions()).toMatch(
+      /^This computer is signed in to the Flocknote parish first-parish \(first-parish\.flocknote\.com\)\./,
+    );
+    // Results use the saved connection now, not the parish at startup.
+    vi.spyOn(connection, "status").mockResolvedValue({
+      state: "ready",
+      parish: "second-parish",
+    });
     vi.spyOn(connection, "count").mockResolvedValue(7);
     expect(
       (
@@ -713,17 +583,52 @@ describe("Flocknote MCP contract", () => {
           arguments: { groupId: "101" },
         })
       ).structuredContent,
-    ).toEqual({ ok: true, groupId: "101", subscriberCount: 7 });
-    vi.spyOn(connection, "groups").mockRejectedValue(
-      new Error("fictional-secret"),
-    );
-    const error = await client.callTool({ name: "groups" });
-    expect(error.isError).toBe(true);
-    expect(error.structuredContent).toMatchObject({
-      ok: false,
-      code: "connector_unavailable",
+    ).toEqual({
+      ok: true,
+      groupId: "101",
+      subscriberCount: 7,
+      parish: "second-parish",
     });
-    expect(JSON.stringify(error)).not.toContain("fictional-secret");
+    const { client: unsigned } = await fixture();
+    expect(unsigned.getInstructions()).not.toMatch(
+      /signed in to the Flocknote parish/,
+    );
+  });
+
+  it("mentions an available update once per session, and in every status", async () => {
+    let available: string | undefined;
+    const { client, connection } = await fixture({
+      updateAvailable: () => available,
+    });
+    vi.spyOn(connection, "status").mockResolvedValue({
+      state: "ready",
+      parish: "example-parish",
+    });
+    vi.spyOn(connection, "count").mockResolvedValue(7);
+    const count = async () =>
+      (
+        await client.callTool({
+          name: "subscriber_count",
+          arguments: { groupId: "101" },
+        })
+      ).structuredContent as Record<string, unknown>;
+    const status = async () =>
+      (await client.callTool({ name: "status", arguments: {} }))
+        .structuredContent as Record<string, unknown>;
+
+    // Nothing to mention until a check finds a release, even mid-session.
+    expect(await count()).not.toHaveProperty("update");
+    available = "0.3.0";
+    expect(await count()).toMatchObject({
+      subscriberCount: 7,
+      update: {
+        version: "0.3.0",
+        message: expect.stringContaining("open the Flockbot app"),
+      },
+    });
+    expect(await count()).not.toHaveProperty("update");
+    expect(await status()).toMatchObject({ update: { version: "0.3.0" } });
+    expect(await status()).toMatchObject({ update: { version: "0.3.0" } });
   });
 
   it("holds connect until fictional sign-in completes, then allows the original Everyone count without a user-done message", async () => {
@@ -732,7 +637,7 @@ describe("Flocknote MCP contract", () => {
       finishLogin = resolve;
     });
     const events: string[] = [];
-    const session: BrowserSession = {
+    const session: FlocknoteSession = {
       signIn: vi.fn(async () => {
         events.push("window_opened");
       }),
@@ -848,7 +753,7 @@ describe("Flocknote MCP contract", () => {
       parish: "example-parish",
     });
     let finishStatus = (
-      _value: Awaited<ReturnType<BrowserConnection["status"]>>,
+      _value: Awaited<ReturnType<ParishConnection["status"]>>,
     ) => {};
     vi.spyOn(connection, "status").mockImplementation(
       () =>
@@ -869,11 +774,9 @@ describe("Flocknote MCP contract", () => {
   });
 
   it("cancels waiting without closing or forgetting the browser connection", async () => {
-    const updates = { touch: vi.fn(), notice: () => undefined, close: vi.fn() };
     const { client, connection, failureLog } = await fixture({
       signInWaitMs: 5000,
       signInPollMs: 5,
-      updates,
     });
     vi.spyOn(connection, "connect").mockResolvedValue({
       state: "pending",
@@ -881,7 +784,7 @@ describe("Flocknote MCP contract", () => {
     });
     let statusSignal: AbortSignal | undefined;
     let finishStatus = (
-      _value: Awaited<ReturnType<BrowserConnection["status"]>>,
+      _value: Awaited<ReturnType<ParishConnection["status"]>>,
     ) => {};
     vi.spyOn(connection, "status").mockImplementation((options) => {
       statusSignal = options?.signal;
@@ -902,7 +805,6 @@ describe("Flocknote MCP contract", () => {
     await rejection;
     await waitFor(() => expect(statusSignal?.aborted).toBe(true));
     expect(close).not.toHaveBeenCalled();
-    expect(updates.touch).toHaveBeenCalledTimes(1);
     finishStatus({ state: "ready", parish: "example-parish" });
     await waitFor(async () => {
       const saved = (await failureLog.read())
@@ -1037,7 +939,7 @@ describe("Flocknote MCP contract", () => {
   it("bounds initial connect too and sanitizes status failures", async () => {
     const first = await fixture({ signInWaitMs: 30, signInPollMs: 5 });
     let finishConnect = (
-      _value: Awaited<ReturnType<BrowserConnection["connect"]>>,
+      _value: Awaited<ReturnType<ParishConnection["connect"]>>,
     ) => {};
     vi.spyOn(first.connection, "connect").mockImplementation(
       () =>
@@ -1060,7 +962,7 @@ describe("Flocknote MCP contract", () => {
       parish: "example-parish",
     });
     vi.spyOn(next.connection, "status").mockRejectedValue(
-      new BrowserConnectionError("profile_unavailable"),
+      new ConnectionError("profile_unavailable"),
     );
     const failed = await next.client.callTool({
       name: "connect",
@@ -1188,6 +1090,40 @@ describe("Flocknote MCP contract", () => {
     expect(client.getInstructions()).toMatch(
       /Never repeat a write with outcome unknown/,
     );
+  });
+
+  it("names Flockbot's own sign-in, not Flocknote's website, as where sign-in happens", async () => {
+    const website = /Flocknote's (?:real )?website|Flocknote browser window/;
+    // Sign-in stays open: the person has not finished it yet.
+    const waiting = {
+      factory: async () => ({
+        signIn: async () => {},
+        close: async () => {},
+        request: async () => {
+          throw new FlockbotError("authentication_required");
+        },
+      }),
+      signInWaitMs: 30,
+      signInPollMs: 5,
+    };
+    const local = await fixture(waiting);
+    const text = async (client: typeof local.client) => [
+      client.getInstructions() ?? "",
+      (await client.listTools()).tools.find(({ name }) => name === "connect")
+        ?.description ?? "",
+      JSON.stringify(
+        (
+          await client.callTool({
+            name: "connect",
+            arguments: { subdomain: "example-parish" },
+          })
+        ).structuredContent,
+      ),
+    ];
+    for (const part of await text(local.client)) {
+      expect(part).toContain("Flockbot's sign-in");
+      expect(part).not.toMatch(website);
+    }
   });
 
   it.each([

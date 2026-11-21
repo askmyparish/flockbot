@@ -7,7 +7,6 @@ const identifier = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
 const versionPattern = new RegExp(
   `^${number}\\.${number}\\.${number}(?:-${identifier}(?:\\.${identifier})*)?$`,
 );
-export const PLUGINS = ["flockbot-macos", "flockbot-windows"];
 
 /** The MCP package owns the release version; generated consumers must agree. */
 export async function releaseVersion(root = process.cwd()) {
@@ -27,13 +26,6 @@ export async function syncVersions(root = process.cwd(), check = false) {
       `// Generated from adapters/mcp/package.json by npm run release:sync.\nexport const MCP_VERSION = "${version}";\n`,
     ],
   ]);
-  for (const name of PLUGINS) {
-    const path = `plugins/${name}/.codex-plugin/plugin.json`;
-    const manifest = JSON.parse(await readFile(join(root, path), "utf8"));
-    manifest.version = version;
-    files.set(path, `${JSON.stringify(manifest, null, 2)}\n`);
-    files.set(`plugins/${name}/runtime.version`, `${version}\n`);
-  }
   for (const [path, expected] of files) {
     if (check)
       assert.equal(

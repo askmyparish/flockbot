@@ -10,8 +10,6 @@
       "test/**",
       "scripts/**",
       "*.json",
-      "plugins/**/.codex-plugin/*.json",
-      "plugins/**/.mcp.json",
       "vitest.config.ts",
       "!package-lock.json",
       ".changeset/*.json"

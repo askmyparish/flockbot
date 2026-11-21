@@ -1,25 +1,24 @@
-# Codex MCP candidate
+# Local MCP connector
 
-Flockbot exposes defined Flocknote operations to local Codex through a dedicated
-persistent Chromium profile. Staff sign in on Flocknote's real website. The
-browser owns authentication and cookies; ordinary tools make internal API requests
-without screenshots, mouse/keyboard automation, password collection or cookie
-exports.
+Flockbot exposes defined Flocknote operations to a local assistant as a stdio
+MCP server. Staff sign in on a Flockbot sign-in page that the connector serves
+on this computer and opens in their default browser. The page sends the password
+only to Flocknote and does not save it. Every later request uses plain HTTP with
+the resulting session cookies, which are kept in an owner-only file. There is no
+browser automation, screenshot, cookie export or password storage.
 
-**Private candidate, not a supported release.** Offline unit/MCP tests and the
-opt-in real-browser fixture checks pass. Authorized test-parish sign-in, session
-reuse, group discovery and subscriber counts passed with the installed macOS
-runtime. Explicitly requested live member additions also returned confirmed
-success. Locked/denied credential-store behavior, clean Codex desktop onboarding
-and Windows execution still need verification. No GitHub runtime release has been
-published by these changes.
+**Preview, macOS and Claude Desktop only.** Offline unit and MCP tests pass.
+Authorized test-parish password sign-in, session reuse and group counts passed
+from the Claude Desktop extension (`.mcpb`) running on Claude's built-in Node.js.
+Emailed sign-in codes, Codex, Windows and the planned signed Mac app are not
+implemented or verified.
 
 ## Tools
 
 | Tool | Behavior |
 | --- | --- |
 | `status` | Report saved readiness or pending/required setup without a live request |
-| `connect` | Open real Flocknote sign-in for a parish subdomain |
+| `connect` | Open the local Flockbot sign-in page for a parish subdomain |
 | `groups` | Return group identifiers, names and Everyone status; optional `refresh` |
 | `subscriber_count` | Fetch a current count without member records |
 | `find_members` | Search active members for bounded identities, or use explicit advanced count/member-page modes with validated criteria |
@@ -40,7 +39,7 @@ published by these changes.
 | `add_member` | Add once by `groupId` or case-insensitive unique `groupName`; return only success |
 
 The MCP server publishes input schemas and workflow instructions. It offers no raw
-HTTP, arbitrary URL, script evaluation, credential or browser-inspection tool.
+HTTP, arbitrary URL, script evaluation or credential tool.
 `note`, `find_notes`, `group_notes` and successful `create_email_draft` and
 `duplicate_email_draft` results
 include a parish-scoped `url` without an additional request. Unavailable note
@@ -52,7 +51,7 @@ submission reports `outcome: unknown`; check Flocknote before deciding to
 resubmit.
 
 Ordinary operations trust the saved session and make no preliminary authentication
-request. Status reports saved readiness without opening a browser; `ready` means
+request. Status reports saved readiness without a network request; `ready` means
 sign-in previously completed, rather than a fresh live check. When a group name is
 known, pass it directly to the addition tool; only missing or ambiguous names need
 a separate group-list request. Discovery is cached for 60 seconds per connection;
@@ -60,7 +59,7 @@ a separate group-list request. Discovery is cached for 60 seconds per connection
 its independent navigation/metadata reads and drains both before releasing
 coordination, including on failure. Counts are always fresh. A warm addition by
 known ID or cached group name makes only its membership POST; cached group
-discovery makes no HTTP request. Reconnect, browser replacement, forgetting and
+discovery makes no HTTP request. Reconnect, session replacement, forgetting and
 operation errors clear discovery. A cached group does not guarantee current
 permission; Flocknote still authorizes the membership POST.
 
@@ -142,10 +141,8 @@ has `fieldId`, `operator`, optional `value` and `negated` (default false).
 Use current `member_filters` IDs and choices; unavailable operators, stale choices
 or unsupported negation fail rather than dropping a condition. Unknown keys,
 wrong value types, empty/overlong text, controls and invalid calendar dates fail
-before filtering. The existing 16 KiB broker request limit remains in force.
-The shared model prechecks normalized input bytes; the broker checks the complete
-authenticated frame. Framing can therefore reject an otherwise valid near-limit
-input with `request_not_sent` / `request_too_large`, before any Flocknote request.
+before filtering. The shared model rejects normalized input above 16 KiB with
+`request_not_sent` / `request_too_large`, before any Flocknote request.
 
 For example, count people with no phone **or** an unverified phone:
 
@@ -189,7 +186,7 @@ Advanced queries default to active members. `includeInactive: true` requires the
 catalog's permission; denial never falls back to active-only results. Each call
 revalidates the selected group's catalog and makes at most one filter request,
 without retry, inside existing deadlines and response caps. For counts, native
-rows are discarded before broker IPC or MCP results; unused contact/name fields
+rows are discarded before MCP results; unused contact/name fields
 are not required for a count. Results describe the interpreted query and scope,
 not a parish-wide total or an identity proof. `criteriaSummary` intentionally
 echoes sensitive query values in the result; it is not diagnostic/log data.
@@ -492,7 +489,7 @@ Recorded opens do not prove human reading or delivery, and unopened does not
 prove unread. Records are not attributed to a particular resend, and the two
 reads are not an atomic snapshot. `observedAt` is lookup time, not an open time.
 Default diagnostics remain metadata-only; existing per-call verbose diagnostics
-apply unchanged. Offline model, MCP, broker and intercepted-browser coverage is
+apply unchanged. Offline model and MCP coverage is
 provided; installed Codex Desktop use of this operation remains unverified.
 
 ### Recent group notes
@@ -608,9 +605,7 @@ plain-text bodies allow tabs and normalized newlines but reject other control
 characters. Ill-formed Unicode (unpaired surrogates) is rejected in subjects,
 content and URLs. These checks return `invalid_input` before any request.
 Literal markup remains text. No subject/body character cap
-is imposed, and input is never truncated. The existing local broker's 16 KiB
-JSON request-frame limit still applies: an oversized request fails before
-submission with `request_not_sent`, `request_too_large`, and `not_submitted`.
+is imposed, and input is never truncated.
 
 Set `bodyFormat: "html"` for basic formatting; omit it or use `"text"` for literal
 text. HTML accepts `p`, `div`, `br`, `h1`–`h6`, `strong`/`b`, `em`/`i`, `ul`, `ol`,
@@ -667,7 +662,7 @@ files are supported up to 12,000,000 bytes each, matching the observed Flocknote
 browser uploader limit (not a verified server-side maximum). Missing, empty,
 non-regular, oversized and signature/extension-mismatched files are rejected
 before remote requests. Private temporary snapshots preserve the validated bytes
-until uploading finishes; only paths cross the existing bounded broker request.
+until uploading finishes.
 Uploads use randomized filenames with the original extension, not local names or
 a shared fixed basename.
 Snapshot cleanup is best-effort when the operation settles; an operating-system
@@ -675,12 +670,12 @@ cleanup failure does not change the remote draft outcome. Image bytes and local
 paths are excluded from diagnostics, including verbose capture.
 
 The existing 25-second operation deadline includes setup, all uploads and draft
-verification; each browser request also has a 15-second timeout. Large or numerous
+verification; each HTTP request also has a 15-second timeout. Large or numerous
 images can exceed that budget even below the per-file limit. A timeout can leave
 uploaded assets or a partial draft: inspect the reported progress and Flocknote
 before resubmitting.
 
-Uploads use the saved browser session and Flocknote's multipart photo endpoint.
+Uploads use the saved session and Flocknote's multipart photo endpoint.
 Images become native photo modules with default appearance, retaining their order
 alongside text and buttons. JSON read-back verifies photo IDs, dimensions and safe
 hosted URLs as well as the existing draft checks. Image-only drafts are supported.
@@ -752,200 +747,76 @@ remain unverified. Existing operation deadlines still apply.
 Use Node.js 22.13+ and `bin/setup` for development.
 
 ```sh
-npm run build:mcp
 npm run check
-npm run test:mcp:browser
+npm run package:claude-local
 ```
 
-The last command requires the pinned browser runtime. Install it explicitly once:
+`npm run check` runs the offline tests, builds the stdio server and starts it
+once over stdio with a temporary home directory. `package:claude-local` writes
+the Claude Desktop extension to the ignored
+`adapters/mcp/artifacts/claude-local/flockbot-local-<version>.mcpb`. It does
+not publish or install anything. To try it, open the file with Claude Desktop.
+
+Merging a Changesets release PR publishes the `.mcpb` and its checksum as a
+GitHub release tagged `mcp-v<version>`.
+
+## Sign-in and session storage
+
+`connect` starts a sign-in page on a random loopback port, protected by a
+one-time token in its URL, and opens it in the default browser. The page posts
+the parish login to Flocknote over HTTPS and keeps the password only in memory
+for that request. Password sign-in is supported; emailed sign-in codes are not.
+
+The resulting `Flocknote` and `Flocknote-Login-<id>` cookies are saved, with a
+revision number, in an owner-only file:
+
+- macOS: `~/Library/Application Support/Flockbot MCP/http-v1/`
+
+The folder also holds connection metadata: the parish, an opaque generation,
+the internal login identifier, readiness and an optional fixed setup error.
+Changing the parish requires forgetting the old connection:
 
 ```sh
-PLAYWRIGHT_BROWSERS_PATH="$PWD/adapters/mcp/.cache/browsers" node node_modules/playwright/cli.js install chromium --no-shell
+node <extension folder>/server/index.mjs forget
 ```
 
-That test intercepts every page/API request, uses fictional identities and session
-cookies, disables browser DNS, and never contacts Flocknote. Its temporary
-profiles use Playwright's test-only credential settings so tests don't access a
-real OS secret store. Ordinary `npm test` skips this opt-in check and downloads
-nothing.
+Forgetting deletes the local session. It does not revoke Flocknote's
+server-side session. Tool results go to the assistant's provider; local session
+storage does not keep parish data on the device.
 
-Build the prepared Codex runtime bundles and refresh the source plugins' integrity
-pins with:
+Requests go only to fixed Flocknote endpoints for the selected parish. Neither a
+tool nor its arguments can choose a URL. Redirects are rejected and response
+bodies are bounded. Each request names Flockbot, its version and this repository
+in its `User-Agent`. Operations on one connection run one at a time.
 
-```sh
-npm run package:codex
-```
+## Continue after sign-in
 
-This explicitly downloads checksum-pinned official Node runtimes and writes
-ignored ZIPs under `adapters/mcp/artifacts/codex`. It does not publish or register
-anything. The source plugins pin those exact archives; rerun packaging after
-runtime changes before publishing the matching version's release. Do not
-replace an existing release's immutable assets; bump the version and pins for
-later releases. The [release runbook](./releases.md) describes Changesets release
-PRs, CI preview artifacts, tagged releases and build provenance. Publication uses
-`npm run package:codex -- --verify-pins` to check reviewed pins without rewriting them.
-
-See [setup and distribution](./setup.md) and the [browser verification
-checklist](./browser-verification.md).
-
-## Browser and storage boundary
-
-The browser profile lives beneath this OS user's normal Flockbot application-data
-folder, outside plugin caches and immutable downloaded runtimes. On macOS the
-parent folders are owner-only; Windows uses the current user's local application
-data. The browser profile is sensitive, including cookies, local storage and
-history. Not every browser file is encrypted. Keep it on a local, user-owned disk,
-out of repositories, synced folders, backups shared with others, and diagnostic
-uploads. Browser-native credential protection is retained: production removes
-Playwright's basic-password-store/mock-keychain defaults and enables Chromium's
-sandbox. Normal macOS sign-in and session reuse passed with these production
-settings; locked/denied credential-store behavior and Windows still need testing.
-
-A detached local owner holds a SQLite OS lock for its browser's whole lifetime.
-MCP processes send defined operations to that owner through private local IPC; an
-internal queue serializes sign-in, requests and forgetting. Cancellation does not
-release a running browser callback early. Process death releases the OS lock. The
-owner closes Chromium after five idle minutes; the next request starts it again
-using the saved profile. Closing a chat leaves the owner available for other local
-chats. There is no background membership queue or automatic write replay.
-
-Interactive sign-in tolerates inconclusive poll failures until its setup deadline.
-A definite permission failure, a closed browser, or a closed sign-in tab ends
-setup; status preserves a fixed `setupError` code and, for browser failures, a
-fixed `setupStage` when available. Failed setup status includes instructions to
-reconnect. A different login remains open for correction and is reported as
-`connection_changed` if the setup deadline expires. Tools called during sign-in
-report `connection_busy` promptly. Queue-wait deadlines also report busy, while
-caller cancellation remains `operation_cancelled`. The connection uses the same
-reused-session lifecycle in production and its lifecycle tests.
-
-On macOS the Unix socket and descriptor are owner-only. On Windows the descriptor
-is protected with current-user DPAPI. Requests and replies use HMAC authentication
-with an owner-specific key that never travels over IPC. Nonces reject replay; the
-owner rotates before its bounded replay ledger fills. The descriptor contains the
-socket/pipe address, protocol/runtime identifiers and this IPC key, never a
-Flocknote credential. Windows execution remains unverified. Connection metadata
-contains only a parish, opaque generation, internal login identifier, readiness
-state and optional fixed setup diagnostic code/stage. Parish replacement requires explicitly forgetting the old connection. The
-original login is checked during sign-in and auth-failure diagnostics; the
-dedicated profile is trusted between those checks. Closing or expiring sign-in
-leaves `action_required`; abandoned pending metadata is detected on the next
-status check.
-
-The owner starts Chromium on demand and reuses it across operations and MCP
-processes. Each parish operation performs its bounded endpoint request(s) using
-the saved session. `user/userData` is used during sign-in and to diagnose
-auth-like failures. Interactive setup keeps the authenticated browser available
-and minimizes its request window where supported; later cold starts are headless.
-A session-only cookie is retained through Chromium's session-restore mechanism.
-Before clean shutdown, the request page is moved to `about:blank`, so restoration
-does not navigate to Flocknote before interception is attached. API requests use a
-locally fulfilled inert page at the selected parish origin. They reject redirects,
-bound response bodies, and return only validated domain results. Cookies rotate in
-the browser naturally; the shared HTTP client's staged-cookie persistence rules do
-not apply to this adapter. Group/count requests worked in the initial live check;
-actual session-expiry rules and notification/duplicate effects still need
-controlled checks. Authorized live membership POSTs succeeded with browser-native
-same-origin requests; no extra CSRF header or UI automation was used.
-
-No server-side session revocation or forensic deletion is promised by local
-forgetting. Code updates retain the separate profile. Browser-profile downgrade,
-synced disks, same-user malware isolation and signed-update continuity are not
-proven. Relevant tool results are sent to the assistant provider; local credential
-storage does not make parish data device-only.
+The MCP `connect` call stays active for up to 45 seconds while checking only the
+saved local connection status. When sign-in finishes in that window, it returns
+`ready` and tells the assistant to continue the original request without another
+user confirmation. Longer sign-ins return `pending` with a finish-and-check
+fallback. Cancellation stops waiting without forgetting the connection. Never
+automatically repeat a write whose outcome is unknown.
 
 ## Scope
 
-Shared resource modules live in `src/models`. The browser connection delegates
-network/group discovery, subscriber counts, contact validation, membership request
-construction and sign-in response parsing to those modules. It retains local
-profile/session lifecycle, coordination, authentication diagnostics and uncertain
-write handling. MCP tools retain their existing names, inputs and results.
-
-This MCP adapter uses the browser's authentication and session storage. The shared
-HTTP client and Zapier adapter retain their own authentication and storage contracts.
-Claude distribution is outside this Codex-first candidate.
+Shared resource modules live in `src/models`. The connection delegates network
+and group discovery, counts, contact validation, membership requests and sign-in
+parsing to them. It keeps the local session lifecycle, coordination,
+authentication diagnostics and uncertain-write handling. The Zapier adapter keeps
+its own authentication and storage contracts.
 
 The [member-browsing discovery record](./discovery/member-browsing.md) documents
 sanitized observations for possible future tools; it does not expand the current
 connector's supported operations.
 
-## Direct development runner
-
-`npm run dev:mcp` runs the focused offline read-tool tests without accessing the
-saved browser profile. It does not build an installer or require Codex Desktop.
-`npm run dev:mcp -- --help` lists the live options and read-only tool allowlist.
-
-Live reads require explicit consent on every invocation, the expected saved
-parish, and exactly one allowlisted tool. Put tool arguments in a local JSON file
-outside version control, for example `{"groupId":"101"}` with fictional IDs
-replaced by the intended group. Never put passwords, cookies or tokens in it.
-
-```sh
-npm run dev:mcp -- --live --parish example-parish \
-  --tool subscriber_count --input /path/to/read-input.json \
-  --restart-owner --verbose
-```
-
-Live mode bundles the current checkout and invokes the existing MCP handlers
-through the SDK's in-memory transport and the existing shared browser broker.
-It is not a separate Flocknote transport and does not test Codex or stdio framing.
-Before the requested call, a local-only status check verifies the saved parish,
-readiness, and the browser owner's version and bundle fingerprint. An old owner
-requires explicit `--restart-owner`; a mismatched parish or non-ready connection
-stops without a live read. The runner never connects, reconnects, forgets the
-session, invokes membership writes, follows pagination, or retries a tool call.
-An allowed read retains the application's existing failure-driven authentication
-check; it does not perform password login.
-
-Pause calls from Codex and other clients while using live mode. Restart stops the
-shared local browser and can interrupt concurrent work. The runner stops its
-matching development owner afterward but retains the saved session, so the next
-Codex call can launch its installed build. Do not build or run another development
-invocation concurrently. Cleanup after a crash may require the existing local
-`stop` command; it must not use `forget`.
-
-Output includes the build fingerprint and structured tool result, which may
-contain requested personal data. Only explicit `--verbose` enables the existing
-bounded, sanitized local payload capture; it does not expand the HTML allowlist.
-Unknown selection is a completed read, not a proven engagement result. Tool errors
-exit unsuccessfully and are not retried. Installation, packaging, version bumps,
-and live reads are separate from routine offline checks.
-
-## Continue after browser sign-in
-
-The MCP `connect` call stays active for up to 45 seconds, including
-browser startup, while checking only saved local connection status. When login
-finishes in that window, it returns `ready` and tells the assistant to continue
-the original parish request without another user confirmation. The browser’s
-existing five-minute sign-in lifecycle and private authentication flow are unchanged.
-
-If sign-in takes longer, the tool returns truthful `pending` with the existing
-finish-sign-in/status fallback. Cancellation stops waiting without resetting or
-forgetting the connection. A closed/failed setup or changed parish cannot report
-success. This fits beneath Codex’s documented default 60-second tool timeout; a
-custom shorter host timeout may still cancel the call sooner. No user config is
-edited to extend that timeout.
-
-Login success is a prerequisite, not completion of the original task. Resume
-read-only work after `ready`; never automatically repeat a write whose outcome is
-unknown. Real desktop/TUI conversation continuation still needs manual host
-verification; fixture-backed MCP calls do not prove model behavior.
-
-Update notices appear in normal tool results when a cached public release check
-finds a newer matching version. Say **Update Flockbot** to use the same guide-based
-update flow while retaining sign-in. Checks run at most daily during use, tolerate
-network failures quietly and never delay the parish operation for the network.
-See [update notices](setup.md#update-notices) for timing and release selection.
-
 ## Failure diagnostics
 
 Every tool handler uses the same diagnostic path. Errors retain their existing
 code, message and write outcome, and add a `diagnostic` record with an operation
-ID, observation time, fixed validation reason, request events, and separate MCP
-and browser-owner runtime identities. A runtime fingerprint hashes the running
-bundled server's bytes, not its installation path. Older owners or source-mode
-runs can have unavailable identities; these are not attributed to a newer build.
+ID, observation time, fixed validation reason, request events and the runtime
+identity. A runtime fingerprint hashes the running bundled server's bytes, not
+its installation path. Source-mode runs can have an unavailable identity.
 
 Request events contain only endpoint templates (such as `group/{id}/people`),
 method, elapsed time, and observed HTTP status, content category and byte count.
@@ -967,11 +838,9 @@ the operation. SDK input-schema rejections happen before a tool handler and reta
 SDK's existing validation response.
 
 Normal failed calls save the same metadata record as newline-delimited JSON in the
-OS user's Flockbot application-data folder, outside `browser-v1`:
+OS user's Flockbot application-data folder, outside the session folder:
 
 - macOS: `~/Library/Application Support/Flockbot MCP/diagnostics-v2/`
-- Windows: `%LOCALAPPDATA%\Flockbot MCP\diagnostics-v2\`
-- Linux: `~/.local/state/Flockbot MCP/diagnostics-v2/`
 
 ### Explicit verbose capture
 
@@ -981,13 +850,12 @@ keeps normal behavior. The flag applies to one operation, including its existing
 requests, on success or failure. Later and concurrent calls do not inherit it.
 There is no global setting or stop command. Never replay a write to obtain a trace.
 
-For example, ask Codex: “Run subscriber_count for the selected group once with
+For example, ask Claude: “Run subscriber_count for the selected group once with
 verboseDiagnostics: true. Do not change any data or retry the call.” The tool
 returns only a `verboseDiagnostic` receipt: `operationId`, `traceSaved`,
-`available` and `truncated`. Payloads are not automatically returned to Codex.
-`available: false` means an owner reply was missing, incompatible or interrupted;
-it is not a reason to retry. A compatible older owner can still serve the tool
-without supporting verbose capture. `available: true` does not promise every
+`available` and `truncated`. Payloads are not automatically returned to the assistant.
+`available: false` means capture was unavailable or interrupted; it is not a
+reason to retry. `available: true` does not promise every
 body was captured: inspect each exchange's omission reason.
 
 Local version-2 verbose records include credential-filtered JSON responses and
@@ -1001,7 +869,7 @@ unlabelled secret. Inspect a record before sharing it; do not upload an entire l
 No real credential store or browser cookie is read for filtering.
 
 One centralized sanitizer handles JSON, forms and HTML at initial capture and
-again at broker/storage boundaries. HTML capture never runs scripts or loads
+again at the storage boundary. HTML capture never runs scripts or loads
 resources. Its `format: "html"` payload contains JSON `elements` with source
 `position`, `depth`, an allowlisted `tag`, fixed status `text` and attributes:
 `class`, `id`, `data-date`, `data-noteid` and `data-groupid`. DOM IDs always redact.
@@ -1029,7 +897,7 @@ from labels, wrappers or table layout: arbitrary strings are removed regardless
 of where they appear. The three diagnostic data attributes must have numeric
 shapes and also pass the shared credential-value filter; unsupported values
 redact. This projection is deliberately lossy, not a credential-free copy of
-the page. Revalidation applies the same allowlist before disk or broker use.
+the page. Revalidation applies the same allowlist before disk use.
 Ordinary calls still collect no bodies. Existing JSON/form
 records remain readable; older readers may further redact or drop the new
 projection but never receive raw HTML.
@@ -1050,9 +918,7 @@ reader or remove that old directory explicitly when no longer needed.
 
 `failures.jsonl` and `failures.1.jsonl` each retain at most 1 MiB (2 MiB total).
 The writer rejects symlinks, hard links, nonregular files and unsafe permissions.
-Unix directories/files are owner-only; Windows checks current-user-only ACLs
-through PowerShell and refuses persistence when protection cannot be established.
-Native Windows execution remains unverified. A separate bounded process lock
+Directories and files are owner-only. A separate bounded process lock
 coordinates writers; corruption and incomplete trailing records are discarded.
 No raw response or exception text is used as a logging fallback.
 
@@ -1063,28 +929,17 @@ cannot be interrupted by this timer. Ordinary saves append; unchanged retained
 files are not rewritten. Pruning/rotation is best-effort, not crash-transactional:
 a crash or disk failure during those rewrites can lose diagnostic history.
 
-An interrupted first Windows ACL setup can leave diagnostic storage unavailable.
-The connector deliberately refuses unsafe existing ACLs rather than changing
-them automatically. With connector processes stopped, an operator can move only
-`diagnostics-v2` aside using the OS file manager and allow the next logged call to
-create protected storage again. Do not move or reset `browser-v1`. Elevated
-Windows accounts with a different directory owner may also require local
-administrator assistance; no weaker ACL fallback is used.
-Each Windows save rechecks ACLs with PowerShell. If startup/security scanning
-exceeds the logging budget, the tool still returns its diagnostic but no local
-record is saved. Native Windows timing and persistence availability have not
-been measured; do not treat the offline macOS checks as Windows certification.
-
 Records older than seven days are pruned on write or supported diagnostic access.
 There is no background cleanup: idle files may remain, and reading files directly
 does not invoke retention. The runtime's `diagnostics` command prunes and prints
-filtered JSON lines (including sensitive verbose records) without opening the browser or making a Flocknote request. From a
-built checkout, run `node adapters/mcp/dist/browser/server/index.mjs diagnostics`;
-for an installed runtime use its bundled Node and `server/index.mjs diagnostics`.
+filtered JSON lines (including sensitive verbose records) without making a
+Flocknote request. From a built checkout, run
+`node adapters/mcp/dist/server/index.mjs diagnostics`; for an installed
+extension, run `server/index.mjs diagnostics` from its folder.
 Find the record whose `operationId` matches the tool error or verbose receipt,
 inspect its contents locally, and share only the required record. There is no MCP
 log-reading tool, automatic upload or telemetry.
 
 An `invalid_response` reason identifies a failed expectation, not proof of an
 upstream defect or expired session. Share the diagnostic record and error code
-when reporting a failure; do not share browser profiles or raw HAR captures.
+when reporting a failure; do not share the session folder or raw HAR captures.

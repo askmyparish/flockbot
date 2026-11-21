@@ -15,7 +15,6 @@ import { join, parse, resolve, sep } from "node:path";
 import { safeLogRecord } from "./diagnostics.js";
 import { ProcessLock } from "./process-lock.js";
 import { connectionProfileDirectory } from "./profile.js";
-import { runCommand } from "./dpapi.js";
 
 const FILE_BYTES = 1024 * 1024;
 const RECORD_BYTES = 16 * 1024;
@@ -48,14 +47,12 @@ function regular(entry: Stats): void {
 async function prepare(directory: string): Promise<void> {
   const root = parse(directory).root;
   let current = root;
-  let created = false;
   for (const part of directory.slice(root.length).split(sep)) {
     current = join(current, part);
     let entry = info(current);
     if (!entry) {
       try {
         mkdirSync(current, { mode: 0o700 });
-        created = current === directory;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       }
@@ -73,42 +70,6 @@ async function prepare(directory: string): Promise<void> {
   ]) {
     const entry = info(join(directory, name));
     if (entry) regular(entry);
-  }
-  if (process.platform === "win32") {
-    // Node mode bits do not establish Windows privacy. Protect a new directory,
-    // and refuse existing ACLs granting anyone other than this OS user access.
-    // The path goes only over private stdin; never through a shell interpolation.
-    const script = [
-      "$ErrorActionPreference='Stop'",
-      "$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd()))",
-      "$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User",
-      ...(created
-        ? [
-            "$acl=New-Object Security.AccessControl.DirectorySecurity",
-            "$acl.SetOwner($sid)",
-            "$acl.SetAccessRuleProtection($true,$false)",
-            "$rule=New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','ContainerInherit,ObjectInherit','None','Allow')",
-            "$acl.AddAccessRule($rule)",
-            "Set-Acl -LiteralPath $p -AclObject $acl",
-          ]
-        : []),
-      "$paths=@($p)+@(Get-ChildItem -LiteralPath $p -Force | ForEach-Object {$_.FullName})",
-      "foreach($path in $paths){",
-      "$item=Get-Item -LiteralPath $path -Force",
-      "if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){exit 1}",
-      "$acl=Get-Acl -LiteralPath $path",
-      "if($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid.Value){exit 1}",
-      "foreach($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){",
-      "if($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -ne $sid.Value){exit 1}",
-      "}",
-      "}",
-    ].join("; ");
-    const result = await runCommand(
-      `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`,
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
-      Buffer.from(directory).toString("base64"),
-    );
-    if (result.status !== 0) throw new Error("Diagnostic storage unavailable");
   }
 }
 
@@ -187,12 +148,24 @@ function write(fd: number, text: string, append = false): void {
 export class FailureLog {
   readonly #directory: string;
   readonly #now: () => number;
+  readonly #lockWaitMs: number;
 
-  constructor(options: { directory?: string; now?: () => number } = {}) {
+  constructor(
+    options: {
+      directory?: string;
+      now?: () => number;
+      /**
+       * How long to wait for another process's write before giving up.
+       * A diagnostic is never worth holding up a tool call, so it's short.
+       */
+      lockWaitMs?: number;
+    } = {},
+  ) {
     this.#directory = resolve(
       options.directory ?? join(connectionProfileDirectory(), "diagnostics-v2"),
     );
     this.#now = options.now ?? Date.now;
+    this.#lockWaitMs = options.lockWaitMs ?? 1000;
   }
 
   async save(value: unknown, signal?: AbortSignal): Promise<boolean> {
@@ -235,7 +208,10 @@ export class FailureLog {
     }
     return new ProcessLock(lockPath).runExclusive(
       "diagnostics",
-      AbortSignal.any([AbortSignal.timeout(1000), ...(signal ? [signal] : [])]),
+      AbortSignal.any([
+        AbortSignal.timeout(this.#lockWaitMs),
+        ...(signal ? [signal] : []),
+      ]),
       async () => {
         signal?.throwIfAborted();
         const current = file(join(this.#directory, names[0]));

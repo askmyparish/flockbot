@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { BrowserConnection } from "../../adapters/mcp/src/browser-connection.js";
+import { ParishConnection } from "../../adapters/mcp/src/connection.js";
 import { SerialCoordinator } from "../../adapters/mcp/src/serial-coordinator.js";
 import { FlockbotError } from "../../src/errors.js";
 import { duplicationFixture } from "../fixtures/email-duplication.js";
@@ -42,7 +42,7 @@ function fixture(
     }),
     { mode: 0o600 },
   );
-  const connection = new BrowserConnection({
+  const connection = new ParishConnection({
     profile,
     coordinator: new SerialCoordinator(),
     factory: async () => ({

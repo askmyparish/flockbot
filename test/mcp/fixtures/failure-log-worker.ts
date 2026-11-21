@@ -5,7 +5,13 @@ import {
 } from "../../../adapters/mcp/src/diagnostics.js";
 import { FlockbotError } from "../../../src/errors.js";
 
-const log = new FailureLog({ directory: process.argv[2] ?? "" });
+// The lock isn't fair, so under load one writer can wait past the short
+// default while the others take turns. This checks that every save lands
+// intact, not how quickly, so it waits as long as it needs to.
+const log = new FailureLog({
+  directory: process.argv[2] ?? "",
+  lockWaitMs: 60_000,
+});
 const ids: string[] = [];
 for (let i = 0; i < 10; i++) {
   const record = runDiagnostic("groups", () =>

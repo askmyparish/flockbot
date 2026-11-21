@@ -10,9 +10,8 @@ assert.ok(section >= 0, "Changesets release section is missing.");
 // describing this repository's GitHub release process.
 await writeFile(
   path,
-  "This PR prepares the MCP version, reviewed changelog and archive checksum pins. " +
-    "Merging this reviewed PR automatically builds, verifies and publishes the GitHub release for the merged commit, including its `mcp-v<version>` tag. " +
-    "Beta versions remain prereleases. Packages are not published to npm. " +
-    "See [the release runbook](https://github.com/askmyparish/flockbot/blob/main/docs/mcp/releases.md).\n\n" +
+  "This PR prepares the MCP version and reviewed changelog. " +
+    "Merging it builds the Claude Desktop extension from the merged commit and publishes it as a GitHub release tagged `mcp-v<version>`. " +
+    "Beta versions remain prereleases. Packages are not published to npm.\n\n" +
     body.slice(section + 1),
 );

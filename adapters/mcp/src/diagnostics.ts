@@ -7,7 +7,7 @@ import {
   FAILURE_REASONS,
   TRANSPORT_REASONS,
 } from "../../../src/failure-reason.js";
-import type { BrowserConnectionError } from "./browser-runtime.js";
+import type { ConnectionError } from "./session.js";
 import { MCP_VERSION } from "./version.js";
 import {
   sanitizePayload,
@@ -43,7 +43,7 @@ const operations = [
 export type DiagnosticOperation = (typeof operations)[number];
 type DiagnosticCode =
   | ErrorCode
-  | BrowserConnectionError["code"]
+  | ConnectionError["code"]
   | "connector_unavailable";
 const codes = [
   "group_not_found",
@@ -83,7 +83,6 @@ const codes = [
   "not_configured",
   "connection_busy",
   "connection_changed",
-  "broker_unavailable",
   "connector_unavailable",
 ] as const satisfies readonly DiagnosticCode[];
 // Requiring every enum entry catches missing codes as well as invalid extras.
@@ -119,7 +118,7 @@ const endpoints = [
 ] as const;
 const boundedNumber = z.number().finite().min(0).max(Number.MAX_SAFE_INTEGER);
 const eventSchema = z.object({
-  stage: z.enum(["transport", "validation", "connection", "broker", "tool"]),
+  stage: z.enum(["transport", "validation", "connection", "tool"]),
   phase: z.enum(["operation", "authentication"]),
   elapsedMs: boundedNumber,
   code: codeSchema.optional(),
@@ -410,8 +409,8 @@ function errorEvent(error: unknown, trace: Trace): DiagnosticEvent {
     stage:
       reason.success && TRANSPORT_REASONS.has(reason.data)
         ? "transport"
-        : raw.code === "broker_unavailable" || raw.code === "connection_busy"
-          ? "broker"
+        : raw.code === "connection_busy"
+          ? "connection"
           : error instanceof FlockbotError && reason.success
             ? "validation"
             : trace.browser
