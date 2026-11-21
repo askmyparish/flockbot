@@ -30,16 +30,20 @@ describe("version order", () => {
 });
 
 describe("reading feeds", () => {
-  it("finds the newest appcast item, whichever comes first", () => {
+  it("orders appcast items by Sparkle's build number, not their display version", () => {
     const appcast = `<?xml version="1.0"?>
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
   <channel>
-    <item><sparkle:version>212</sparkle:version><sparkle:shortVersionString>0.3.0-dev.2</sparkle:shortVersionString></item>
-    <item><sparkle:version>230</sparkle:version><sparkle:shortVersionString>0.3.0-dev.10</sparkle:shortVersionString></item>
-    <item><enclosure url="https://example.com/Flockbot.zip" sparkle:shortVersionString="0.2.9" /></item>
+    <item><sparkle:version>212</sparkle:version><sparkle:shortVersionString>0.3.0-dev.10</sparkle:shortVersionString></item>
+    <item><sparkle:version>230</sparkle:version><sparkle:shortVersionString>0.3.0-dev.2</sparkle:shortVersionString></item>
+    <item><enclosure url="https://example.com/Flockbot.zip" sparkle:version="225" sparkle:shortVersionString="0.4.0" /></item>
+    <item><sparkle:version>beta</sparkle:version><sparkle:shortVersionString>9.0.0</sparkle:shortVersionString></item>
   </channel>
 </rss>`;
-    expect(newestInFeed(appcast, "appcast")).toBe("0.3.0-dev.10");
+    expect(newestInFeed(appcast, "appcast")).toEqual({
+      version: "0.3.0-dev.2",
+      build: 230,
+    });
   });
 
   it("finds the newest Velopack release among full and delta packages", () => {
@@ -51,7 +55,9 @@ describe("reading feeds", () => {
         { PackageId: "Flockbot", Version: "not-a-version", Type: "Full" },
       ],
     });
-    expect(newestInFeed(releases, "velopack")).toBe("0.2.1-dev.19");
+    expect(newestInFeed(releases, "velopack")).toEqual({
+      version: "0.2.1-dev.19",
+    });
   });
 
   it("finds nothing in an empty or broken feed", () => {
@@ -83,7 +89,7 @@ describe("checking for updates", () => {
     new UpdateCheck({
       feed: "https://example.com/releases.win-x64.json",
       format: "velopack",
-      current,
+      current: { version: current },
       file,
       now: () => now,
       fetch: (async () => {
@@ -154,5 +160,26 @@ describe("checking for updates", () => {
     expect(chunks).toBeLessThanOrEqual(8);
     expect(huge.available()).toBeUndefined();
     expect(existsSync(file)).toBe(false);
+  });
+
+  it("on a Mac, compares Sparkle build numbers", async () => {
+    const mac = (build: number) =>
+      new UpdateCheck({
+        feed: "https://example.com/appcast.xml",
+        format: "appcast",
+        current: { version: "0.2.1-dev.13", build },
+        file,
+        now: () => now,
+        fetch: (async () =>
+          new Response(
+            `<rss><channel><item><sparkle:version>190</sparkle:version><sparkle:shortVersionString>0.2.1-dev.13</sparkle:shortVersionString></item></channel></rss>`,
+          )) as typeof fetch,
+      });
+    // The same display version, but a later build Sparkle will install.
+    const older = mac(186);
+    await older.refresh();
+    expect(older.available()).toBe("0.2.1-dev.13");
+    expect(mac(190).available()).toBeUndefined();
+    expect(mac(195).available()).toBeUndefined();
   });
 });

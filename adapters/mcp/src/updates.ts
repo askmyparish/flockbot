@@ -58,44 +58,93 @@ function comparePrerelease(
   return Math.sign(left.length - right.length);
 }
 
-/** The newest version a feed lists, or undefined when it lists none. */
+/**
+ * A release as a feed lists it: the version people see and, in a Sparkle
+ * appcast, the build number that Sparkle orders releases by.
+ */
+export interface Release {
+  readonly version: string;
+  readonly build?: number;
+}
+
+/**
+ * Orders releases the way the app's updater does: Sparkle by build number,
+ * since a display version needn't change between builds; Velopack by version.
+ */
+export function compareReleases(
+  a: Release,
+  b: Release,
+  format: FeedFormat,
+): number | undefined {
+  if (format === "velopack") return compareVersions(a.version, b.version);
+  if (a.build === undefined || b.build === undefined) return undefined;
+  return Math.sign(a.build - b.build);
+}
+
+/** The newest release a feed lists, or undefined when it lists none. */
 export function newestInFeed(
   text: string,
   format: FeedFormat,
-): string | undefined {
-  let versions: unknown[];
-  if (format === "appcast") {
-    versions = [
-      ...text.matchAll(
-        /<sparkle:shortVersionString>\s*([^<\s]+)\s*<\/sparkle:shortVersionString>|sparkle:shortVersionString="([^"]+)"/g,
-      ),
-    ].map((match) => match[1] ?? match[2]);
-  } else {
-    try {
-      const assets = (JSON.parse(text) as { Assets?: unknown }).Assets;
-      versions = Array.isArray(assets)
-        ? assets.map((asset) => (asset as { Version?: unknown })?.Version)
-        : [];
-    } catch {
-      return undefined;
-    }
-  }
-  let newest: string | undefined;
-  for (const version of versions) {
-    if (typeof version !== "string" || !versionPattern.test(version)) continue;
-    if (newest === undefined || (compareVersions(version, newest) ?? 0) > 0)
-      newest = version;
+): Release | undefined {
+  const releases =
+    format === "appcast" ? appcastReleases(text) : velopackReleases(text);
+  let newest: Release | undefined;
+  for (const release of releases) {
+    if (
+      newest === undefined ||
+      (compareReleases(release, newest, format) ?? 0) > 0
+    )
+      newest = release;
   }
   return newest;
 }
 
+function appcastReleases(text: string): Release[] {
+  // One field of an item, as an element or as an enclosure attribute.
+  const field = (item: string, name: string) =>
+    new RegExp(
+      `<sparkle:${name}>\\s*([^<\\s]+)\\s*</sparkle:${name}>|sparkle:${name}="([^"]+)"`,
+    )
+      .exec(item)
+      ?.slice(1)
+      .find((value) => value !== undefined);
+  const releases: Release[] = [];
+  for (const [item] of text.matchAll(/<item\b[\s\S]*?<\/item>/g)) {
+    const build = field(item, "version");
+    // build.sh numbers builds by commit count.
+    if (build === undefined || !/^\d+$/.test(build)) continue;
+    releases.push({
+      version: field(item, "shortVersionString") ?? build,
+      build: Number(build),
+    });
+  }
+  return releases;
+}
+
+function velopackReleases(text: string): Release[] {
+  let assets: unknown;
+  try {
+    assets = (JSON.parse(text) as { Assets?: unknown }).Assets;
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(assets)) return [];
+  return assets
+    .map((asset) => (asset as { Version?: unknown } | null)?.Version)
+    .filter(
+      (version): version is string =>
+        typeof version === "string" && versionPattern.test(version),
+    )
+    .map((version) => ({ version }));
+}
+
 interface CheckRecord {
   readonly checkedAt: number;
-  readonly latest: string;
+  readonly latest: Release;
 }
 
 /**
- * The connector's view of the update feed: the newest version from the last
+ * The connector's view of the update feed: the newest release from the last
  * check, kept in `file` so the next session knows it from its start.
  */
 export class UpdateCheck {
@@ -105,8 +154,8 @@ export class UpdateCheck {
     private readonly options: {
       readonly feed: string;
       readonly format: FeedFormat;
-      /** This connector's own version. */
-      readonly current: string;
+      /** This connector's own release; an appcast needs its build number. */
+      readonly current: Release;
       readonly file: string;
       readonly now?: () => number;
       readonly fetch?: typeof fetch;
@@ -119,8 +168,12 @@ export class UpdateCheck {
   available(): string | undefined {
     const latest = this.record?.latest;
     if (latest === undefined) return undefined;
-    return (compareVersions(latest, this.options.current) ?? 0) > 0
-      ? latest
+    return (compareReleases(
+      latest,
+      this.options.current,
+      this.options.format,
+    ) ?? 0) > 0
+      ? latest.version
       : undefined;
   }
 
@@ -139,7 +192,7 @@ export class UpdateCheck {
       return;
     try {
       const response = await (this.options.fetch ?? fetch)(this.options.feed, {
-        headers: { "User-Agent": `Flockbot/${this.options.current}` },
+        headers: { "User-Agent": `Flockbot/${this.options.current.version}` },
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
       if (!response.ok) return;
@@ -182,13 +235,24 @@ async function readBounded(
 
 function readRecord(file: string): CheckRecord | undefined {
   try {
-    const value = JSON.parse(
-      readFileSync(file, "utf8"),
-    ) as Partial<CheckRecord>;
-    return typeof value.checkedAt === "number" &&
-      typeof value.latest === "string"
-      ? { checkedAt: value.checkedAt, latest: value.latest }
-      : undefined;
+    const value = JSON.parse(readFileSync(file, "utf8")) as {
+      checkedAt?: unknown;
+      latest?: { version?: unknown; build?: unknown };
+    };
+    const latest = value.latest;
+    if (
+      typeof value.checkedAt !== "number" ||
+      typeof latest?.version !== "string" ||
+      (latest.build !== undefined && typeof latest.build !== "number")
+    )
+      return undefined;
+    return {
+      checkedAt: value.checkedAt,
+      latest: {
+        version: latest.version,
+        ...(latest.build !== undefined ? { build: latest.build } : {}),
+      },
+    };
   } catch {
     return undefined;
   }

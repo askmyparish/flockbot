@@ -50,6 +50,8 @@ const build = typeof BUILD_LABEL === "string" ? BUILD_LABEL : "unlabelled";
 // The update feed the setup app installs from, set by its build script.
 // Builds without one never check.
 declare const UPDATE_FEED: string | undefined;
+// The Mac app's CFBundleVersion, which Sparkle orders releases by.
+declare const BUILD_NUMBER: string | undefined;
 
 function keychain(name: string): SessionBlob {
   return {
@@ -111,10 +113,17 @@ function updateCheck(): UpdateCheck | undefined {
     (windowsApp !== undefined &&
       existsSync(join(dirname(process.execPath), "..", "Update.exe")));
   if (!installed) return undefined;
+  // Sparkle orders by build number, so a Mac copy can't compare without one.
+  const buildNumber =
+    typeof BUILD_NUMBER === "string" ? Number(BUILD_NUMBER) : Number.NaN;
+  if (appBundle !== undefined && !Number.isInteger(buildNumber))
+    return undefined;
   return new UpdateCheck({
     feed: UPDATE_FEED,
     format: appBundle ? "appcast" : "velopack",
-    current: MCP_VERSION,
+    current: appBundle
+      ? { version: MCP_VERSION, build: buildNumber }
+      : { version: MCP_VERSION },
     file: join(connectionProfileDirectory(), "update-check.json"),
   });
 }

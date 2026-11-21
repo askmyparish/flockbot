@@ -30,6 +30,7 @@ connector_feed=""
 if [[ -f "$package/sparkle-public-key" ]]; then connector_feed="$feed"; fi
 (cd "$scratch" && bun build --compile --minify --target=bun-darwin-arm64 \
   --define "BUILD_LABEL=\"$version\"" --define "UPDATE_FEED=\"$connector_feed\"" \
+  --define "BUILD_NUMBER=\"$build\"" \
   "$root/adapters/mcp/src/keychain-main.ts" \
   --outfile "$app/Contents/MacOS/flockbot-mcp" > /dev/null)
 
