@@ -65,7 +65,7 @@ describe("checking for updates", () => {
   let directory: string;
   let file: string;
   let now: number;
-  let feed: string | Error;
+  let feed: string | Error | ReadableStream<Uint8Array>;
   let fetches: number;
 
   beforeEach(() => {
@@ -89,6 +89,7 @@ describe("checking for updates", () => {
       fetch: (async () => {
         fetches++;
         if (feed instanceof Error) throw feed;
+        if (feed instanceof ReadableStream) return new Response(feed);
         return new Response(feed, { status: feed === "" ? 404 : 200 });
       }) as typeof fetch,
     });
@@ -132,5 +133,26 @@ describe("checking for updates", () => {
     await online.refresh();
     expect(fetches).toBe(3);
     expect(online.available()).toBe("0.3.0");
+  });
+
+  it("stops reading a feed that's too large, without holding it all", async () => {
+    let chunks = 0;
+    let cancelled = false;
+    // Endless, with no length: a reader that buffers everything never ends.
+    feed = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        chunks++;
+        controller.enqueue(new Uint8Array(1024 * 1024).fill(32));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const huge = check();
+    await huge.refresh();
+    expect(cancelled).toBe(true);
+    expect(chunks).toBeLessThanOrEqual(8);
+    expect(huge.available()).toBeUndefined();
+    expect(existsSync(file)).toBe(false);
   });
 });

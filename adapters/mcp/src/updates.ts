@@ -143,8 +143,8 @@ export class UpdateCheck {
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
       if (!response.ok) return;
-      const text = await response.text();
-      if (text.length > MAX_FEED_BYTES) return;
+      const text = await readBounded(response, MAX_FEED_BYTES);
+      if (text === undefined) return;
       const latest = newestInFeed(text, this.options.format);
       if (latest === undefined) return;
       this.record = { checkedAt: now, latest };
@@ -153,6 +153,31 @@ export class UpdateCheck {
       // Tried again next session.
     }
   }
+}
+
+/**
+ * The body as text, or undefined once it passes `limit` bytes. It stops
+ * reading there, so a huge or endless response can't fill memory.
+ */
+async function readBounded(
+  response: Response,
+  limit: number,
+): Promise<string | undefined> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel();
+      return undefined;
+    }
+    chunks.push(value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks));
 }
 
 function readRecord(file: string): CheckRecord | undefined {
