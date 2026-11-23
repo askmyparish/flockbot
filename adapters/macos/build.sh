@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Builds Flockbot.app: the Swift setup window plus the Bun-compiled connector
 # it bundles. Signs ad hoc unless FLOCKBOT_SIGN_IDENTITY names a Developer ID
-# Application certificate.
+# Application certificate. FLOCKBOT_UPDATE_FEED points a test build at another
+# update feed: the address of a folder that holds appcast.xml.
 set -euo pipefail
 
 # Where installed copies look for updates, and the public half of the key that
 # signs them (from Sparkle's generate_keys). Without the key file the app has
 # no updater.
-feed="https://github.com/askmyparish/flockbot/releases/download/mac-appcast/appcast.xml"
+feed="${FLOCKBOT_UPDATE_FEED:-https://github.com/askmyparish/flockbot/releases/download/mac-appcast/}appcast.xml"
 identity="${FLOCKBOT_SIGN_IDENTITY:--}"
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
