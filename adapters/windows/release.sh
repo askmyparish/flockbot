@@ -4,14 +4,21 @@
 # them in a release of their own, then updates the feed release that
 # installed copies check, along with the setup programs for new installs.
 #
+#   FLOCKBOT_SIGNING_ACCOUNT=phad-signing \
+#   FLOCKBOT_SIGNING_PROFILE=flockbot \
 #   adapters/windows/release.sh [--dry-run]
 #
 # Needs the .NET SDK, Bun and vpk (dotnet tool install -g vpk, the same
-# version as the Velopack package in Flockbot.csproj). The builds are not
-# signed yet, so Windows warns before running the setup program.
+# version as the Velopack package in Flockbot.csproj). vpk signs every program
+# it packs, its own Setup.exe and Update.exe included, with Azure Artifact
+# Signing through jsign (brew install jsign), using an access token from the
+# Azure CLI (brew install azure-cli, then az login). The two settings name
+# the Artifact Signing account and its certificate profile;
+# FLOCKBOT_SIGNING_ENDPOINT is the account's regional endpoint, East US by
+# default.
 #
-# --dry-run writes the packages to build/release without uploading, and
-# accepts a dirty tree.
+# --dry-run writes the packages to build/release without uploading, accepts a
+# dirty tree, and leaves them unsigned unless the signing settings are set.
 set -euo pipefail
 
 repo="askmyparish/flockbot"
@@ -32,6 +39,11 @@ fail() {
   exit 1
 }
 
+signing=false
+if [[ -n "${FLOCKBOT_SIGNING_ACCOUNT:-}${FLOCKBOT_SIGNING_PROFILE:-}" ]] || ! $dry_run; then
+  signing=true
+fi
+
 if ! $dry_run; then
   [[ -z "$(git -C "$root" status --porcelain)" ]] ||
     fail "Commit or stash your changes first, so the release matches a commit."
@@ -43,6 +55,26 @@ if ! $dry_run; then
   fi
 fi
 
+sign=()
+if $signing; then
+  [[ -n "${FLOCKBOT_SIGNING_ACCOUNT:-}" && -n "${FLOCKBOT_SIGNING_PROFILE:-}" ]] ||
+    fail "Set FLOCKBOT_SIGNING_ACCOUNT and FLOCKBOT_SIGNING_PROFILE to your Artifact Signing account and certificate profile."
+  command -v jsign > /dev/null || fail "Install jsign first: brew install jsign"
+  command -v az > /dev/null || fail "Install the Azure CLI first: brew install azure-cli"
+  # jsign reads the token from the environment, so it never appears in a
+  # command line or in vpk's log.
+  FLOCKBOT_SIGNING_TOKEN="$(az account get-access-token --resource https://codesigning.azure.net \
+    --query accessToken --output tsv)" || fail "Sign in to Azure first: az login"
+  export FLOCKBOT_SIGNING_TOKEN
+  # vpk runs this through bash -c "…", so it can't contain double quotes.
+  # One jsign call per batch of files keeps Artifact Signing's quota use down.
+  sign=(--signTemplate "jsign --storetype TRUSTEDSIGNING \
+--keystore ${FLOCKBOT_SIGNING_ENDPOINT:-eus.codesigning.azure.net} \
+--storepass env:FLOCKBOT_SIGNING_TOKEN \
+--alias $FLOCKBOT_SIGNING_ACCOUNT/$FLOCKBOT_SIGNING_PROFILE \
+--tsaurl http://timestamp.acs.microsoft.com --tsmode RFC3161 {{file...}}")
+fi
+
 rm -rf "$out"
 mkdir -p "$out"
 for arch in x64 arm64; do
@@ -52,7 +84,8 @@ for arch in x64 arm64; do
   vpk "[win]" pack --packId Flockbot --packTitle Flockbot --packAuthors "Ask My Parish" \
     --packVersion "$version" --packDir "$package/build/$arch" --mainExe Flockbot.exe \
     --runtime "win-$arch" --channel "win-$arch" --icon "$root/assets/flockbot.ico" \
-    --outputDir "$out" > "$out/vpk-$arch.log"
+    ${sign[@]+"${sign[@]}"} --outputDir "$out" > "$out/vpk-$arch.log" ||
+    fail "vpk couldn't pack the $arch build. See $out/vpk-$arch.log."
 done
 
 # What gets published: the packages, the feeds that list them, and the setup
