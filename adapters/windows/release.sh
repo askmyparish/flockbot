@@ -45,6 +45,10 @@ if [[ -n "${FLOCKBOT_SIGNING_ACCOUNT:-}${FLOCKBOT_SIGNING_PROFILE:-}" ]] || ! $d
 fi
 
 if ! $dry_run; then
+  # build.sh would bake the test feed into the release, and installed copies
+  # would stop getting updates.
+  [[ -z "${FLOCKBOT_UPDATE_FEED:-}" ]] ||
+    fail "Unset FLOCKBOT_UPDATE_FEED first; it's only for test builds."
   [[ -z "$(git -C "$root" status --porcelain)" ]] ||
     fail "Commit or stash your changes first, so the release matches a commit."
   git -C "$root" fetch --quiet origin main

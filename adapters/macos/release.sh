@@ -39,6 +39,10 @@ fail() {
 [[ -f "$package/sparkle-public-key" ]] ||
   fail "Save the public key from Sparkle's generate_keys in adapters/macos/sparkle-public-key first. Without it the app can't receive updates."
 if ! $dry_run; then
+  # build.sh would bake the test feed into the release, and installed copies
+  # would stop getting updates.
+  [[ -z "${FLOCKBOT_UPDATE_FEED:-}" ]] ||
+    fail "Unset FLOCKBOT_UPDATE_FEED first; it's only for test builds."
   [[ "${FLOCKBOT_SIGN_IDENTITY:-}" == "Developer ID Application:"* ]] ||
     fail "Set FLOCKBOT_SIGN_IDENTITY to your Developer ID Application certificate."
   [[ -n "${FLOCKBOT_NOTARY_PROFILE:-}" ]] ||
