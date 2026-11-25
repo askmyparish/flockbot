@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import {
   closeSync,
   constants,
@@ -47,12 +48,14 @@ function regular(entry: Stats): void {
 async function prepare(directory: string): Promise<void> {
   const root = parse(directory).root;
   let current = root;
+  let created = false;
   for (const part of directory.slice(root.length).split(sep)) {
     current = join(current, part);
     let entry = info(current);
     if (!entry) {
       try {
         mkdirSync(current, { mode: 0o700 });
+        created = current === directory;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       }
@@ -71,6 +74,69 @@ async function prepare(directory: string): Promise<void> {
     const entry = info(join(directory, name));
     if (entry) regular(entry);
   }
+  // Mode bits don't make anything private on Windows, and verbose records can
+  // hold member names and emails, so check the folder's ACL there instead.
+  if (
+    process.platform === "win32" &&
+    !(await privateOnWindows(directory, created))
+  )
+    throw new Error("Diagnostic storage unavailable");
+}
+
+/**
+ * Gives a folder this connector just created an ACL for only the current OS
+ * user, then checks that the folder and everything in it is owned by and
+ * allows no one but that user, SYSTEM and Administrators, and that none of it
+ * is a link. SYSTEM and Administrators can reach every user's files anyway,
+ * Windows makes Administrators the owner of files an administrator creates,
+ * and AppData folders grant both by default. The path reaches PowerShell only
+ * over stdin, never through its command line.
+ */
+function privateOnWindows(
+  directory: string,
+  created: boolean,
+): Promise<boolean> {
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    "$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd()))",
+    "$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User",
+    "$trusted=@($sid.Value,'S-1-5-18','S-1-5-32-544')",
+    ...(created
+      ? [
+          "$acl=New-Object Security.AccessControl.DirectorySecurity",
+          "$acl.SetOwner($sid)",
+          "$acl.SetAccessRuleProtection($true,$false)",
+          "$rule=New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','ContainerInherit,ObjectInherit','None','Allow')",
+          "$acl.AddAccessRule($rule)",
+          "Set-Acl -LiteralPath $p -AclObject $acl",
+        ]
+      : []),
+    "$paths=@($p)+@(Get-ChildItem -LiteralPath $p -Force | ForEach-Object {$_.FullName})",
+    "foreach($path in $paths){",
+    "$item=Get-Item -LiteralPath $path -Force",
+    "if($item.Attributes -band [IO.FileAttributes]::ReparsePoint){exit 1}",
+    "$acl=Get-Acl -LiteralPath $path",
+    "if($trusted -notcontains $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value){exit 1}",
+    "foreach($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){",
+    "if($rule.AccessControlType -eq 'Allow' -and $trusted -notcontains $rule.IdentityReference.Value){exit 1}",
+    "}",
+    "}",
+  ].join("; ");
+  return new Promise((resolve) => {
+    const child = spawn(
+      `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`,
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+      {
+        stdio: ["pipe", "ignore", "ignore"],
+        windowsHide: true,
+        timeout: 15_000,
+      },
+    );
+    child.stdin.on("error", () => undefined);
+    child.on("error", () => resolve(false));
+    child.on("close", (status) => resolve(status === 0));
+    child.stdin.end(Buffer.from(directory).toString("base64"));
+  });
 }
 
 /** Open without following links, then validate the actual descriptor before I/O. */
