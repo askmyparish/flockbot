@@ -18,6 +18,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { parse as parseToml } from "smol-toml";
 
 // Adds one `flockbot` server entry to each assistant's own configuration,
 // leaving every other setting in those files alone. The setup apps call these
@@ -281,9 +283,24 @@ export function disconnect(setup: Setup, assistant: Assistant): void {
       if (text === undefined) return;
       const lines = text.split("\n");
       const section = codexSection(lines);
-      if (section === undefined) return;
+      if (section === undefined) {
+        // Status reads the parsed file, so an entry this line editor can't
+        // find, such as an inline table, still reads as connected.
+        const settings = codexSettings(text);
+        if (
+          isTable(settings?.mcp_servers) &&
+          Object.hasOwn(settings.mcp_servers, server)
+        )
+          throw codexUnchanged(path);
+        return;
+      }
       lines.splice(section.start, section.end - section.start);
-      writePrivate(path, withoutTrailingBlankLines(lines.join("\n")));
+      writeCodex(
+        path,
+        text,
+        withoutTrailingBlankLines(lines.join("\n")),
+        () => undefined,
+      );
       return;
     }
   }
@@ -405,7 +422,10 @@ export function repoint(setup: Setup, assistant: Assistant): void {
         line.slice(0, entry.start) +
         tomlString(setup.command) +
         line.slice(entry.end);
-      writePrivate(path, lines.join("\n"));
+      writeCodex(path, text, lines.join("\n"), (current) => ({
+        ...(isTable(current) ? current : {}),
+        command: setup.command,
+      }));
       return;
     }
   }
@@ -503,6 +523,15 @@ function run(
 // MARK: Codex
 
 const codexHeader = `[mcp_servers.${server}]`;
+// That table's header as Codex may also write it: with spaces, basic or
+// literal quoted keys or a trailing comment. And the start of any table
+// nested under it.
+const codexTable = new RegExp(
+  `^\\[\\s*(["']?)mcp_servers\\1\\s*\\.\\s*(["']?)${server}\\2\\s*\\]\\s*(?:#.*)?$`,
+);
+const codexSubtable = new RegExp(
+  `^\\[\\[?\\s*(["']?)mcp_servers\\1\\s*\\.\\s*(["']?)${server}\\2\\s*\\.`,
+);
 
 function codexCommandLine(setup: Setup): string {
   return `command = ${tomlString(setup.command)}`;
@@ -510,26 +539,16 @@ function codexCommandLine(setup: Setup): string {
 
 function codexCommand(setup: Setup): string | undefined {
   const text = readForStatus(paths(setup).codex);
-  return text === undefined
-    ? undefined
-    : codexCommandEntry(text.split("\n"))?.value;
+  const entry = text === undefined ? undefined : codexSettings(text);
+  const servers = isTable(entry?.mcp_servers) ? entry.mcp_servers : {};
+  const command = isTable(servers[server])
+    ? servers[server].command
+    : undefined;
+  return typeof command === "string" ? command : undefined;
 }
 
-/**
- * Status needs only the exact line this connector writes, so it also
- * recognizes tables the guarded reader declines (see `codexCommandEntry`).
- */
 function codexConnected(setup: Setup): boolean {
-  if (samePath(setup, codexCommand(setup))) return true;
-  const text = readForStatus(paths(setup).codex);
-  if (text === undefined) return false;
-  const lines = text.split("\n");
-  const section = codexSection(lines);
-  if (section === undefined) return false;
-  const expected = codexCommandLine(setup);
-  return lines
-    .slice(section.start, section.end)
-    .some((line) => line.trim() === expected);
+  return samePath(setup, codexCommand(setup));
 }
 
 /**
@@ -538,26 +557,91 @@ function codexConnected(setup: Setup): boolean {
  */
 function connectCodex(setup: Setup): void {
   const path = resolved(paths(setup).codex);
-  const lines = (readText(path) ?? "").split("\n");
+  const text = readText(path) ?? "";
+  const lines = text.split("\n");
   const section = codexSection(lines);
   if (section !== undefined)
     lines.splice(section.start, section.end - section.start);
   let result = withoutTrailingBlankLines(lines.join("\n"));
   if (result !== "") result += result.endsWith("\n") ? "\n" : "\n\n";
-  writePrivate(path, `${result}${codexHeader}\n${codexCommandLine(setup)}\n`);
+  writeCodex(
+    path,
+    text,
+    `${result}${codexHeader}\n${codexCommandLine(setup)}\n`,
+    () => ({ command: setup.command }),
+  );
+}
+
+/**
+ * Codex's settings as plain JSON values, or undefined when the text isn't
+ * valid TOML. The parser's own tables and dates don't compare as plain ones.
+ */
+function codexSettings(text: string): Record<string, unknown> | undefined {
+  try {
+    return JSON.parse(JSON.stringify(parseToml(text.replace(/^\uFEFF/, ""))));
+  } catch {
+    return undefined;
+  }
+}
+
+function isTable(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The settings without the `flockbot` server, or an `mcp_servers` it emptied. */
+function withoutFlockbot(
+  settings: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!isTable(settings.mcp_servers)) return settings;
+  const { [server]: _removed, ...servers } = settings.mcp_servers;
+  const { mcp_servers: _all, ...rest } = settings;
+  return Object.keys(servers).length > 0
+    ? { ...rest, mcp_servers: servers }
+    : rest;
+}
+
+/**
+ * The Codex edits above work line by line to keep comments and layout, so
+ * each result is parsed before it's written. It's written only when the
+ * `flockbot` server is what `expected` makes of the old one and nothing else
+ * changed; otherwise the file stays as it was.
+ */
+function writeCodex(
+  path: string,
+  before: string,
+  after: string,
+  expected: (current: unknown) => unknown,
+): void {
+  const old = codexSettings(before);
+  const next = codexSettings(after);
+  const servers = (settings: Record<string, unknown> | undefined) =>
+    isTable(settings?.mcp_servers) ? settings.mcp_servers : {};
+  if (
+    old === undefined ||
+    next === undefined ||
+    !isDeepStrictEqual(withoutFlockbot(old), withoutFlockbot(next)) ||
+    !isDeepStrictEqual(servers(next)[server], expected(servers(old)[server]))
+  )
+    throw codexUnchanged(path);
+  writePrivate(path, after);
+}
+
+function codexUnchanged(path: string): SetupError {
+  return new SetupError(
+    `Flockbot couldn't change ${path} safely, so it left the file unchanged.`,
+  );
 }
 
 /** The `[mcp_servers.flockbot]` table and its subtables, as a line range. */
 function codexSection(
   lines: string[],
 ): { start: number; end: number } | undefined {
-  const start = lines.findIndex((line) => line.trim() === codexHeader);
+  const start = lines.findIndex((line) => codexTable.test(line.trim()));
   if (start < 0) return undefined;
   let end = start + 1;
   while (end < lines.length) {
     const line = (lines[end] as string).trim();
-    if (line.startsWith("[") && !line.startsWith(`[mcp_servers.${server}.`))
-      break;
+    if (line.startsWith("[") && !codexSubtable.test(line)) break;
     end += 1;
   }
   return { start, end };

@@ -440,18 +440,17 @@ describe("Codex settings", () => {
     expect(registeredCommand(setup, "codex")).toBe("C:\\literal");
   });
 
-  it("decodes TOML escapes and rejects strings it does not understand", () => {
+  it("reads the command as TOML and ignores one that isn't valid", () => {
     const commandIn = (value: string) => {
       write(codex(), `[mcp_servers.flockbot]\ncommand = ${value}\n`);
       return registeredCommand(setup, "codex");
     };
     expect(commandIn(String.raw`"/A\u0020B/\"q\"\\"`)).toBe('/A B/"q"\\');
     expect(commandIn(String.raw`"\U0001F411"`)).toBe("🐑");
-    expect(commandIn(String.raw`"\x41"`)).toBeUndefined();
     expect(commandIn(String.raw`"\uD800"`)).toBeUndefined();
     expect(commandIn('"open')).toBeUndefined();
     expect(commandIn('"a" "b"')).toBeUndefined();
-    expect(commandIn('"""a"""')).toBeUndefined();
+    expect(commandIn('"""a"""')).toBe("a");
   });
 
   it("round-trips a path that needs escaping", () => {
@@ -460,12 +459,12 @@ describe("Codex settings", () => {
     expect(registeredCommand(awkward, "codex")).toBe(awkward.command);
   });
 
-  it("never rewrites a table with a multi-line string", () => {
+  it("reads but never repoints a table with a multi-line string", () => {
     const text =
       '[mcp_servers.flockbot]\ncommand = "/old/flockbot-mcp"\ndescription = """\ncommand = "/inside/a/string"\n"""';
     write(codex(), text);
 
-    expect(registeredCommand(setup, "codex")).toBeUndefined();
+    expect(registeredCommand(setup, "codex")).toBe("/old/flockbot-mcp");
     expect(() => repoint(setup, "codex")).toThrow(SetupError);
     expect(read(codex())).toBe(text);
   });
@@ -493,6 +492,54 @@ describe("Codex settings", () => {
       `[mcp_servers.flockbot]\ncommand = "${command}"\nnote = '''\nx\n'''\n`,
     );
     expect(connected("codex")).toBe(true);
+  });
+
+  it("replaces a table whose header has a comment instead of adding another", () => {
+    write(
+      codex(),
+      '[mcp_servers.flockbot] # parish tools\ncommand = "/old/flockbot-mcp"\n\n[mcp_servers.other]\ncommand = "/other"\n',
+    );
+    connect(setup, "codex");
+
+    const text = read(codex());
+    expect(text.match(/^\[mcp_servers\.flockbot\]/gm)).toHaveLength(1);
+    expect(text).not.toContain("/old/flockbot-mcp");
+    expect(text).toContain('[mcp_servers.other]\ncommand = "/other"');
+    expect(registeredCommand(setup, "codex")).toBe(command);
+  });
+
+  it("leaves the file alone when an edit would change other settings", () => {
+    // The header inside another table's string isn't a table, and cutting
+    // it out would break that string.
+    const text =
+      '[other]\nnote = """\n[mcp_servers.flockbot]\ncommand = "/in/a/string"\n"""\n';
+    write(codex(), text);
+
+    expect(() => connect(setup, "codex")).toThrow(SetupError);
+    expect(() => disconnect(setup, "codex")).toThrow(SetupError);
+    expect(read(codex())).toBe(text);
+  });
+
+  it("disconnects a literal-quoted table", () => {
+    write(
+      codex(),
+      `[mcp_servers.'flockbot']\ncommand = "${command}"\n\n[mcp_servers.other]\ncommand = "/other"\n`,
+    );
+    expect(connected("codex")).toBe(true);
+
+    disconnect(setup, "codex");
+
+    expect(read(codex())).toBe('[mcp_servers.other]\ncommand = "/other"\n');
+    expect(connected("codex")).toBe(false);
+  });
+
+  it("refuses to disconnect an entry it can't remove, rather than report it gone", () => {
+    const text = `mcp_servers = { flockbot = { command = "${command}" } }\n`;
+    write(codex(), text);
+    expect(connected("codex")).toBe(true);
+
+    expect(() => disconnect(setup, "codex")).toThrow(SetupError);
+    expect(read(codex())).toBe(text);
   });
 
   it("repoints only the string", () => {
