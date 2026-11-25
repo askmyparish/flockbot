@@ -17,6 +17,10 @@
 # FLOCKBOT_SIGNING_ENDPOINT is the account's regional endpoint, East US by
 # default.
 #
+# If a release stops partway, run it again from the same commit: it starts
+# over when the version's release is still a draft, and otherwise finishes the
+# feed from the files that release already published.
+#
 # --dry-run writes the packages to build/release without uploading, accepts a
 # dirty tree, and leaves them unsigned unless the signing settings are set.
 set -euo pipefail
@@ -44,6 +48,7 @@ if [[ -n "${FLOCKBOT_SIGNING_ACCOUNT:-}${FLOCKBOT_SIGNING_PROFILE:-}" ]] || ! $d
   signing=true
 fi
 
+resume=false
 if ! $dry_run; then
   # build.sh would bake the test feed into the release, and installed copies
   # would stop getting updates.
@@ -54,8 +59,15 @@ if ! $dry_run; then
   git -C "$root" fetch --quiet origin main
   git -C "$root" merge-base --is-ancestor HEAD origin/main ||
     fail "Release from a commit that's already on origin/main."
-  if gh release view "$tag" --repo "$repo" > /dev/null 2>&1; then
-    fail "$tag is already released. Bump the version first."
+  # A release that stopped partway left either a draft, which is started over,
+  # or a published version whose feed may not have been updated, which is
+  # finished from the files it already published.
+  if [[ "$(gh release view "$tag" --repo "$repo" --json isDraft --jq .isDraft 2> /dev/null)" == "true" ]]; then
+    gh release delete "$tag" --repo "$repo" --yes
+  elif gh release view "$tag" --repo "$repo" > /dev/null 2>&1; then
+    [[ "$(git -C "$root" ls-remote origin "refs/tags/$tag" | cut -f1)" == "$(git -C "$root" rev-parse HEAD)" ]] ||
+      fail "$tag is already released. Bump the version first."
+    resume=true
   fi
   # The version's reviewed changelog section, from the release PR.
   notes="$(cd "$root" && node scripts/mcp/release-notes.mjs)" ||
@@ -63,7 +75,7 @@ if ! $dry_run; then
 fi
 
 sign=()
-if $signing; then
+if $signing && ! $resume; then
   [[ -n "${FLOCKBOT_SIGNING_ACCOUNT:-}" && -n "${FLOCKBOT_SIGNING_PROFILE:-}" ]] ||
     fail "Set FLOCKBOT_SIGNING_ACCOUNT and FLOCKBOT_SIGNING_PROFILE to your Artifact Signing account and certificate profile."
   command -v jsign > /dev/null || fail "Install jsign first: brew install jsign"
@@ -84,16 +96,21 @@ fi
 
 rm -rf "$out"
 mkdir -p "$out"
-for arch in x64 arm64; do
-  "$package/build.sh" "$arch" > /dev/null
-  # Each architecture is its own channel, so an install only ever updates to
-  # its own kind of build.
-  vpk "[win]" pack --packId Flockbot --packTitle Flockbot --packAuthors "Ask My Parish" \
-    --packVersion "$version" --packDir "$package/build/$arch" --mainExe Flockbot.exe \
-    --runtime "win-$arch" --channel "win-$arch" --icon "$root/assets/flockbot.ico" \
-    ${sign[@]+"${sign[@]}"} --outputDir "$out" > "$out/vpk-$arch.log" ||
-    fail "vpk couldn't pack the $arch build. See $out/vpk-$arch.log."
-done
+if $resume; then
+  echo "$tag is published; finishing its feed from the files it published."
+  gh release download "$tag" --repo "$repo" --dir "$out"
+else
+  for arch in x64 arm64; do
+    "$package/build.sh" "$arch" > /dev/null
+    # Each architecture is its own channel, so an install only ever updates to
+    # its own kind of build.
+    vpk "[win]" pack --packId Flockbot --packTitle Flockbot --packAuthors "Ask My Parish" \
+      --packVersion "$version" --packDir "$package/build/$arch" --mainExe Flockbot.exe \
+      --runtime "win-$arch" --channel "win-$arch" --icon "$root/assets/flockbot.ico" \
+      ${sign[@]+"${sign[@]}"} --outputDir "$out" > "$out/vpk-$arch.log" ||
+      fail "vpk couldn't pack the $arch build. See $out/vpk-$arch.log."
+  done
+fi
 
 # What gets published: the packages, the feeds that list them, and the setup
 # programs. Portable zips are left out: assistants need the installed path.
@@ -109,9 +126,15 @@ fi
 head="$(git -C "$root" rev-parse HEAD)"
 # A record of this version, then the feed: packages before the lists that
 # name them, so a copy never sees a version it can't download.
-gh release create "$tag" "${packages[@]}" "${setups[@]}" --repo "$repo" --target "$head" \
-  --title "Flockbot for Windows $version" --notes "$notes" \
-  --latest=false
+# The version's release is a draft until all of it is uploaded, and it keeps
+# the feed's lists too, so a release that stops before the feed is updated
+# can be finished.
+if ! $resume; then
+  gh release create "$tag" "${packages[@]}" "${setups[@]}" "${feeds[@]}" --repo "$repo" \
+    --draft --target "$head" --title "Flockbot for Windows $version" --notes "$notes" \
+    --latest=false
+  gh release edit "$tag" --repo "$repo" --draft=false --latest=false
+fi
 if ! gh release view "$feed_tag" --repo "$repo" > /dev/null 2>&1; then
   gh release create "$feed_tag" --repo "$repo" --target "$head" \
     --title "Flockbot for Windows" --latest=false \

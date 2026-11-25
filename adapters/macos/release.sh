@@ -13,6 +13,10 @@
 # update with the private key generate_keys saved in the login Keychain, or
 # with the key file in SPARKLE_ED_KEY_FILE.
 #
+# If a release stops partway, run it again from the same commit: it starts
+# over when the version's release is still a draft, and otherwise finishes the
+# feed from the files that release already published.
+#
 # --dry-run writes the zip and appcast to build/release without notarizing or
 # uploading, and accepts a dirty tree and an ad hoc signature.
 set -euo pipefail
@@ -38,6 +42,7 @@ fail() {
 
 [[ -f "$package/sparkle-public-key" ]] ||
   fail "Save the public key from Sparkle's generate_keys in adapters/macos/sparkle-public-key first. Without it the app can't receive updates."
+resume=false
 if ! $dry_run; then
   # build.sh would bake the test feed into the release, and installed copies
   # would stop getting updates.
@@ -52,55 +57,69 @@ if ! $dry_run; then
   git -C "$root" fetch --quiet origin main
   git -C "$root" merge-base --is-ancestor HEAD origin/main ||
     fail "Release from a commit that's already on origin/main."
-  if gh release view "$tag" --repo "$repo" > /dev/null 2>&1; then
-    fail "$tag is already released. Bump the version first."
+  # A release that stopped partway left either a draft, which is started over,
+  # or a published version whose feed may not have been updated, which is
+  # finished from the files it already published.
+  if [[ "$(gh release view "$tag" --repo "$repo" --json isDraft --jq .isDraft 2> /dev/null)" == "true" ]]; then
+    gh release delete "$tag" --repo "$repo" --yes
+  elif gh release view "$tag" --repo "$repo" > /dev/null 2>&1; then
+    [[ "$(git -C "$root" ls-remote origin "refs/tags/$tag" | cut -f1)" == "$(git -C "$root" rev-parse HEAD)" ]] ||
+      fail "$tag is already released. Bump the version first."
+    resume=true
   fi
   # The version's reviewed changelog section, from the release PR.
   notes="$(cd "$root" && node scripts/mcp/release-notes.mjs)" ||
     fail "adapters/mcp/CHANGELOG.md has no entry for $version. Merge the release PR first."
 fi
 
-"$package/build.sh" > /dev/null
-build="$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$app/Contents/Info.plist")"
-
 rm -rf "$out"
 mkdir -p "$out"
 zip="$out/Flockbot-$version.zip"
-archive() { ditto -c -k --sequesterRsrc --keepParent "$app" "$zip"; }
-archive
 
-if ! $dry_run; then
-  # notarytool can finish without error for a rejected upload, so check the status.
-  xcrun notarytool submit "$zip" --keychain-profile "$FLOCKBOT_NOTARY_PROFILE" \
-    --wait --output-format json > "$out/notarization.json"
-  status="$(plutil -extract status raw -o - "$out/notarization.json")"
-  [[ "$status" == "Accepted" ]] ||
-    fail "Notarization finished as $status. See xcrun notarytool log with the id in $out/notarization.json."
-  # Staple the ticket so the app opens without a network check, then zip it again.
-  xcrun stapler staple "$app"
-  spctl --assess --type execute -vv "$app"
-  rm "$zip"
-  archive
-fi
-
-# generate_appcast adds the new zip to the published appcast and keeps its
-# earlier entries. Starting a fresh appcast would drop those entries, so that
-# only happens when the feed's release doesn't exist yet.
-if gh release view "$feed_tag" --repo "$repo" > /dev/null 2> "$out/feed.err"; then
-  gh release download "$feed_tag" --repo "$repo" --pattern appcast.xml --dir "$out"
-elif grep -q "release not found" "$out/feed.err"; then
-  echo "No appcast is published yet; starting one."
+if $resume; then
+  echo "$tag is published; finishing its feed from the files it published."
+  gh release download "$tag" --repo "$repo" --dir "$out"
+  [[ -f "$zip" && -f "$out/appcast.xml" ]] || fail "$tag is missing its zip or appcast.xml."
 else
-  cat "$out/feed.err" >&2
-  exit 1
-fi
-rm "$out/feed.err"
+  "$package/build.sh" > /dev/null
+  build="$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$app/Contents/Info.plist")"
 
-key=()
-if [[ -n "${SPARKLE_ED_KEY_FILE:-}" ]]; then key=(--ed-key-file "$SPARKLE_ED_KEY_FILE"); fi
-"$package/.build/artifacts/sparkle/Sparkle/bin/generate_appcast" ${key[@]+"${key[@]}"} \
-  --download-url-prefix "https://github.com/$repo/releases/download/$tag/" \
-  --link "https://github.com/$repo" "$out"
+  archive() { ditto -c -k --sequesterRsrc --keepParent "$app" "$zip"; }
+  archive
+
+  if ! $dry_run; then
+    # notarytool can finish without error for a rejected upload, so check the status.
+    xcrun notarytool submit "$zip" --keychain-profile "$FLOCKBOT_NOTARY_PROFILE" \
+      --wait --output-format json > "$out/notarization.json"
+    status="$(plutil -extract status raw -o - "$out/notarization.json")"
+    [[ "$status" == "Accepted" ]] ||
+      fail "Notarization finished as $status. See xcrun notarytool log with the id in $out/notarization.json."
+    # Staple the ticket so the app opens without a network check, then zip it again.
+    xcrun stapler staple "$app"
+    spctl --assess --type execute -vv "$app"
+    rm "$zip"
+    archive
+  fi
+
+  # generate_appcast adds the new zip to the published appcast and keeps its
+  # earlier entries. Starting a fresh appcast would drop those entries, so that
+  # only happens when the feed's release doesn't exist yet.
+  if gh release view "$feed_tag" --repo "$repo" > /dev/null 2> "$out/feed.err"; then
+    gh release download "$feed_tag" --repo "$repo" --pattern appcast.xml --dir "$out"
+  elif grep -q "release not found" "$out/feed.err"; then
+    echo "No appcast is published yet; starting one."
+  else
+    cat "$out/feed.err" >&2
+    exit 1
+  fi
+  rm "$out/feed.err"
+
+  key=()
+  if [[ -n "${SPARKLE_ED_KEY_FILE:-}" ]]; then key=(--ed-key-file "$SPARKLE_ED_KEY_FILE"); fi
+  "$package/.build/artifacts/sparkle/Sparkle/bin/generate_appcast" ${key[@]+"${key[@]}"} \
+    --download-url-prefix "https://github.com/$repo/releases/download/$tag/" \
+    --link "https://github.com/$repo" "$out"
+fi
 cp "$zip" "$out/Flockbot.zip"
 
 if $dry_run; then
@@ -108,14 +127,19 @@ if $dry_run; then
   exit 0
 fi
 
-# The update first, then the appcast that points at it.
-gh release create "$tag" "$zip" --repo "$repo" --target "$(git -C "$root" rev-parse HEAD)" \
-  --title "Flockbot for Mac $version" --notes "$notes" \
-  --latest=false
+# The update first, then the appcast that points at it. The version's release
+# is a draft until all of it is uploaded, and it keeps the appcast too, so a
+# release that stops before the feed is updated can be finished.
+if ! $resume; then
+  gh release create "$tag" "$zip" "$out/appcast.xml" --repo "$repo" --draft \
+    --target "$(git -C "$root" rev-parse HEAD)" --title "Flockbot for Mac $version" \
+    --notes "$notes" --latest=false
+  gh release edit "$tag" --repo "$repo" --draft=false --latest=false
+fi
 if ! gh release view "$feed_tag" --repo "$repo" > /dev/null 2>&1; then
   gh release create "$feed_tag" --repo "$repo" --target "$(git -C "$root" rev-parse HEAD)" \
     --title "Flockbot for Mac" --latest=false \
     --notes "Download Flockbot.zip to install Flockbot for Mac. Installed copies update themselves from appcast.xml."
 fi
 gh release upload "$feed_tag" "$out/appcast.xml" "$out/Flockbot.zip" --repo "$repo" --clobber
-echo "Released Flockbot for Mac $version (build $build)."
+echo "Released Flockbot for Mac $version."
