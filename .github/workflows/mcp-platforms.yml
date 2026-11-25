@@ -57,6 +57,8 @@ jobs:
         run: codesign --verify --deep --strict adapters/macos/build/Flockbot.app
       - name: Run the bundled connector under the hardened runtime
         run: adapters/macos/build/Flockbot.app/Contents/MacOS/flockbot-mcp status
+      - name: Serve MCP over stdio from the bundled connector
+        run: node scripts/mcp/check-connector.mjs adapters/macos/build/Flockbot.app/Contents/MacOS/flockbot-mcp
       - name: Connect and disconnect an assistant with the bundled connector
         run: |
           connector="$PWD/adapters/macos/build/Flockbot.app/Contents/MacOS/flockbot-mcp"
@@ -104,6 +106,8 @@ jobs:
         run: |
           adapters/windows/build.sh x64
           adapters/windows/build.sh arm64
+      - name: Serve MCP over stdio from the built connector
+        run: node scripts/mcp/check-connector.mjs adapters/windows/build/x64/flockbot-mcp.exe
       - name: Connect and disconnect assistants with the built connector
         shell: pwsh
         run: |
