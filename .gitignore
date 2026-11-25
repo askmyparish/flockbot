@@ -11,7 +11,6 @@ node_modules/
 
 /adapters/zapier/dist/
 
-/adapters/mcp/dist/
 /adapters/mcp/artifacts/
 /adapters/mcp/.cache/
 
