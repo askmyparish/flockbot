@@ -384,6 +384,20 @@ export class ParishConnection {
     }
   }
 
+  /** Whether the saved record is still the pending one this setup wrote. */
+  #claims(saved: Connection): boolean {
+    try {
+      const current = this.#read();
+      return (
+        current?.generation === saved.generation &&
+        current.state === "pending" &&
+        current.owner === process.pid
+      );
+    } catch {
+      return false;
+    }
+  }
+
   #networkFor(saved: Connection): Network {
     if (!this.#network || this.#network.generation !== saved.generation) {
       this.#network = {
@@ -623,6 +637,9 @@ export class ParishConnection {
             const userId = await this.#exclusive(
               AbortSignal.any([signal, AbortSignal.timeout(this.#pollMs)]),
               async () => {
+                // Another connector replaced or forgot this setup's claim,
+                // such as the app signing in itself. Its record stands.
+                if (!this.#claims(saved)) return undefined;
                 if (session.isOpen?.() === false)
                   throw new ConnectionError(
                     "browser_unavailable",
@@ -641,6 +658,7 @@ export class ParishConnection {
                 return id;
               },
             );
+            if (userId === undefined) break;
             if (saved.userId !== null && userId !== saved.userId) {
               // Keep sign-in open so the user can switch back on Flocknote.
               lastFailure = "connection_changed";
@@ -691,18 +709,7 @@ export class ParishConnection {
             // Another process may forget or replace the connection while this
             // setup runs. Only this setup's own pending record may take its
             // result, checked again right before each save.
-            const ours = (): boolean => {
-              try {
-                const current = this.#read();
-                return (
-                  current?.generation === saved.generation &&
-                  current.state === "pending" &&
-                  current.owner === process.pid
-                );
-              } catch {
-                return false;
-              }
-            };
+            const ours = () => this.#claims(saved);
             if (!ours()) authenticatedUser = undefined;
             try {
               if (authenticatedUser !== undefined && !signal.aborted)

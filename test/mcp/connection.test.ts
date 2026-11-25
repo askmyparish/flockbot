@@ -1157,6 +1157,38 @@ describe("browser-owned local connection", () => {
     }
   });
 
+  it("stops waiting once another connector replaces its sign-in, and uses the replacement", async () => {
+    const f = fixture({ setupMs: 60_000 });
+    await ready(f.connection);
+    f.responses["user/userData"] = {
+      success: true,
+      userID: null,
+      authorized: false,
+    };
+    await f.connection.connect("example-parish");
+    expect(await f.connection.status()).toMatchObject({ state: "pending" });
+    // The app replaces the pending setup and signs in as another login.
+    writeFileSync(
+      join(f.profile, "connection.json"),
+      JSON.stringify({
+        version: 1,
+        generation: "00000000-0000-4000-8000-000000000003",
+        parish: "example-parish",
+        userId: "202",
+        state: "ready",
+      }),
+    );
+    await waitFor(async () =>
+      expect(await f.connection.status()).toEqual({
+        state: "ready",
+        parish: "example-parish",
+      }),
+    );
+    expect(
+      await f.connection.inParish(() => f.connection.count("101")),
+    ).toEqual({ value: 7, parish: "example-parish" });
+  });
+
   it("keeps reconnect open while another login is present, then accepts the original login", async () => {
     const f = fixture();
     await ready(f.connection);
