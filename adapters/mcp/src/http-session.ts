@@ -269,6 +269,16 @@ export function httpSessionFactory(
         return "failed";
       }
     };
+    // One exchange at a time. Each reads the saved cookies, sends them and
+    // saves any rotation against that revision, so two side by side would
+    // start from the same cookies and the later save would drop the earlier
+    // rotation.
+    let exchanges: Promise<unknown> = Promise.resolve();
+    const serially = <T>(work: () => Promise<T>): Promise<T> => {
+      const run = exchanges.then(work);
+      exchanges = run.catch(() => undefined);
+      return run;
+    };
     const exchange = async (
       path: string,
       method: "GET" | "POST",
@@ -346,8 +356,16 @@ export function httpSessionFactory(
               { version: 1, origin: options.origin, cookies },
               String(saved.revision),
             );
-          } catch {
-            /* A newer writer's cookies stand. */
+          } catch (error) {
+            // Only a newer saved session may replace these cookies. Any other
+            // failure lost them, and later requests would send stale ones.
+            if (
+              !(
+                error instanceof FlockbotError &&
+                error.code === "stale_session_state"
+              )
+            )
+              throw new ConnectionError("profile_unavailable");
           }
         }
         const type = response.headers.get("Content-Type") ?? "";
@@ -432,7 +450,8 @@ export function httpSessionFactory(
           data: text,
           ...(size === 0 ? { reason: "empty_response" } : {}),
         };
-      } catch {
+      } catch (error) {
+        if (error instanceof ConnectionError) throw error;
         return {
           ...metadata,
           error: controller.signal.aborted
@@ -464,15 +483,12 @@ export function httpSessionFactory(
             : !allowedEndpoint(path, method)
         )
           throw new FlockbotError("invalid_path");
-        const started = performance.now();
-        const result = await exchange(path, method, body, photo);
-        const event = recordResponse(
-          path,
-          method,
-          result,
-          performance.now() - started,
-          body,
-        );
+        const { result, ms } = await serially(async () => {
+          const started = performance.now();
+          const result = await exchange(path, method, body, photo);
+          return { result, ms: performance.now() - started };
+        });
+        const event = recordResponse(path, method, result, ms, body);
         const reason = safeFailureReason(result.reason);
         switch (result.error) {
           case undefined:

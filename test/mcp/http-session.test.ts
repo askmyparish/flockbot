@@ -15,7 +15,11 @@ import {
   AuthenticationSuspectedError,
   ConnectionError,
 } from "../../adapters/mcp/src/session.js";
-import { httpSessionFactory } from "../../adapters/mcp/src/http-session.js";
+import {
+  httpSessionFactory,
+  sessionFile,
+  type SessionBlob,
+} from "../../adapters/mcp/src/http-session.js";
 import { MCP_VERSION } from "../../adapters/mcp/src/version.js";
 import { SerialCoordinator } from "../../adapters/mcp/src/serial-coordinator.js";
 import {
@@ -65,7 +69,7 @@ afterEach(async () => {
 });
 
 /** A fictional Flocknote plus the sign-in page, joined without sockets. */
-function fixture() {
+function fixture(storage?: (profile: string) => SessionBlob) {
   const profile = mkdtempSync(join(tmpdir(), "flockbot-http-unit-"));
   directories.push(profile);
   const calls: Call[] = [];
@@ -110,6 +114,7 @@ function fixture() {
   let openFails = false;
   const factory = httpSessionFactory({
     fetch: send,
+    ...(storage ? { storage } : {}),
     open: async (url) => {
       if (openFails) throw new Error("No fictional desktop");
       opened.push(url);
@@ -402,6 +407,58 @@ describe("plain-HTTP local connection", () => {
       .join("\n");
     expect(saved).toContain("fictional-rotated");
     expect(saved).not.toMatch(/fictional_tracker|fictional-foreign/);
+  });
+
+  it("keeps both cookies when requests made side by side each rotate one", async () => {
+    const f = fixture();
+    const session = await f.signedIn();
+    f.routes["GET navigation/groups"] = () =>
+      json({ groups: [] }, [
+        "Flocknote=fictional-rotated; Domain=flocknote.com; Path=/; Secure; HttpOnly",
+      ]);
+    f.routes["GET network/getMetadata"] = () =>
+      json({ everyoneGroupID: 101 }, [
+        "Flocknote-Login-201=fictional-login; Domain=flocknote.com; Path=/; Secure; HttpOnly",
+      ]);
+    await Promise.all([
+      session.request("navigation/groups"),
+      session.request("network/getMetadata"),
+    ]);
+    const restarted = await f.factory({
+      profile: f.profile,
+      origin,
+      interactive: false,
+    });
+    await restarted.request("user/userData");
+    expect(f.calls.at(-1)?.cookie?.split("; ").sort()).toEqual([
+      "Flocknote-Login-201=fictional-login",
+      "Flocknote=fictional-rotated",
+    ]);
+  });
+
+  it("reports a rotated cookie it couldn't save instead of keeping the old one", async () => {
+    let failSaves = false;
+    const f = fixture((profile) => {
+      const file = sessionFile(profile);
+      return {
+        get: () => file.get(),
+        async set(text) {
+          if (failSaves) throw new Error("Fictional storage failure");
+          await file.set(text);
+        },
+      };
+    });
+    const session = await f.signedIn();
+    f.routes["GET navigation/groups"] = () =>
+      json({ groups: [] }, [
+        "Flocknote=fictional-rotated; Domain=flocknote.com; Path=/; Secure; HttpOnly",
+      ]);
+    failSaves = true;
+    const failed = await session
+      .request("navigation/groups")
+      .catch((error) => error);
+    expect(failed).toBeInstanceOf(ConnectionError);
+    expect(failed).toMatchObject({ code: "profile_unavailable" });
   });
 
   it("posts form bodies and image uploads the way the browser session did", async () => {
