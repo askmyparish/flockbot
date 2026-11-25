@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -139,6 +140,9 @@ interface Connection {
    * process's coordinator can't tell a live setup from an abandoned one. */
   readonly owner?: number;
 }
+
+/** Where `inParish` collects the parish its operations ran against. */
+const operationParish = new AsyncLocalStorage<{ parish?: string }>();
 
 /** Whether another live process owns this pending setup. */
 function ownedElsewhere(owner: number | undefined): boolean {
@@ -428,6 +432,8 @@ export class ParishConnection {
           if (!saved) throw new ConnectionError("not_configured");
           if (saved.state !== "ready")
             throw new FlockbotError("authentication_required");
+          const scope = operationParish.getStore();
+          if (scope) scope.parish = saved.parish;
           const session = await this.#open(saved, false);
           try {
             op.check();
@@ -485,6 +491,21 @@ export class ParishConnection {
         throw new ConnectionError("connection_busy");
       throw error;
     }
+  }
+
+  /**
+   * Runs `work` and reports the parish its operations ran against, read
+   * inside each operation's exclusive section, so a sign-out and another
+   * parish's sign-in after it finishes can't relabel its result.
+   */
+  async inParish<T>(
+    work: () => Promise<T>,
+  ): Promise<{ value: T; parish?: string }> {
+    const scope: { parish?: string } = {};
+    const value = await operationParish.run(scope, work);
+    return scope.parish === undefined
+      ? { value }
+      : { value, parish: scope.parish };
   }
 
   async status(options: OperationOptions = {}): Promise<ConnectionStatus> {

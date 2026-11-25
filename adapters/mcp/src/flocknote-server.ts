@@ -216,6 +216,7 @@ export type FlocknoteConnection = Pick<
   | "isMember"
   | "addMember"
   | "addMemberByName"
+  | "inParish"
   | "close"
 >;
 
@@ -364,16 +365,13 @@ export function createFlocknoteServer(
       operation,
       async () => {
         try {
-          let body = await work();
           // Name the parish each result came from, so the assistant need not
           // guess. status and connect already report it themselves.
-          if (operation !== "status" && operation !== "connect") {
-            const parish = await connection
-              .status()
-              .then((status) => status.parish)
-              .catch(() => undefined);
-            if (parish) body = { ...body, parish };
-          }
+          const { value, parish } = await connection.inParish(work);
+          let body =
+            parish && operation !== "status" && operation !== "connect"
+              ? { ...value, parish }
+              : value;
           body = withUpdate(operation, body);
           if (!verbose) return respond(body);
           const record = verboseDiagnostic("success");

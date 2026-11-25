@@ -570,11 +570,16 @@ describe("Flocknote MCP contract", () => {
     expect(client.getInstructions()).toMatch(
       /^This computer is signed in to the Flocknote parish first-parish \(first-parish\.flocknote\.com\)\./,
     );
-    // Results use the saved connection now, not the parish at startup.
+    // Results name the parish their operation ran against, not the parish
+    // at startup or one signed in to after the operation finished.
     vi.spyOn(connection, "status").mockResolvedValue({
       state: "ready",
-      parish: "second-parish",
+      parish: "third-parish",
     });
+    vi.spyOn(connection, "inParish").mockImplementation(async (work) => ({
+      value: await work(),
+      parish: "second-parish",
+    }));
     vi.spyOn(connection, "count").mockResolvedValue(7);
     expect(
       (
