@@ -1087,11 +1087,19 @@ export class ParishConnection {
    * Explicit operator operation, intentionally outside ordinary MCP tools.
    * `clearCredential` removes saved credentials the factory's storage holds,
    * inside the same exclusive section, before anything else is dropped.
+   * `unlessReady` keeps a signed-in connection, or no connection, as it is.
    */
-  async forget(clearCredential?: () => Promise<void>): Promise<void> {
+  async forget(
+    clearCredential?: () => Promise<void>,
+    options: { unlessReady?: boolean } = {},
+  ): Promise<void> {
     this.#setup?.controller.abort();
     await this.#setup?.task;
     await this.#exclusive(AbortSignal.timeout(25_000), async () => {
+      if (options.unlessReady) {
+        const saved = this.#read();
+        if (!saved || saved.state === "ready") return;
+      }
       await clearCredential?.();
       await this.#dropSession();
       rmSync(join(this.#profile, "browser"), { recursive: true, force: true });

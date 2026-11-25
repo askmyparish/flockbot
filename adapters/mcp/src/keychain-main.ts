@@ -196,6 +196,9 @@ async function signIn(): Promise<void> {
     }),
   });
   try {
+    // A sign-in that failed or expired still names its parish and login, and
+    // the app offers Sign Out only once signed in. Signing in here replaces it.
+    await forgetSignIn(connection, { unlessReady: true });
     await connection.connect(parish);
     // A rejected password never confirms, so report it without waiting.
     if (outcome !== "signed_in") {
@@ -246,12 +249,15 @@ const assistantSetup: Setup = {
 };
 
 /** Deletes the saved cookie, then the connection that names it. */
-async function forgetSignIn(connection: ParishConnection): Promise<void> {
+async function forgetSignIn(
+  connection: ParishConnection,
+  options: { unlessReady?: boolean } = {},
+): Promise<void> {
   // Delete the cookie first: if that fails, the connection still reads as
   // signed in rather than hiding a credential that is still stored.
   await connection.forget(async () => {
     await Bun.secrets.delete({ service: SERVICE, name: "session" });
-  });
+  }, options);
 }
 
 async function main(): Promise<void> {

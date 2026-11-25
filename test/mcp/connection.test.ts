@@ -506,6 +506,41 @@ describe("browser-owned local connection", () => {
       );
   });
 
+  it("lets a new sign-in replace a failed one for another parish but keeps a signed-in one", async () => {
+    const f = fixture();
+    // The first attempt names a parish whose sign-in never completes.
+    f.responses["user/userData"] = new FlockbotError("invalid_response");
+    await f.connection.connect("mistyped-parish");
+    await f.connection.close();
+    const cleared: string[] = [];
+    const retry = f.create();
+    expect(await retry.status()).toMatchObject({
+      state: "action_required",
+      parish: "mistyped-parish",
+    });
+    await retry.forget(
+      async () => {
+        cleared.push("mistyped-parish");
+      },
+      { unlessReady: true },
+    );
+    expect(cleared).toEqual(["mistyped-parish"]);
+    f.responses["user/userData"] = { success: true, userID: 201 };
+    await ready(retry);
+
+    await retry.forget(
+      async () => {
+        cleared.push("example-parish");
+      },
+      { unlessReady: true },
+    );
+    expect(cleared).toEqual(["mistyped-parish"]);
+    expect(await retry.status()).toEqual({
+      state: "ready",
+      parish: "example-parish",
+    });
+  });
+
   it("closes and deletes the profile atomically before a later queued write can reopen it", async () => {
     const f = fixture();
     await ready(f.connection);
