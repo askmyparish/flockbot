@@ -1,24 +1,23 @@
 # Local MCP connector
 
 Flockbot exposes defined Flocknote operations to a local assistant as a stdio
-MCP server. Staff sign in on a Flockbot sign-in page that the connector serves
-on this computer and opens in their default browser. The page sends the password
-only to Flocknote and does not save it. Every later request uses plain HTTP with
-the resulting session cookies, which are kept in an owner-only file. There is no
-browser automation, screenshot, cookie export or password storage.
+MCP server. The connector ships inside the Flockbot apps for Mac
+(`adapters/macos`) and Windows (`adapters/windows`), compiled with Bun from
+`adapters/mcp/src/keychain-main.ts`. The apps add it to Claude Desktop, Claude
+Code and Codex.
 
-**Preview, macOS and Claude Desktop only.** Offline unit and MCP tests pass.
-Authorized test-parish password sign-in, session reuse and group counts passed
-from the Claude Desktop extension (`.mcpb`) running on Claude's built-in Node.js.
-Emailed sign-in codes, Codex, Windows and the planned signed Mac app are not
-implemented or verified.
+Staff sign in in the app. The password goes only to Flocknote and is not saved.
+Every later request uses plain HTTP with the resulting session cookies, which
+are kept in the macOS Keychain or the Windows Credential Manager. There is no
+browser automation, screenshot, cookie export or password storage. Emailed
+sign-in codes are not supported.
 
 ## Tools
 
 | Tool | Behavior |
 | --- | --- |
 | `status` | Report saved readiness or pending/required setup without a live request |
-| `connect` | Open the local Flockbot sign-in page for a parish subdomain |
+| `connect` | Open the Flockbot app to sign in to a parish subdomain |
 | `groups` | Return group identifiers, names and Everyone status; optional `refresh` |
 | `subscriber_count` | Fetch a current count without member records |
 | `find_members` | Search active members for bounded identities, or use explicit advanced count/member-page modes with validated criteria |
@@ -748,46 +747,58 @@ Use Node.js 22.13+ and `bin/setup` for development.
 
 ```sh
 npm run check
-npm run package:claude-local
+adapters/macos/build.sh
+adapters/windows/build.sh [x64|arm64]
 ```
 
-`npm run check` runs the offline tests, builds the stdio server and starts it
-once over stdio with a temporary home directory. `package:claude-local` writes
-the Claude Desktop extension to the ignored
-`adapters/mcp/artifacts/claude-local/flockbot-local-<version>.mcpb`. It does
-not publish or install anything. To try it, open the file with Claude Desktop.
+`npm run check` runs the offline tests. The build scripts write the apps to
+each adapter's ignored `build/` folder.
 
-Merging a Changesets release PR publishes the `.mcpb` and its checksum as a
-GitHub release tagged `mcp-v<version>`.
+`adapters/mcp/package.json` holds the version both apps share. Merging to `main`
+opens a Changesets release PR that sets the version and changelog. Merging that
+PR publishes nothing. From the merged commit, `adapters/macos/release.sh` and
+`adapters/windows/release.sh` sign the apps, publish them as GitHub releases
+with that version's changelog section, and update the feeds installed copies
+check. Each script's header lists what it needs, and `--dry-run` builds the
+packages without uploading.
 
 ## Sign-in and session storage
 
-`connect` starts a sign-in page on a random loopback port, protected by a
-one-time token in its URL, and opens it in the default browser. The page posts
-the parish login to Flocknote over HTTPS and keeps the password only in memory
-for that request. Password sign-in is supported; emailed sign-in codes are not.
+`connect` opens the Flockbot app, where staff sign in with their parish's
+Flocknote email and password. The app hands them to the connector's `sign-in`
+command over stdin. The connector posts the login to Flocknote over HTTPS and
+keeps the password only in memory for that request. Password sign-in is
+supported; emailed sign-in codes are not. A connector run outside an installed
+app falls back to a sign-in page on a random loopback port, protected by a
+one-time token in its URL.
 
 The resulting `Flocknote` and `Flocknote-Login-<id>` cookies are saved, with a
-revision number, in an owner-only file:
+revision number, in the macOS Keychain or the Windows Credential Manager under
+the service `com.askmyparish.flockbot`. Connection metadata (the parish, an
+opaque generation, the internal login identifier, readiness and an optional
+fixed setup error) is kept in an owner-only folder:
 
-- macOS: `~/Library/Application Support/Flockbot MCP/http-v1/`
+- macOS: `~/Library/Application Support/Flockbot MCP/keychain-v1/`
+- Windows: `%LOCALAPPDATA%\Flockbot MCP\keychain-v1\`
 
-The folder also holds connection metadata: the parish, an opaque generation,
-the internal login identifier, readiness and an optional fixed setup error.
-Changing the parish requires forgetting the old connection:
-
-```sh
-node <extension folder>/server/index.mjs forget
-```
-
-Forgetting deletes the local session. It does not revoke Flocknote's
-server-side session. Tool results go to the assistant's provider; local session
-storage does not keep parish data on the device.
+Changing the parish requires signing out first. **Sign Out** in the app, which
+runs `flockbot-mcp forget`, deletes the saved cookies and then the connection
+metadata. It does not revoke Flocknote's server-side session. Tool results go
+to the assistant's provider; local session storage does not keep parish data on
+the device.
 
 Requests go only to fixed Flocknote endpoints for the selected parish. Neither a
 tool nor its arguments can choose a URL. Redirects are rejected and response
 bodies are bounded. Each request names Flockbot, its version and this repository
-in its `User-Agent`. Operations on one connection run one at a time.
+in its `User-Agent`.
+
+Each assistant starts its own connector process, and the app runs more for
+sign-in and sign-out, all sharing one saved session. An OS lock in the
+connection folder lets only one of them sign in, sign out or talk to Flocknote
+at a time, so none overwrites cookies another just saved or signs out in the
+middle of another's operation. If saving rotated cookies fails, the request
+reports `profile_unavailable`, and a write it was part of is reported as
+outcome unknown.
 
 ## Continue after sign-in
 
@@ -841,6 +852,7 @@ Normal failed calls save the same metadata record as newline-delimited JSON in t
 OS user's Flockbot application-data folder, outside the session folder:
 
 - macOS: `~/Library/Application Support/Flockbot MCP/diagnostics-v2/`
+- Windows: `%LOCALAPPDATA%\Flockbot MCP\diagnostics-v2\`
 
 ### Explicit verbose capture
 
@@ -918,7 +930,10 @@ reader or remove that old directory explicitly when no longer needed.
 
 `failures.jsonl` and `failures.1.jsonl` each retain at most 1 MiB (2 MiB total).
 The writer rejects symlinks, hard links, nonregular files and unsafe permissions.
-Directories and files are owner-only. A separate bounded process lock
+Directories and files are owner-only. On Windows, where mode bits don't
+apply, a new folder gets an ACL for only the current user, and the writer
+refuses a folder or file that is owned by or allows anyone other than that
+user, SYSTEM and Administrators. A separate bounded process lock
 coordinates writers; corruption and incomplete trailing records are discarded.
 No raw response or exception text is used as a logging fallback.
 
@@ -933,9 +948,9 @@ Records older than seven days are pruned on write or supported diagnostic access
 There is no background cleanup: idle files may remain, and reading files directly
 does not invoke retention. The runtime's `diagnostics` command prunes and prints
 filtered JSON lines (including sensitive verbose records) without making a
-Flocknote request. From a built checkout, run
-`node adapters/mcp/dist/server/index.mjs diagnostics`; for an installed
-extension, run `server/index.mjs diagnostics` from its folder.
+Flocknote request. Run `flockbot-mcp diagnostics` from
+`Flockbot.app/Contents/MacOS/` on a Mac, or `flockbot-mcp.exe diagnostics` from
+`%LOCALAPPDATA%\Flockbot\current\` on Windows.
 Find the record whose `operationId` matches the tool error or verbose receipt,
 inspect its contents locally, and share only the required record. There is no MCP
 log-reading tool, automatic upload or telemetry.

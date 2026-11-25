@@ -25,12 +25,10 @@ import { ProcessLock } from "./process-lock.js";
 import { UpdateCheck } from "./updates.js";
 import { MCP_VERSION } from "./version.js";
 
-// Spike: the local connector compiled with `bun build --compile`, keeping the
-// session in the login Keychain instead of a file. Bun.secrets is Bun-only.
-//
-//   bun build --compile --target=bun-darwin-arm64 \
-//     --define 'BUILD_LABEL="<label>"' adapters/mcp/src/keychain-main.ts \
-//     --outfile adapters/mcp/artifacts/keychain-spike/flockbot-mcp
+// The connector the Flockbot apps bundle, compiled with `bun build --compile`
+// by adapters/macos/build.sh and adapters/windows/build.sh. It keeps the
+// session in the macOS Keychain or the Windows Credential Manager through
+// Bun.secrets, which is Bun-only.
 interface Secret {
   readonly service: string;
   readonly name: string;

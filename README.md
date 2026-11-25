@@ -10,9 +10,9 @@ through its internal API.
 The TypeScript client supports password login, saved sessions, coordinated recovery,
 group discovery, subscriber counts, member additions, and HTTP requests. A private
 Zapier candidate is available for offline development. A
-[local MCP connector preview](./docs/mcp/README.md) signs in through a page served
-on the staff member's own Mac and then uses plain HTTP; it is packaged as a
-Claude Desktop extension.
+[local MCP connector](./docs/mcp/README.md) ships inside the Flockbot apps for
+Mac (`adapters/macos`) and Windows (`adapters/windows`), which sign staff in on
+their own computer and connect it to Claude and ChatGPT.
 
 ## TypeScript development
 
@@ -401,25 +401,22 @@ never change the write outcome, infer an email-validation rule, or permit replay
 
 </details>
 
-### Local MCP connector preview
+### Local MCP connector
 
 The [local MCP connector](./docs/mcp/README.md) exposes group discovery, counts,
 member search and reads, notes, email analytics, email drafts and member additions
-to a local assistant over stdio. Staff sign in on a Flockbot page served from their
-own Mac; the password goes only to Flocknote and is not saved. The resulting
-session cookies stay in an owner-only file on that Mac, and every later request is
-plain HTTP to fixed Flocknote endpoints.
+to a local assistant over stdio. Staff sign in in the Flockbot app for Mac or
+Windows; the password goes only to Flocknote and is not saved. The resulting
+session cookies stay in the Mac Keychain or Windows Credential Manager, and every
+later request is plain HTTP to fixed Flocknote endpoints.
 
 Member search returns bounded identities and only explicitly requested contact
 fields; see the [MCP tool contract](./docs/mcp/README.md#tools). Writes with an
 unknown outcome are never repeated automatically.
 
-`npm run check` tests the tool contract offline and starts the built server once
-over stdio. `npm run package:claude-local` builds the Claude Desktop extension
-(`.mcpb`). Test-parish password sign-in, session reuse and counts passed in
-Claude Desktop on macOS. Emailed sign-in codes, Codex and Windows are not yet
-supported. Merging a Changesets release PR publishes the `.mcpb` as a GitHub
-release.
+`npm run check` tests the tool contract offline. Emailed sign-in codes are not
+yet supported. Releases are published by the Mac and Windows release scripts;
+see [Develop and verify](./docs/mcp/README.md#develop-and-verify).
 
 ### Private Zapier candidate
 
