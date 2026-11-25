@@ -44,6 +44,12 @@ describe("reading feeds", () => {
       version: "0.3.0-dev.2",
       build: 230,
     });
+    // One version's entry, as the release scripts check it.
+    expect(newestInFeed(appcast, "appcast", "0.4.0")).toEqual({
+      version: "0.4.0",
+      build: 225,
+    });
+    expect(newestInFeed(appcast, "appcast", "0.5.0")).toBeUndefined();
   });
 
   it("finds the newest Velopack release among full and delta packages", () => {

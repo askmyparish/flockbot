@@ -81,13 +81,18 @@ export function compareReleases(
   return Math.sign(a.build - b.build);
 }
 
-/** The newest release a feed lists, or undefined when it lists none. */
+/**
+ * The newest release a feed lists, or its newest build of `version` when
+ * given; undefined when it lists none.
+ */
 export function newestInFeed(
   text: string,
   format: FeedFormat,
+  version?: string,
 ): Release | undefined {
-  const releases =
-    format === "appcast" ? appcastReleases(text) : velopackReleases(text);
+  const releases = (
+    format === "appcast" ? appcastReleases(text) : velopackReleases(text)
+  ).filter((release) => version === undefined || release.version === version);
   let newest: Release | undefined;
   for (const release of releases) {
     if (

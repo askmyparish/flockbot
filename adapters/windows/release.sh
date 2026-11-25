@@ -19,7 +19,8 @@
 #
 # If a release stops partway, run it again from the same commit: it starts
 # over when the version's release is still a draft, and otherwise finishes the
-# feed from the files that release already published.
+# feed from the files that release already published. It refuses to replace a
+# feed that already offers a newer version.
 #
 # --dry-run writes the packages to build/release without uploading, accepts a
 # dirty tree, and leaves them unsigned unless the signing settings are set.
@@ -122,6 +123,23 @@ if $dry_run; then
   echo "Dry run of $version: wrote $out. Nothing was uploaded."
   exit 0
 fi
+
+# Never point installs back at an older version, as finishing an earlier
+# release after a later one would. Only a feed that doesn't exist yet skips
+# the check; any other lookup failure stops the release.
+if gh release view "$feed_tag" --repo "$repo" > /dev/null 2> "$out/feed.err"; then
+  mkdir "$out/published"
+  gh release download "$feed_tag" --repo "$repo" --pattern "releases.*.json" --dir "$out/published"
+  for arch in x64 arm64; do
+    published="$out/published/releases.win-$arch.json"
+    [[ ! -f "$published" ]] ||
+      bun "$root/scripts/mcp/check-feed.mjs" velopack "$published" "$out/releases.win-$arch.json" "$version"
+  done
+elif ! grep -q "release not found" "$out/feed.err"; then
+  cat "$out/feed.err" >&2
+  exit 1
+fi
+rm "$out/feed.err"
 
 head="$(git -C "$root" rev-parse HEAD)"
 # A record of this version, then the feed: packages before the lists that

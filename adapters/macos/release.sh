@@ -15,7 +15,8 @@
 #
 # If a release stops partway, run it again from the same commit: it starts
 # over when the version's release is still a draft, and otherwise finishes the
-# feed from the files that release already published.
+# feed from the files that release already published. It refuses to replace an
+# appcast that already offers a newer build.
 #
 # --dry-run writes the zip and appcast to build/release without notarizing or
 # uploading, and accepts a dirty tree and an ad hoc signature.
@@ -126,6 +127,19 @@ if $dry_run; then
   echo "Dry run of $version (build $build): wrote $out. Nothing was uploaded."
   exit 0
 fi
+
+# Never point installs back at an older version, as finishing an earlier
+# release after a later one would. Only a feed that doesn't exist yet skips
+# the check; any other lookup failure stops the release.
+if gh release view "$feed_tag" --repo "$repo" > /dev/null 2> "$out/feed.err"; then
+  mkdir "$out/published"
+  gh release download "$feed_tag" --repo "$repo" --pattern appcast.xml --dir "$out/published"
+  bun "$root/scripts/mcp/check-feed.mjs" appcast "$out/published/appcast.xml" "$out/appcast.xml" "$version"
+elif ! grep -q "release not found" "$out/feed.err"; then
+  cat "$out/feed.err" >&2
+  exit 1
+fi
+rm "$out/feed.err"
 
 # The update first, then the appcast that points at it. The version's release
 # is a draft until all of it is uploaded, and it keeps the appcast too, so a
