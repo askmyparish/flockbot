@@ -84,6 +84,7 @@ import {
   type SessionFactory,
   type FlocknoteSession,
 } from "./session.js";
+import { ProcessLockTimeoutError } from "./process-lock.js";
 import { QueueWaitTimeoutError } from "./serial-coordinator.js";
 import { connectionProfileDirectory } from "./profile.js";
 import {
@@ -227,6 +228,7 @@ export class ParishConnection {
   readonly #factory: SessionFactory;
   readonly #setupMs: number;
   readonly #pollMs: number;
+  readonly #connectWaitMs: number;
   readonly #now: () => number;
   #session:
     | { generation: string; interactive: boolean; session: FlocknoteSession }
@@ -246,6 +248,8 @@ export class ParishConnection {
     factory: SessionFactory;
     setupMs?: number;
     pollMs?: number;
+    /** How long connect waits for another operation on the connection. */
+    connectWaitMs?: number;
     coordinator: SessionCoordinator;
     now?: () => number;
   }) {
@@ -257,6 +261,7 @@ export class ParishConnection {
     this.#factory = options.factory;
     this.#setupMs = options.setupMs ?? 5 * 60_000;
     this.#pollMs = options.pollMs ?? 1000;
+    this.#connectWaitMs = options.connectWaitMs ?? 250;
   }
 
   toJSON(): object {
@@ -366,7 +371,10 @@ export class ParishConnection {
     try {
       return await this.#coordinator.runExclusive("browser", signal, work);
     } catch (error) {
-      if (error instanceof QueueWaitTimeoutError)
+      if (
+        error instanceof QueueWaitTimeoutError ||
+        error instanceof ProcessLockTimeoutError
+      )
         throw new ConnectionError("connection_busy");
       throw error;
     }
@@ -552,65 +560,91 @@ export class ParishConnection {
       controller.signal,
       AbortSignal.timeout(this.#setupMs),
     ]);
-    const task = this.#exclusive(
-      AbortSignal.any([signal, AbortSignal.timeout(250)]),
-      async () => {
-        const previous = this.#read();
-        if (previous && previous.parish !== selected)
-          throw new ConnectionError("connection_changed");
-        const saved: Connection = {
-          version: 1,
-          generation: previous?.generation ?? randomUUID(),
-          parish: selected,
-          userId: previous?.userId ?? null,
-          state: "pending",
-        };
-        let ready = false;
-        let lastFailure: SetupError | undefined;
-        let failureStage: SetupStage | undefined;
-        let authenticatedUser: string | undefined;
-        let session: FlocknoteSession | undefined;
-        this.#save({ ...saved, state: "pending", owner: process.pid });
-        try {
-          if (signal.aborted) throw new FlockbotError("operation_cancelled");
-          this.#network?.model.clearGroups();
-          session = await this.#open(saved, true);
-          await session.signIn();
-          resolveStarted({ state: "pending", parish: selected });
-          while (!signal.aborted) {
-            if (session.isOpen?.() === false)
-              throw new ConnectionError(
-                "browser_unavailable",
-                undefined,
-                "sign_in",
-              );
-            try {
-              const userId = FlocknoteLogin.fromResponse(
-                await session.request("user/userData"),
-              ).id;
-              if (session.isOpen?.() === false)
-                throw new ConnectionError(
-                  "browser_unavailable",
-                  undefined,
-                  "sign_in",
-                );
-              if (saved.userId !== null && userId !== saved.userId) {
-                // Keep sign-in open so the user can switch back on Flocknote.
-                lastFailure = "connection_changed";
-              } else {
-                if (signal.aborted) break;
-                authenticatedUser = userId;
-                lastFailure = undefined;
-                break;
-              }
-            } catch (error) {
+    const task = (async () => {
+      const setup: { saved?: Connection; session?: FlocknoteSession } = {};
+      let ready = false;
+      let lastFailure: SetupError | undefined;
+      let failureStage: SetupStage | undefined;
+      let authenticatedUser: string | undefined;
+      try {
+        await this.#exclusive(
+          AbortSignal.any([signal, AbortSignal.timeout(this.#connectWaitMs)]),
+          async () => {
+            const previous = this.#read();
+            if (previous && previous.parish !== selected)
+              throw new ConnectionError("connection_changed");
+            setup.saved = {
+              version: 1,
+              generation: previous?.generation ?? randomUUID(),
+              parish: selected,
+              userId: previous?.userId ?? null,
+              state: "pending",
+            };
+            this.#save({
+              ...setup.saved,
+              state: "pending",
+              owner: process.pid,
+            });
+            if (signal.aborted) throw new FlockbotError("operation_cancelled");
+            this.#network?.model.clearGroups();
+            setup.session = await this.#open(setup.saved, true);
+            await setup.session.signIn();
+          },
+        );
+        const saved = setup.saved as Connection;
+        const session = setup.session as FlocknoteSession;
+        resolveStarted({ state: "pending", parish: selected });
+        while (!signal.aborted) {
+          try {
+            // The lock is held for each check, not while the person signs
+            // in: the app signs in through its own connector, which needs
+            // the lock to save the session.
+            const userId = await this.#exclusive(
+              AbortSignal.any([signal, AbortSignal.timeout(this.#pollMs)]),
+              async () => {
+                if (session.isOpen?.() === false)
+                  throw new ConnectionError(
+                    "browser_unavailable",
+                    undefined,
+                    "sign_in",
+                  );
+                const id = FlocknoteLogin.fromResponse(
+                  await session.request("user/userData"),
+                ).id;
+                if (session.isOpen?.() === false)
+                  throw new ConnectionError(
+                    "browser_unavailable",
+                    undefined,
+                    "sign_in",
+                  );
+                return id;
+              },
+            );
+            if (saved.userId !== null && userId !== saved.userId) {
+              // Keep sign-in open so the user can switch back on Flocknote.
+              lastFailure = "connection_changed";
+            } else {
+              if (signal.aborted) break;
+              authenticatedUser = userId;
+              lastFailure = undefined;
+              break;
+            }
+          } catch (error) {
+            // Another connector is using the connection; check again later.
+            if (
+              !(
+                error instanceof ConnectionError &&
+                error.code === "connection_busy"
+              )
+            ) {
               lastFailure =
                 error instanceof FlockbotError &&
                 error.code === "authentication_required"
                   ? undefined
                   : setupFailure(error);
-              // Poll failures during an interactive login are inconclusive. Keep
-              // the user's window open until the setup deadline or cancellation.
+              // Poll failures during an interactive login are inconclusive.
+              // Keep the user's window open until the setup deadline or
+              // cancellation.
               if (
                 error instanceof FlockbotError &&
                 !(error instanceof AuthenticationSuspectedError) &&
@@ -619,65 +653,75 @@ export class ParishConnection {
                 throw error;
               if (error instanceof ConnectionError) throw error;
             }
-            await delay(this.#pollMs, undefined, { signal }).catch(
-              () => undefined,
-            );
           }
-        } catch (error) {
-          lastFailure = setupFailure(error);
-          if (error instanceof ConnectionError) failureStage = error.stage;
-          throw error;
-        } finally {
-          // Another process may forget or replace the connection while this
-          // setup runs. Only this setup's own pending record may take its
-          // result, checked again right before each save.
-          const ours = (): boolean => {
-            try {
-              const current = this.#read();
-              return (
-                current?.generation === saved.generation &&
-                current.state === "pending" &&
-                current.owner === process.pid
-              );
-            } catch {
-              return false;
-            }
-          };
-          if (!ours()) authenticatedUser = undefined;
-          try {
-            if (authenticatedUser !== undefined && !signal.aborted)
-              await session?.finishSignIn?.();
-            else await this.#dropSession();
-            if (authenticatedUser !== undefined && !signal.aborted && ours()) {
-              this.#save({
-                ...saved,
-                userId: authenticatedUser,
-                state: "ready",
-              });
-              ready = true;
-            }
-          } catch (error) {
-            lastFailure ??= setupFailure(error);
-            if (error instanceof ConnectionError) failureStage ??= error.stage;
-            // Setup may already have returned pending. Preserve its terminal
-            // diagnostic below without replacing an earlier failure in finally.
-            rejectStarted(error);
-          } finally {
-            if (!ready && ours())
-              this.#save({
-                ...saved,
-                state: "action_required",
-                setupError:
-                  lastFailure ??
-                  (controller.signal.aborted
-                    ? "operation_cancelled"
-                    : "operation_timeout"),
-                ...(failureStage ? { setupStage: failureStage } : {}),
-              });
-          }
+          await delay(this.#pollMs, undefined, { signal }).catch(
+            () => undefined,
+          );
         }
-      },
-    )
+      } catch (error) {
+        lastFailure = setupFailure(error);
+        if (error instanceof ConnectionError) failureStage = error.stage;
+        throw error;
+      } finally {
+        const { saved, session } = setup;
+        // Nothing was claimed when the connection was busy or changed.
+        if (saved)
+          await this.#exclusive(AbortSignal.timeout(25_000), async () => {
+            // Another process may forget or replace the connection while this
+            // setup runs. Only this setup's own pending record may take its
+            // result, checked again right before each save.
+            const ours = (): boolean => {
+              try {
+                const current = this.#read();
+                return (
+                  current?.generation === saved.generation &&
+                  current.state === "pending" &&
+                  current.owner === process.pid
+                );
+              } catch {
+                return false;
+              }
+            };
+            if (!ours()) authenticatedUser = undefined;
+            try {
+              if (authenticatedUser !== undefined && !signal.aborted)
+                await session?.finishSignIn?.();
+              else await this.#dropSession();
+              if (
+                authenticatedUser !== undefined &&
+                !signal.aborted &&
+                ours()
+              ) {
+                this.#save({
+                  ...saved,
+                  userId: authenticatedUser,
+                  state: "ready",
+                });
+                ready = true;
+              }
+            } catch (error) {
+              lastFailure ??= setupFailure(error);
+              if (error instanceof ConnectionError)
+                failureStage ??= error.stage;
+              // Setup may already have returned pending. Preserve its terminal
+              // diagnostic below without replacing an earlier failure.
+              rejectStarted(error);
+            } finally {
+              if (!ready && ours())
+                this.#save({
+                  ...saved,
+                  state: "action_required",
+                  setupError:
+                    lastFailure ??
+                    (controller.signal.aborted
+                      ? "operation_cancelled"
+                      : "operation_timeout"),
+                  ...(failureStage ? { setupStage: failureStage } : {}),
+                });
+            }
+          });
+      }
+    })()
       .catch((error: unknown) => {
         rejectStarted(error);
       })
@@ -1039,11 +1083,16 @@ export class ParishConnection {
     }
   }
 
-  /** Explicit operator operation, intentionally outside ordinary MCP tools. */
-  async forget(): Promise<void> {
+  /**
+   * Explicit operator operation, intentionally outside ordinary MCP tools.
+   * `clearCredential` removes saved credentials the factory's storage holds,
+   * inside the same exclusive section, before anything else is dropped.
+   */
+  async forget(clearCredential?: () => Promise<void>): Promise<void> {
     this.#setup?.controller.abort();
     await this.#setup?.task;
     await this.#exclusive(AbortSignal.timeout(25_000), async () => {
+      await clearCredential?.();
       await this.#dropSession();
       rmSync(join(this.#profile, "browser"), { recursive: true, force: true });
       rmSync(this.#metadata, { force: true });

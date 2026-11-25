@@ -21,7 +21,7 @@ import { FlockbotError } from "../../../src/index.js";
 import { ConnectionError } from "./session.js";
 import type { SignInResult } from "./sign-in-page.js";
 import { connectionProfileDirectory } from "./profile.js";
-import { SerialCoordinator } from "./serial-coordinator.js";
+import { ProcessLock } from "./process-lock.js";
 import { UpdateCheck } from "./updates.js";
 import { MCP_VERSION } from "./version.js";
 
@@ -61,6 +61,16 @@ function keychain(name: string): SessionBlob {
 }
 
 const profile = join(connectionProfileDirectory(), "keychain-v1");
+
+/**
+ * Each assistant and each app command runs its own connector process, and all
+ * of them share one saved session. This OS lock lets only one of them sign in,
+ * sign out or talk to Flocknote at a time, so none overwrites the cookies
+ * another just saved or signs out in the middle of another's operation.
+ */
+function connectionLock(): ProcessLock {
+  return new ProcessLock(join(profile, "connection.lock"));
+}
 
 // Inside Flockbot.app, or beside Flockbot.exe on Windows, sign-in happens in
 // the app's own window: connect opens the app, which signs in through this
@@ -172,7 +182,10 @@ async function signIn(): Promise<void> {
     pollMs: 200,
     // Confirming the login is a request or two; the setup ends itself by then.
     setupMs: 2 * REQUEST_MS,
-    coordinator: new SerialCoordinator(),
+    // An assistant waiting for this sign-in holds the lock for one request
+    // at a time; wait that out instead of reporting the connection busy.
+    connectWaitMs: REQUEST_MS + 5_000,
+    coordinator: connectionLock(),
     factory: httpSessionFactory({
       storage: () => session,
       open: async () => {},
@@ -236,8 +249,9 @@ const assistantSetup: Setup = {
 async function forgetSignIn(connection: ParishConnection): Promise<void> {
   // Delete the cookie first: if that fails, the connection still reads as
   // signed in rather than hiding a credential that is still stored.
-  await Bun.secrets.delete({ service: SERVICE, name: "session" });
-  await connection.forget();
+  await connection.forget(async () => {
+    await Bun.secrets.delete({ service: SERVICE, name: "session" });
+  });
 }
 
 async function main(): Promise<void> {
@@ -316,7 +330,7 @@ async function main(): Promise<void> {
           }
         : {}),
     }),
-    coordinator: new SerialCoordinator(),
+    coordinator: connectionLock(),
   });
   if (command === "status") {
     // Local state only: no Keychain read and no Flocknote request.

@@ -2,12 +2,14 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FlockbotError } from "../../src/index.js";
 import { ParishConnection } from "../../adapters/mcp/src/connection.js";
 import { waitFor } from "./support.js";
 import { noteResponse } from "../fixtures/note.js";
 import { SerialCoordinator } from "../../adapters/mcp/src/serial-coordinator.js";
+import { ProcessLock } from "../../adapters/mcp/src/process-lock.js";
 import {
   runDiagnostic,
   failureDiagnostic,
@@ -425,6 +427,83 @@ describe("browser-owned local connection", () => {
     await expect(
       f.connection.count("101", { signal: AbortSignal.abort() }),
     ).rejects.toMatchObject({ code: "operation_cancelled" });
+  });
+
+  it("clears the saved credential only after another connector's operation finishes", async () => {
+    const f = fixture();
+    // Two connector processes share the profile and its lock.
+    const lock = new ProcessLock(join(f.profile, "connection.lock"));
+    const connector = () => {
+      const connection = new ParishConnection({
+        profile: f.profile,
+        factory: f.factory,
+        pollMs: 5,
+        coordinator: lock,
+      });
+      connections.push(connection);
+      return connection;
+    };
+    const first = connector();
+    await ready(first);
+    let release = () => {};
+    f.responses["group/101/getSubscriberCount"] = () =>
+      new Promise((resolve) => {
+        release = () => resolve({ subscriberCount: "7" });
+      });
+    const counting = first.count("101");
+    await waitFor(() =>
+      expect(f.requests.at(-1)?.path).toBe("group/101/getSubscriberCount"),
+    );
+    const events: string[] = [];
+    const forgetting = connector().forget(async () => {
+      events.push("cleared");
+    });
+    await delay(150);
+    events.push("released");
+    release();
+    await counting;
+    await forgetting;
+    expect(events).toEqual(["released", "cleared"]);
+  });
+
+  it("lets the app sign in while an assistant's connect waits for it", async () => {
+    const f = fixture();
+    f.responses["user/userData"] = {
+      success: true,
+      userID: null,
+      authorized: false,
+    };
+    // Each connector process has its own connection; they share the lock.
+    const lock = new ProcessLock(join(f.profile, "connection.lock"));
+    const connector = (connectWaitMs?: number) => {
+      const connection = new ParishConnection({
+        profile: f.profile,
+        factory: f.factory,
+        pollMs: 5,
+        coordinator: lock,
+        ...(connectWaitMs ? { connectWaitMs } : {}),
+      });
+      connections.push(connection);
+      return connection;
+    };
+    const assistant = connector();
+    await assistant.connect("example-parish");
+    // The app's sign-in command signs in with the typed password.
+    vi.mocked(f.session.signIn).mockImplementationOnce(async () => {
+      f.responses["user/userData"] = { success: true, userID: 201 };
+    });
+    const app = connector(2000);
+    expect(await app.connect("example-parish")).toEqual({
+      state: "pending",
+      parish: "example-parish",
+    });
+    for (const connection of [app, assistant])
+      await waitFor(async () =>
+        expect(await connection.status()).toEqual({
+          state: "ready",
+          parish: "example-parish",
+        }),
+      );
   });
 
   it("closes and deletes the profile atomically before a later queued write can reopen it", async () => {
