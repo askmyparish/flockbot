@@ -2,7 +2,7 @@
   "name": "@askmyparish/flockbot-mcp",
   "version": "0.2.1-dev.13",
   "private": true,
-  "description": "Private Codex MCP connector using a local browser session",
+  "description": "Local Flocknote MCP connector with sign-in on this computer",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
-    "playwright": "1.65.0",
+    "smol-toml": "1.9.1",
     "zod": "4.6.7"
   }
 }

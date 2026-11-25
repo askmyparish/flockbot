@@ -5,11 +5,10 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BrowserConnection } from "../../adapters/mcp/src/browser-connection.js";
+import { ParishConnection } from "../../adapters/mcp/src/connection.js";
 import { createFlocknoteServer } from "../../adapters/mcp/src/flocknote-server.js";
-import { brokerRequestSchema } from "../../adapters/mcp/src/browser-protocol.js";
 import { SerialCoordinator } from "../../adapters/mcp/src/serial-coordinator.js";
-import type { BrowserSession } from "../../adapters/mcp/src/browser-runtime.js";
+import type { FlocknoteSession } from "../../adapters/mcp/src/session.js";
 import { searchMetadata, searchRow } from "../fixtures/member-search.js";
 import { filterCatalog } from "../fixtures/member-filters.js";
 import { profileResponse } from "../fixtures/member-profile.js";
@@ -70,7 +69,7 @@ async function fixture(failureLog?: {
     recipients: recipientPage(),
     latestEmail: latestEmailResponses(),
   };
-  const session: BrowserSession = {
+  const session: FlocknoteSession = {
     signIn: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
     request: vi.fn(async (path) => {
@@ -120,24 +119,13 @@ async function fixture(failureLog?: {
     }),
   };
   const factory = vi.fn(async () => session);
-  const connection = new BrowserConnection({
+  const connection = new ParishConnection({
     profile,
     factory,
     coordinator: new SerialCoordinator(),
   });
   const server = createFlocknoteServer(connection, {
     ...(failureLog ? { failureLog } : {}),
-    updates: {
-      touch: vi.fn(),
-      notice: () => ({
-        availableVersion: "0.3.0",
-        installedVersion: "0.2.0",
-        prerelease: false,
-        guideUrl: "https://example.test/guide",
-        message: "Update available",
-      }),
-      close: vi.fn(),
-    },
   });
   const client = new Client({ name: "fictional-assistant", version: "1" });
   const [a, b] = InMemoryTransport.createLinkedPair();
@@ -724,13 +712,6 @@ describe("specific-email recipient MCP boundary", () => {
           })
         ).isError,
       ).toBe(true);
-      if (input.emailId !== "../801")
-        expect(
-          brokerRequestSchema.safeParse({
-            action: "email_recipients",
-            ...input,
-          }).success,
-        ).toBe(false);
     }
     expect(f.factory).not.toHaveBeenCalled();
     for (const category of ["opened", "unopened"]) {
@@ -825,10 +806,6 @@ describe("note MCP reader", () => {
       expect(
         (await f.client.callTool({ name: "note", arguments: input })).isError,
       ).toBe(true);
-      if (input.noteId !== "../801")
-        expect(
-          brokerRequestSchema.safeParse({ action: "note", ...input }).success,
-        ).toBe(false);
     }
     expect(f.factory).not.toHaveBeenCalled();
     const r = await f.client.callTool({
@@ -1365,14 +1342,6 @@ describe("latest email MCP/connection boundary", () => {
       ),
     ).rejects.toMatchObject({ code: "operation_cancelled" });
     expect(f.factory).not.toHaveBeenCalled();
-    expect(
-      brokerRequestSchema.safeParse({
-        action: "member_latest_email_status",
-        userId: "301",
-        groupId: "101",
-        url: "https://example.test",
-      }).success,
-    ).toBe(false);
     let finish = (_value: unknown) => {};
     f.state.latestEmail["group/101/notes?ajax&more"] = new Promise(
       (resolve) => {
@@ -1455,7 +1424,6 @@ describe("membership MCP/connection boundary", () => {
       groupId: "102",
       groupName: "Choir",
       membership: "member",
-      update: { availableVersion: "0.3.0" },
     });
     expect(f.session.request).toHaveBeenCalledTimes(5);
     const tools = await f.client.listTools();
@@ -1509,22 +1477,6 @@ describe("membership MCP/connection boundary", () => {
       f.connection.isMember("301", { groupId: "102", groupName: "Choir" }),
     ).rejects.toMatchObject({ code: "invalid_input" });
     expect(f.factory).not.toHaveBeenCalled();
-    expect(
-      brokerRequestSchema.safeParse({ action: "member_groups", userId: "301" })
-        .success,
-    ).toBe(true);
-    expect(
-      brokerRequestSchema.safeParse({
-        action: "is_member",
-        userId: "301",
-        groupName: "Choir",
-      }).success,
-    ).toBe(true);
-    for (const input of [
-      { action: "member_groups", userId: "301", fields: ["email"] },
-      { action: "is_member", userId: "301", path: "arbitrary" },
-    ])
-      expect(brokerRequestSchema.safeParse(input).success).toBe(false);
   });
 
   it("keeps denied, malformed and transport errors distinct from negative membership", async () => {
@@ -1660,14 +1612,6 @@ describe("communication diagnostics MCP/connection boundary", () => {
         f.connection.memberCommunicationStatus(input),
       ).rejects.toMatchObject({ code: "invalid_input" });
     expect(f.factory).not.toHaveBeenCalled();
-    expect(
-      brokerRequestSchema.safeParse({
-        action: "member_communication_status",
-        userId: "301",
-        groupId: "102",
-        url: "https://example.test",
-      }).success,
-    ).toBe(false);
   });
 
   it("returns sanitized errors rather than partial diagnostics when either read fails", async () => {
@@ -1753,7 +1697,6 @@ describe("identified profile MCP/connection boundary", () => {
           isBadEmail: true,
         },
       },
-      update: { availableVersion: "0.3.0" },
     });
     expect(JSON.stringify(selected)).not.toMatch(/555|canEdit|pending/);
     expect(f.session.request).toHaveBeenCalledTimes(2);
@@ -1784,19 +1727,6 @@ describe("identified profile MCP/connection boundary", () => {
       f.connection.member("301", ["email", "email"]),
     ).rejects.toMatchObject({ code: "invalid_input" });
     expect(f.factory).not.toHaveBeenCalled();
-    expect(
-      brokerRequestSchema.safeParse({
-        action: "member",
-        userId: "301",
-        fields: ["email"],
-      }).success,
-    ).toBe(true);
-    for (const input of [
-      { action: "member", userId: "301", fields: ["medical"] },
-      { action: "member", userId: "301", path: "arbitrary" },
-      { action: "member", userId: "301", fields: ["email", "email", "email"] },
-    ])
-      expect(brokerRequestSchema.safeParse(input).success).toBe(false);
   });
 
   it("does not probe authentication or replay a restricted member read", async () => {
@@ -1895,22 +1825,6 @@ describe("member search MCP/connection boundary", () => {
     expect(JSON.stringify(result)).not.toContain("555");
     expect(f.client.getInstructions()).toContain("within that requested group");
     expect(f.client.getInstructions()).toContain("no precise time, timezone");
-    expect(
-      brokerRequestSchema.safeParse({
-        action: "find_members",
-        searchTerm: "alex@example.test",
-        groupId: "101",
-        fields: ["email", "mobilePhone", "joinedOn"],
-      }).success,
-    ).toBe(true);
-    // Profile contact selection remains separate from group subscription dates.
-    expect(
-      brokerRequestSchema.safeParse({
-        action: "member",
-        userId: "301",
-        fields: ["joinedOn"],
-      }).success,
-    ).toBe(false);
   });
 
   it("supports resolving same-name records by contacts while retaining IDs for internal follow-up", async () => {
@@ -2019,7 +1933,7 @@ describe("member search MCP/connection boundary", () => {
     );
   });
 
-  it("dispatches real MCP search with selected fields, scoped identity and optional updates", async () => {
+  it("dispatches real MCP search with selected fields, scoped identity", async () => {
     const f = await fixture();
     const result = await f.client.callTool({
       name: "find_members",
@@ -2038,7 +1952,6 @@ describe("member search MCP/connection boundary", () => {
       members: [
         { id: "301", email: { value: "alex@example.test", verified: false } },
       ],
-      update: { availableVersion: "0.3.0" },
     });
     expect(JSON.stringify(result)).not.toMatch(/555|mailVer|userActive/);
     expect(f.session.request).toHaveBeenCalledTimes(2);
@@ -2072,32 +1985,6 @@ describe("member search MCP/connection boundary", () => {
       }),
     ).rejects.toMatchObject({ code: "invalid_input" });
     expect(f.factory).not.toHaveBeenCalled();
-    expect(
-      brokerRequestSchema.safeParse({
-        action: "find_members",
-        searchTerm: "Alex",
-        groupId: "101",
-        fields: ["email"],
-        limit: 50,
-      }).success,
-    ).toBe(true);
-    for (const invalid of [
-      { action: "find_members", searchTerm: "Alex", path: "arbitrary" },
-      { action: "find_members", searchTerm: "Alex", fields: ["password"] },
-      { action: "find_members", searchTerm: "Alex", limit: 51 },
-    ])
-      expect(brokerRequestSchema.safeParse(invalid).success).toBe(false);
-    const oversizedLegacy = brokerRequestSchema.safeParse({
-      action: "find_members",
-      searchTerm: "Alex",
-      limit: 51,
-    });
-    expect(oversizedLegacy.error?.issues).toEqual([
-      expect.objectContaining({
-        path: ["limit"],
-        message: "Limits above 50 require mode members.",
-      }),
-    ]);
   });
 
   it("does not replay a business rejection, leak upstream contacts or perform an auth probe", async () => {

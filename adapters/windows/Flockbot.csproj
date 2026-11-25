@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The Windows setup window. build.sh publishes it as one self-contained
+       Flockbot.exe and puts the Bun-compiled connector beside it. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Flockbot</RootNamespace>
+    <AssemblyName>Flockbot</AssemblyName>
+    <Product>Flockbot</Product>
+    <ApplicationIcon>../../assets/flockbot.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Lets macOS and Linux build it; the output still runs only on Windows. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- ThemeMode (the Windows 11 look) is still marked experimental. -->
+    <NoWarn>$(NoWarn);WPF0001</NoWarn>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>embedded</DebugType>
+    <!-- Velopack's hooks must run before WPF starts, so App has its own Main. -->
+    <StartupObject>Flockbot.App</StartupObject>
+    <!-- Where installed copies look for updates; build.sh can point a test
+         build at another feed. -->
+    <UpdateFeed Condition="'$(UpdateFeed)' == ''">https://github.com/askmyparish/flockbot/releases/download/windows-feed/</UpdateFeed>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ApplicationDefinition Remove="App.xaml" />
+    <Page Include="App.xaml" />
+    <Resource Include="../../assets/flockbot.png" Link="flockbot.png" />
+    <AssemblyMetadata Include="UpdateFeed" Value="$(UpdateFeed)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Keep in step with the vpk version that packs releases (release.sh). -->
+    <PackageReference Include="Velopack" Version="1.2.161" />
+  </ItemGroup>
+
+</Project>

@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "flocknote": {
-      "command": "/bin/bash",
-      "args": ["./setup.sh", "--launch"],
-      "cwd": "."
-    }
-  }
-}

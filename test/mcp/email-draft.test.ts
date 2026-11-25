@@ -11,7 +11,7 @@ import {
   Network,
   type EmailDraftInput,
 } from "../../src/index.js";
-import { BrowserConnection } from "../../adapters/mcp/src/browser-connection.js";
+import { ParishConnection } from "../../adapters/mcp/src/connection.js";
 import type { DraftImage } from "../../adapters/mcp/src/draft-images.js";
 import { SerialCoordinator } from "../../adapters/mcp/src/serial-coordinator.js";
 import {
@@ -76,7 +76,7 @@ function fixture(
     }),
     { mode: 0o600 },
   );
-  const connection = new BrowserConnection({
+  const connection = new ParishConnection({
     profile,
     coordinator: new SerialCoordinator(),
     factory: async () => ({
