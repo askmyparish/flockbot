@@ -55,6 +55,9 @@ if ! $dry_run; then
   if gh release view "$tag" --repo "$repo" > /dev/null 2>&1; then
     fail "$tag is already released. Bump the version first."
   fi
+  # The version's reviewed changelog section, from the release PR.
+  notes="$(cd "$root" && node scripts/mcp/release-notes.mjs)" ||
+    fail "adapters/mcp/CHANGELOG.md has no entry for $version. Merge the release PR first."
 fi
 
 "$package/build.sh" > /dev/null
@@ -107,7 +110,7 @@ fi
 
 # The update first, then the appcast that points at it.
 gh release create "$tag" "$zip" --repo "$repo" --target "$(git -C "$root" rev-parse HEAD)" \
-  --title "Flockbot for Mac $version" --notes "Flockbot for Mac $version (build $build)." \
+  --title "Flockbot for Mac $version" --notes "$notes" \
   --latest=false
 if ! gh release view "$feed_tag" --repo "$repo" > /dev/null 2>&1; then
   gh release create "$feed_tag" --repo "$repo" --target "$(git -C "$root" rev-parse HEAD)" \

@@ -57,6 +57,9 @@ if ! $dry_run; then
   if gh release view "$tag" --repo "$repo" > /dev/null 2>&1; then
     fail "$tag is already released. Bump the version first."
   fi
+  # The version's reviewed changelog section, from the release PR.
+  notes="$(cd "$root" && node scripts/mcp/release-notes.mjs)" ||
+    fail "adapters/mcp/CHANGELOG.md has no entry for $version. Merge the release PR first."
 fi
 
 sign=()
@@ -107,7 +110,7 @@ head="$(git -C "$root" rev-parse HEAD)"
 # A record of this version, then the feed: packages before the lists that
 # name them, so a copy never sees a version it can't download.
 gh release create "$tag" "${packages[@]}" "${setups[@]}" --repo "$repo" --target "$head" \
-  --title "Flockbot for Windows $version" --notes "Flockbot for Windows $version." \
+  --title "Flockbot for Windows $version" --notes "$notes" \
   --latest=false
 if ! gh release view "$feed_tag" --repo "$repo" > /dev/null 2>&1; then
   gh release create "$feed_tag" --repo "$repo" --target "$head" \

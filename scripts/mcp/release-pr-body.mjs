@@ -10,8 +10,8 @@ assert.ok(section >= 0, "Changesets release section is missing.");
 // describing this repository's GitHub release process.
 await writeFile(
   path,
-  "This PR prepares the MCP version and reviewed changelog. " +
-    "Merging it builds the Claude Desktop extension from the merged commit and publishes it as a GitHub release tagged `mcp-v<version>`. " +
-    "Beta versions remain prereleases. Packages are not published to npm.\n\n" +
+  "This PR prepares the version and reviewed changelog for the Mac and Windows apps. " +
+    "Merging it publishes nothing. After merging, run `adapters/macos/release.sh` and `adapters/windows/release.sh` from the merged commit; " +
+    "each publishes this changelog section as its release notes. Packages are not published to npm.\n\n" +
     body.slice(section + 1),
 );
